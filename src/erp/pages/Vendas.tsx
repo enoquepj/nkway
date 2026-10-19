@@ -9,16 +9,18 @@ import { cn } from "../../utils/cn";
 
 const MODELOS: ModeloFiscal[] = ["NFC-e", "NF-e", "SAT"];
 
-export default function Vendas() {
+export default function Vendas({ abaInicial = "dav" }: { abaInicial?: "dav" | "fiscal" }) {
   const { db, faturarDav, cancelarVenda } = useStore();
   const { conta } = useAuth();
   const { podeUsar } = usePlan();
-  const [aba, setAba] = useState<"dav" | "fiscal">("dav");
+  const [aba, setAba] = useState<"dav" | "fiscal">(abaInicial);
   const [aberta, setAberta] = useState<string | null>(null);
   const [verDoc, setVerDoc] = useState<Venda | null>(null);
   const [faturar, setFaturar] = useState<Venda | null>(null);
   const [modelo, setModelo] = useState<ModeloFiscal>("NFC-e");
   const [pag, setPag] = useState<Venda["pagamento"]>("pix");
+  const [cancelando, setCancelando] = useState<Venda | null>(null);
+  const [motivo, setMotivo] = useState("");
 
   const davs = db.vendas.filter((v) => v.tipo === "dav");
   const fiscais = db.vendas.filter((v) => v.tipo === "fiscal");
@@ -147,6 +149,30 @@ export default function Vendas() {
                               </button>
                             </>
                           )}
+                          {v.tipo === "fiscal" && v.status === "faturado" && (() => {
+                            const limiteMin = db.configFiscal.ambiente === 2 ? 24 * 60 : 30;
+                            const minutos = Math.floor((Date.now() - (v.fiscal?.autorizadaEm ?? v.data)) / 60000);
+                            const dentro = minutos < limiteMin;
+                            return (
+                              <>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setCancelando(v); setMotivo("Venda efetuada por erro"); }}
+                                  disabled={!dentro}
+                                  className={cn(
+                                    "mr-3 text-xs font-semibold",
+                                    dentro
+                                      ? "text-rose-500 hover:underline"
+                                      : "text-slate-300 cursor-not-allowed",
+                                  )}
+                                >
+                                  Cancelar{!dentro && ` (${Math.floor(minutos/60)}h)`}
+                                </button>
+                                {!dentro && (
+                                  <span className="text-[10px] text-slate-300" title="Prazo SEFAZ para cancelamento expirado">expirado</span>
+                                )}
+                              </>
+                            );
+                          })()}
                         </td>
                       </tr>
                       {aberta === v.id && (
@@ -256,6 +282,82 @@ export default function Vendas() {
                 }}
               >
                 {podeUsar("fiscal") ? `Emitir ${modelo}` : "Ver planos ⭐"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de cancelamento fiscal */}
+      {cancelando && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"
+          onClick={() => setCancelando(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center gap-2">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-100 text-xl">
+                ⚠️
+              </span>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">
+                  Cancelar {cancelando.fiscal?.modelo} #{cancelando.numero}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Cancelamento registra um evento de cancelamento junto à SEFAZ e
+                  devolve o estoque dos itens.
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-3 rounded-lg bg-slate-50 p-3 text-sm">
+              <div className="flex justify-between text-slate-600">
+                <span>{cancelando.clienteNome}</span>
+                <span>{cancelando.itens.length} itens</span>
+              </div>
+              <div className="mt-1 flex justify-between text-lg font-bold text-slate-900">
+                <span>Total da nota</span>
+                <span className="text-rose-600">{brl(cancelando.total)}</span>
+              </div>
+            </div>
+
+            <label className="mb-4 block">
+              <span className="mb-1 block text-xs font-medium text-slate-600">
+                Justificativa do cancelamento (obrigatória)
+              </span>
+              <textarea
+                rows={3}
+                value={motivo}
+                onChange={(e) => setMotivo(e.target.value)}
+                placeholder="Ex.: Venda efetuada por erro no atendimento"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500"
+              />
+            </label>
+
+            <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+              <strong>Atenção:</strong> A SEFAZ permite cancelar uma nota em até 30 minutos em produção
+              (24h em homologação). O cancelamento baixa o estoque, estorna o financeiro e
+              registra protocolo de cancelamento. Não é possível desfazer.
+            </div>
+
+            <div className="mt-5 flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setCancelando(null)}>
+                Voltar
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                onClick={() => {
+                  if (!motivo.trim()) return alert("Informe a justificativa.");
+                  cancelarVenda(cancelando.id, motivo);
+                  setCancelando(null);
+                  setMotivo("");
+                }}
+              >
+                Confirmar cancelamento fiscal
               </Button>
             </div>
           </div>

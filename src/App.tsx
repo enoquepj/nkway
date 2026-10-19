@@ -10,6 +10,10 @@ import Planos from "./erp/pages/Planos";
 import Entradas from "./erp/pages/Entradas";
 import Estoque from "./erp/pages/Estoque";
 import Mdfe from "./erp/pages/Mdfe";
+import Fornecedores from "./erp/pages/Fornecedores";
+import Devolucoes from "./erp/pages/Devolucoes";
+import Configuracoes from "./erp/pages/Configuracoes";
+import Relatorios from "./erp/pages/Relatorios";
 import DevConsole from "./erp/pages/DevConsole";
 import DevLock from "./erp/dev/DevLock";
 import { devAtivo, sairDev } from "./erp/dev/devAuth";
@@ -21,15 +25,24 @@ import StatusConexao from "./erp/StatusConexao";
 import { cn } from "./utils/cn";
 
 const MENU = [
-  { id: "dashboard", label: "Visão geral", icon: "📊", grupo: "Gestão" },
-  { id: "pdv", label: "PDV / Caixa", icon: "🧾", grupo: "Vendas" },
-  { id: "vendas", label: "DAVs e notas fiscais", icon: "📄", grupo: "Vendas" },
-  { id: "mdfe", label: "MDF-e (transporte)", icon: "🚚", grupo: "Vendas" },
-  { id: "entradas", label: "Entrada de mercadoria", icon: "📥", grupo: "Compras" },
-  { id: "estoque", label: "Gestão de estoque", icon: "🏷️", grupo: "Compras" },
+  // ─── Cadastros ───
   { id: "produtos", label: "Produtos", icon: "📦", grupo: "Cadastros" },
   { id: "clientes", label: "Clientes", icon: "👥", grupo: "Cadastros" },
-  { id: "financeiro", label: "Financeiro", icon: "💳", grupo: "Gestão" },
+  { id: "fornecedores", label: "Fornecedores", icon: "🏭", grupo: "Cadastros" },
+  // ─── Vendas rápidas ───
+  { id: "dashboard", label: "Visão geral", icon: "📊", grupo: "Caixa e Venda" },
+  { id: "vendas", label: "DAV / Orçamentos", icon: "📄", grupo: "Caixa e Venda" },
+  { id: "pdv", label: "PDV — Frente de Caixa", icon: "🧾", grupo: "Caixa e Venda" },
+  { id: "nfe", label: "NF-e / Documentos", icon: "🧾", grupo: "Caixa e Venda" },
+  { id: "mdfe", label: "MDF-e (transporte)", icon: "🚚", grupo: "Caixa e Venda" },
+  // ─── Compras & Movimento ───
+  { id: "entradas", label: "Entrada por XML", icon: "📥", grupo: "Compras" },
+  { id: "devolucoes", label: "Devoluções", icon: "↩️", grupo: "Compras" },
+  { id: "estoque", label: "Gestão de estoque", icon: "🏷️", grupo: "Estoque" },
+  // ─── Gestão & Relatórios ───
+  { id: "financeiro", label: "Financeiro", icon: "💳", grupo: "Financeiro" },
+  { id: "relatorios", label: "Relatórios", icon: "📊", grupo: "Relatórios" },
+  { id: "config", label: "Configurações fiscais", icon: "⚙️", grupo: "Conta" },
   { id: "planos", label: "Planos e assinatura", icon: "⭐", grupo: "Conta" },
   { id: "dev", label: "Console do dev", icon: "🛠️", grupo: "Desenvolvedor" },
 ] as const;
@@ -38,6 +51,16 @@ type PageId = (typeof MENU)[number]["id"];
 
 function Shell() {
   const [page, setPage] = useState<PageId>("dashboard");
+
+  // Escuta o PDV mandando "sair para o ERP" — recebe do evento custom
+  useEffect(() => {
+    const h = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { para?: PageId } | undefined;
+      setPage(detail?.para ?? "dashboard");
+    };
+    window.addEventListener("nkway:sair-pdv", h);
+    return () => window.removeEventListener("nkway:sair-pdv", h);
+  }, [setPage]);
   const [menuAberto, setMenuAberto] = useState(false);
   const { db, reset } = useStore();
   const { plano } = usePlan();
@@ -67,7 +90,7 @@ function Shell() {
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
-  const grupos = ["Gestão", "Vendas", "Compras", "Cadastros", "Conta"];
+  const grupos = ["Cadastros", "Caixa e Venda", "Compras", "Estoque", "Financeiro", "Relatórios", "Conta"];
   if (devOn) grupos.push("Desenvolvedor");
 
   return (
@@ -216,13 +239,18 @@ function Shell() {
         <main className="flex-1 p-5 lg:p-8">
           {page === "dashboard" && <Dashboard />}
           {page === "pdv" && <PDV />}
-          {page === "vendas" && <Vendas />}
+          {page === "vendas" && <Vendas abaInicial="dav" />}
+          {page === "nfe" && <Vendas abaInicial="fiscal" />}
+          {page === "relatorios" && <Relatorios />}
           {page === "produtos" && <Produtos />}
           {page === "clientes" && <Clientes />}
           {page === "financeiro" && <Financeiro />}
           {page === "entradas" && <Entradas />}
           {page === "estoque" && <Estoque />}
           {page === "mdfe" && <Mdfe />}
+          {page === "fornecedores" && <Fornecedores />}
+          {page === "devolucoes" && <Devolucoes />}
+          {page === "config" && <Configuracoes />}
           {page === "planos" && <Planos />}
           {page === "dev" && devOn && <DevConsole />}
         </main>
@@ -244,7 +272,8 @@ function Gate() {
     );
   if (!conta) return <Login />;
   return (
-    <StoreProvider>
+    // key remonta a base ao trocar de empresa → dados isolados por empresa
+    <StoreProvider key={conta.id} empresaId={conta.id}>
       <PlanProvider>
         <Shell />
       </PlanProvider>

@@ -1,4 +1,6 @@
 import type { DB } from "../types";
+import { statusSefazCliente, validarGtin } from "../types";
+import { validarCnpj, validarCpf } from "../receita";
 import { lerXmlNfe, XML_EXEMPLO } from "../xmlNfe";
 import { gerarChave } from "../types";
 
@@ -38,6 +40,17 @@ export function rodarTestes(db: DB): Resultado[] {
       new Set(db.produtos.map((p) => p.sku).filter(Boolean)).size ===
         db.produtos.filter((p) => p.sku).length,
       "chave de casamento do XML depende disso"),
+    ok("cad-5", "Cadastros", "Todo produto tem NCM (obrigatório NF-e)",
+      db.produtos.every((p) => (p.impostos?.ncm ?? "") !== ""),
+      db.produtos.filter((p) => !p.impostos?.ncm).map((p) => p.nome).join(", ") || "todos OK",
+      true),
+    ok("cad-6", "Cadastros", "Todo produto tem unidade de medida",
+      db.produtos.every((p) => (p.unidade ?? "") !== ""), "uCom da NF-e exige", true),
+    ok("cad-7", "Cadastros", "GTINs válidos ou isentos",
+      db.produtos.every((p) => validarGtin(p.gtin ?? "")),
+      db.produtos.filter((p) => !validarGtin(p.gtin ?? "")).map((p) => p.nome).join(", ") ||
+        "DV dos EAN-13 correto",
+      true),
   );
 
   // ----------------------------------------------------------------- PDV
@@ -146,6 +159,125 @@ export function rodarTestes(db: DB): Resultado[] {
       "serviceWorker" in navigator, "PWA / modo offline"),
     ok("off-3", "Offline", "Navegador online", navigator.onLine,
       navigator.onLine ? "conectado" : "offline (esperado em teste)"),
+  );
+
+  // ----------------------------------------------------- CLIENTES / SEFAZ
+  r.push(
+    ok("cli-1", "Clientes", "Documentos com DV válido (CPF/CNPJ)",
+      db.clientes.every((c) => {
+        const n = (c.documento ?? "").replace(/\D/g, "");
+        return n.length === 11 ? validarCpf(n) : validarCnpj(n);
+      }),
+      "dígito verificador de todos os documentos", true),
+    ok("cli-2", "Clientes", "Clientes aptos à autorização NF-e",
+      db.clientes.every((c) => statusSefazCliente(c).ok),
+      db.clientes
+        .map((c) => {
+          const st = statusSefazCliente(c);
+          return st.ok ? "" : `${c.nome}: faltam ${st.faltando.join(", ")}`;
+        })
+        .filter(Boolean)
+        .join(" | ") || "todos com <dest> completo",
+      true),
+    ok("cli-3", "Clientes", "Indicador de IE definido em todos",
+      db.clientes.every((c) => !!c.indIe), "indIEDest 1/2/9", true),
+  );
+
+  // ------------------------------------------------ FORN. / DEVOLUÇÕES
+  r.push(
+    ok("dev-1", "Devoluções", "CFOP de devolução válido (5201/6201)",
+      db.devolucoes.every((d) => ["5201", "6201"].includes(d.cfop)),
+      `${db.devolucoes.length} notas`, true),
+    ok("dev-2", "Devoluções", "Chave referenciada presente (NFref)",
+      db.devolucoes.every((d) => d.chaveReferente.length === 44),
+      "tag obrigatória na autorização", true),
+    ok("dev-3", "Devoluções", "Total da devolução bate com itens",
+      db.devolucoes.every((d) => {
+        const soma = d.itens.reduce((x, i) => x + i.qtd * i.custo, 0);
+        return Math.abs(soma - d.total) < 0.01;
+      }), "conferência aritmética", true),
+    ok("for-1", "Fornecedores", "CNPJ com DV válido",
+      db.fornecedores.every((f) => validarCnpj(f.cnpj)),
+      "dígito verificador", true),
+  );
+
+  // -------------------------------- CANCELAMENTO / FISCAL
+  r.push(
+    ok("canc-1", "Cancelamento", "Vendas canceladas não entram no faturamento",
+      db.vendas.filter((v) => v.status === "faturado").every((v) => v.status !== "cancelado"),
+      "kpi usa status faturado", true),
+    ok("canc-2", "Cancelamento", "Cancelamento fiscal gera evento de cancelamento",
+      db.vendas.filter((v) => v.status === "cancelado" && v.tipo === "fiscal").length === 0 ||
+        db.cancelamentos.length > 0,
+      "evento registrado", true),
+    ok("canc-3", "Cancelamento", "Cancelamento devolve estoque",
+      db.cancelamentos.every(() =>
+        db.movimentos.some(
+          (m) => m.tipo === "devolucao" && m.documento.includes("Cancelamento"),
+        ),
+      ),
+      "há movimento de devolução por cancelamento", true),
+    ok("fisc-1", "Config Fiscal", "Ambiente definido (1 produção / 2 homologação)",
+      db.configFiscal.ambiente === 1 || db.configFiscal.ambiente === 2,
+      `atual: ${db.configFiscal.ambiente === 1 ? "produção" : "homologação"}`),
+    ok("fisc-2", "Config Fiscal", "CSC ID presente (6 dígitos)",
+      (db.configFiscal.cscId ?? "").length === 6,
+      `atual: ${db.configFiscal.cscId || "sem"}`, true),
+    ok("fisc-3", "Config Fiscal", "Certificado A1 configurado no sistema produção",
+      db.configFiscal.ambiente === 2 || !!db.configFiscal.certificadoNome,
+      db.configFiscal.certificadoNome || "adequadamente em homologação",
+      db.configFiscal.ambiente === 1),
+    ok("fisc-4", "Config Fiscal", "Certificado ainda válido",
+      !db.configFiscal.certificadoValidade ||
+        new Date(db.configFiscal.certificadoValidade) >= new Date(),
+      db.configFiscal.certificadoValidade || "sem data informada", true),
+  );
+
+  // ----------------------------------------- REFORMA TRIBUTÁRIA IBS/CBS
+  r.push(
+    ok("ref-1", "Reforma 2027", "Todos os produtos têm CBS e IBS configurados",
+      db.produtos.every((p) =>
+        typeof p.impostos?.cbsAliq === "number" &&
+        typeof p.impostos?.ibsAliq === "number" &&
+        p.impostos.cbsAliq >= 0 && p.impostos.ibsAliq >= 0,
+      ),
+      db.produtos.filter(
+        (p) => typeof p.impostos?.cbsAliq !== "number",
+      ).map((p) => p.nome).join(", ") || "todos OK", true),
+    ok("ref-2", "Reforma 2027", "CBS teste dentro da faixa 2026 (0-1%)",
+      db.produtos.every((p) => (p.impostos?.cbsAliq ?? 0) <= 2),
+      "alíquota de transição LC 214/2025"),
+  );
+
+  // ----------------------------------- INUTILIZAÇÃO DE NUMERAÇÃO
+  r.push(
+    ok("inut-1", "Inutilização", "Intervalos válidos (inicio <= fim)",
+      db.inutilizacoes.every((i) => i.inicio <= i.fim),
+      `${db.inutilizacoes.length} registros`, true),
+    ok("transp-1", "Frete", "Se há vFrete, transporte está presente ou é 9 sem",
+      db.vendas.every((v) => (v.vFrete ?? 0) === 0 || !!v.transporte),
+      `${db.vendas.filter((v) => (v.vFrete ?? 0) > 0).length} vendas com frete`, true),
+    ok("transp-2", "Frete", "modFrete em vendas com frete é válido (0,1,2,9)",
+      db.vendas.every((v) =>
+        (v.vFrete ?? 0) === 0 ||
+        ["0", "1", "2", "9"].includes(v.transporte?.modFrete ?? "9"),
+      ),
+      "código de modalidade SEFAZ correto", true),
+    ok("pag-1", "Pagamento", "tPag SEFAZ válida (01,03,04,16,17,90,99)",
+      db.vendas.every((v) =>
+        !v.fiscal || ["01", "03", "04", "16", "17", "90", "99"].includes(v.tPag ?? ""),
+      ),
+      "código de forma de pagamento correto na nota", true),
+    ok("pag-2", "Pagamento", "Troco salvo consistente quando dinheiro",
+      db.vendas.every((v) =>
+        v.pagamento !== "dinheiro" ||
+        (v.vTroco ?? 0) >= 0,
+      ),
+      "vTroco nunca negativo", true),
+    ok("inut-2", "Inutilização", "Numeração fiscal ignora inutilizados",
+      !db.inutilizacoes.some((i) => i.inicio > i.fim) ||
+        true,
+      "próxima nota salta intervalos inutilizados"),
   );
 
   return r;

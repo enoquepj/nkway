@@ -1,4 +1,4 @@
-import { brl, formatChave, type Venda } from "./types";
+import { brl, formatChave, tributosEstimados, type Venda } from "./types";
 import { Button } from "./ui";
 
 /** Pseudo-QR Code determinístico só para representar o DANFE/NFC-e */
@@ -21,14 +21,36 @@ export default function Documento({
   empresa,
   cnpj,
   onClose,
+  produtos,
 }: {
   venda: Venda;
   empresa: string;
   cnpj: string;
   onClose: () => void;
+  produtos?: { id: string; impostos: any }[];
 }) {
   const isDav = venda.tipo === "dav";
   const subtotal = venda.itens.reduce((s, i) => s + i.qtd * i.preco, 0);
+
+  // Tributos estimados para transparência fiscal — IBS+CBS consomem a fase
+  // de transição da reforma (LC 214/2025); aqui calcula % médio da venda.
+  const tri = (() => {
+    if (!venda.fiscal) return null;
+    let icms = 0, pisCofins = 0, cbs = 0, ibs = 0;
+    venda.itens.forEach((i) => {
+      // usa os impostos do produto se disponível; senão alíquota-padrão de teste
+      const p = produtos?.find((x) => x.id === i.produtoId);
+      const imp = p?.impostos ?? {
+        icmsAliq: 18, pisAliq: 1.65, cofinsAliq: 7.6, cbsAliq: 0.9, ibsAliq: 0.1,
+      };
+      const t = tributosEstimados(i.qtd * i.preco, imp);
+      icms += t.icms; pisCofins += t.pisCofins; cbs += t.cbs; ibs += t.ibs;
+    });
+    return { total: icms + pisCofins + cbs + ibs, cbs, ibs };
+  })();
+  const totais = tri?.total ?? 0;
+  const tribCbs = tri?.cbs ?? 0;
+  const tribIbs = tri?.ibs ?? 0;
 
   return (
     <div
@@ -93,8 +115,13 @@ export default function Documento({
                 <td className="py-1">
                   <span className="text-slate-400">{String(idx + 1).padStart(2, "0")} </span>
                   {i.nome}
+                  {i.gtin && (
+                    <span className="block text-[9px] text-slate-400">EAN {i.gtin}</span>
+                  )}
                 </td>
-                <td className="py-1 text-center">{i.qtd}</td>
+                <td className="py-1 text-center">
+                  {i.qtd} <span className="text-slate-400">{i.unidade || "UN"}</span>
+                </td>
                 <td className="py-1 text-right">{i.preco.toFixed(2)}</td>
                 <td className="py-1 text-right font-medium">{(i.qtd * i.preco).toFixed(2)}</td>
               </tr>
@@ -114,6 +141,33 @@ export default function Documento({
               <span>- {brl(venda.desconto)}</span>
             </div>
           )}
+          {venda.vFrete > 0 && (
+            <div className="flex justify-between text-xs text-slate-500">
+              <span>Frete ({venda.transporte?.modFrete === "1" ? "destinatário" : "emitente"})</span>
+              <span>+ {brl(venda.vFrete)}</span>
+            </div>
+          )}
+          {venda.transporte?.transportadorNome && (
+            <p className="text-[10px] text-slate-400">
+              Transp.: {venda.transporte.transportadorNome}
+              {venda.transporte.transportadorCnpj ? ` · ${venda.transporte.transportadorCnpj}` : ""}
+              {venda.transporte.placa ? ` · Placa ${venda.transporte.placa}/${venda.transporte.ufVeiculo}` : ""}
+            </p>
+          )}
+          {venda.pagamento === "dinheiro" && (venda.vPago ?? 0) > 0 && (
+            <>
+              <div className="flex justify-between text-xs text-slate-500">
+                <span>Recebido</span>
+                <span>{brl(venda.vPago!)}</span>
+              </div>
+              {(venda.vTroco ?? 0) > 0 && (
+                <div className="flex justify-between text-xs font-bold text-emerald-600">
+                  <span>Troco</span>
+                  <span>{brl(venda.vTroco!)}</span>
+                </div>
+              )}
+            </>
+          )}
           <div className="mt-1 flex justify-between text-lg font-black text-slate-900">
             <span>TOTAL</span>
             <span>{brl(venda.total)}</span>
@@ -121,6 +175,21 @@ export default function Documento({
           <p className="mt-1 text-[11px] capitalize text-slate-500">
             Pagamento: {venda.pagamento === "prazo" ? "a prazo" : venda.pagamento}
           </p>
+          {venda.fiscal && totais && (
+            <div className="mt-2 rounded bg-slate-50 p-2 text-[10px] text-slate-500">
+              <div className="flex justify-between">
+                <span>Tributos estimados (Lei 12.741):</span>
+                <span className="font-semibold">{brl(totais)}</span>
+              </div>
+              <div className="mt-0.5 flex justify-between text-slate-400">
+                <span>CBS (2026 teste): {brl(tribCbs)}</span>
+                <span>IBS: {brl(tribIbs)}</span>
+              </div>
+              <p className="mt-1 text-[9px] leading-tight text-slate-400">
+                Reforma Tributária — LC 214/2025 · CBS substitui PIS/COFINS, IBS substituirá ICMS
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Área fiscal */}

@@ -56,6 +56,11 @@ export function lerXmlNfe(conteudo: string): ResultadoXml {
         unidade: txt(prod, "uCom") || "UN",
         qtd,
         custo: vUnit,
+        // cEAN = código de barras do produto na NF-e ("SEM GTIN" vem como tal)
+        gtin: (() => {
+          const ean = txt(prod, "cEAN").replace(/\D/g, "");
+          return ean.length === 13 ? ean : undefined;
+        })(),
         // sugestão de preço de venda: custo + 80% de margem
         preco: Math.round(vUnit * 1.8 * 100) / 100,
       };

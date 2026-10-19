@@ -85,7 +85,23 @@ export async function carregarDb(): Promise<DB> {
   ]);
 
   return {
+    configFiscal: {
+      regime: "simples",
+      crt: 1,
+      ufPadrao: "SP",
+      serieNfce: "1",
+      serieNfe: "1",
+      ambiente: 2,
+      certificadoNome: "",
+      certificadoValidade: "",
+      certificadoSerial: "",
+      cscId: "000001",
+      cscToken: "",
+    },
     fornecedores: [],
+    devolucoes: [],
+    cancelamentos: [],
+    inutilizacoes: [],
     entradas: [],
     movimentos: [],
     mdfes: [],
@@ -99,6 +115,14 @@ export async function carregarDb(): Promise<DB> {
         preco: Number(x.preco),
         estoque: x.estoque,
         estoqueMin: x.estoque_min,
+        gtin: x.gtin ?? "",
+        unidade: x.unidade ?? "UN",
+        marca: x.marca ?? "",
+        impostos: x.impostos ?? {
+          ncm: "", cest: "", cfop: "5102", cstIcms: "00", csosn: "101",
+          icmsAliq: 18, icmsReducao: 0, cstIpi: "55", ipiAliq: 0,
+          cstPis: "01", pisAliq: 1.65, cstCofins: "01", cofinsAliq: 7.6, origemMercadoria: 0
+        },
       }),
     ),
     clientes: (c.data ?? []) as Cliente[],
@@ -118,6 +142,11 @@ export async function carregarDb(): Promise<DB> {
         observacao: x.observacao ?? undefined,
         fiscal: x.fiscal ?? undefined,
         data: new Date(x.data).getTime(),
+        vFrete: Number(x.v_frete ?? 0),
+        transporte: x.transporte ?? null,
+        tPag: x.t_pag,
+        vPago: x.v_pago != null ? Number(x.v_pago) : undefined,
+        vTroco: x.v_troco != null ? Number(x.v_troco) : undefined,
       }),
     ),
     lancamentos: (l.data ?? []).map(
@@ -145,6 +174,7 @@ export const salvarProduto = (empresaId: string, p: Produto) =>
     preco: p.preco,
     estoque: p.estoque,
     estoque_min: p.estoqueMin,
+    gtin: p.gtin, unidade: p.unidade, marca: p.marca,
   });
 
 export const removerProduto = (id: string) => sb().from("produtos").delete().eq("id", id);
@@ -163,6 +193,11 @@ export const salvarVenda = (empresaId: string, v: Venda) =>
     cliente_nome: v.clienteNome,
     itens: v.itens,
     total: v.total,
+    v_frete: v.vFrete,
+    transporte: v.transporte ?? null,
+    t_pag: v.tPag ?? null,
+    v_pago: v.vPago ?? null,
+    v_troco: v.vTroco ?? null,
     desconto: v.desconto,
     pagamento: v.pagamento,
     tipo: v.tipo,

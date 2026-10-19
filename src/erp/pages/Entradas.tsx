@@ -9,6 +9,7 @@ export default function Entradas() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [previa, setPrevia] = useState<Entrada | null>(null);
+  const [fornecedorId, setFornecedorId] = useState("");
   const [aberta, setAberta] = useState<string | null>(null);
 
   function processar(conteudo: string) {
@@ -210,6 +211,31 @@ export default function Entradas() {
             <p className="text-sm text-slate-500">
               Revise os dados antes de dar entrada no estoque.
             </p>
+
+            <div className="mb-3">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Fornecedor cadastrado (vincular)</span>
+              <select
+                value={fornecedorId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setFornecedorId(id);
+                  const forn = db.fornecedores.find((x) => x.id === id);
+                  if (forn) {
+                    setPrevia({
+                      ...previa,
+                      fornecedor: forn.nome,
+                      cnpjFornecedor: forn.cnpj,
+                    });
+                  }
+                }}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500"
+              >
+                <option value="">— selecionar do cadastro ou usar do XML —</option>
+                {db.fornecedores.map((f) => (
+                  <option key={f.id} value={f.id}>{f.nome} · {f.cnpj}</option>
+                ))}
+              </select>
+            </div>
 
             <div className="my-4 grid gap-3 rounded-lg bg-slate-50 p-4 text-sm sm:grid-cols-2">
               <div><span className="text-slate-400">Fornecedor:</span> <b>{previa.fornecedor}</b></div>
