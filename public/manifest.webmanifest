@@ -1,0 +1,10 @@
+{
+  "name": "NKWAY — ERP e PDV",
+  "short_name": "NKWAY",
+  "description": "Frente de caixa offline-first com DAV e emissão fiscal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0284c7",
+  "orientation": "any"
+}
