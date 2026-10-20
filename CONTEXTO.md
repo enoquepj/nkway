@@ -36,6 +36,9 @@ Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem
 - src/erp/ui.tsx e src/utils/cn.ts: componentes de interface
 - supabase/schema.sql: banco multiempresa com RLS
 - Convenção: as chaves do localStorage começam com "nkway."
+- FILTROS.md: especificação dos filtros de Financeiro, Vendas, Estoque e Compras (✅ campo existe, ➕ campo novo)
+- Filtros: base reutilizável em src/erp/filtros.ts (casaTexto, lerNumero, períodos, useFiltrosSalvos) e src/erp/FiltroUI.tsx (PainelFiltros, BuscaGlobal, LinhaFiltros, SelectFiltro = caixa única, MultiSelectFiltro = caixa com marcação múltipla e contagens, IntervaloFiltro, ChipAtivo). Padrão: filtros principais em caixas de seleção, não em fileiras de botões
+- Status dos filtros: Financeiro ✅ · Vendas ✅ (itens ✅ do FILTROS.md) · Estoque ⏳ · Compras ⏳. Nos multi-selects use toggle() do useFiltrosSalvos (seguro para cliques rápidos)
 - src/ContextoViewer.tsx: botão amarelo "Copiar CONTEXTO.md" (só para desenvolvimento). Para remover: apagar o arquivo e a linha correspondente em src/main.tsx
 
 ## 5. Situação atual
@@ -46,8 +49,12 @@ Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem
 
 ## 6. Histórico
 - 2026-10-19: projeto trazido para o arena.ai, build validado, CONTEXTO.md criado
+- 2026-10-19: filtros principais trocados por caixas de seleção (Vencimento/Período, Situação, Categoria, Pagamento, Cliente e avançados) no Financeiro e em Vendas
+- 2026-10-19: filtros de Vendas (período, situação, forma principal/qualquer parte, cliente, modelo, nº da nota, produto, categoria, exceções, total, horário, agrupamento com ticket médio, busca por chave/CPF/produto, aviso de numeração pulada, marcador de venda na fila offline)
+- 2026-10-19: filtros do Financeiro (situação, período, categoria é/não é, faixas de atraso, valor de/até, agrupamento, busca global, filtros salvos). lerNumero aceita "1.000" como milhar (também no PDV)
+- 2026-10-19: criado FILTROS.md (especificação de filtros dos 4 módulos, baseada em types.ts)
 - 2026-10-19: PDV: pagamento dividido (várias formas, saldo, troco), teclado ↑↓/Enter/F10/Esc, valor editável, busca ao vivo por início do nome, correção do "3x" que abria a balança para produto comum. Arquivos: PDV.tsx, pdvConfig.ts, types.ts, store.tsx, Financeiro.tsx, Documento.tsx, CHECKLIST.md
 - 2026-10-19: senha do console trocada por hash (devAuth.ts) e removida do README, DEV.md e CHECKLIST.md. Botão ContextoViewer adicionado
 
 ## 7. Próxima tarefa
-(escreva aqui o que quer fazer no próximo chat)
+Implementar os filtros de Estoque e Logística (FILTROS.md) em src/erp/pages/Estoque.tsx, reaproveitando filtros.ts e FiltroUI.tsx
