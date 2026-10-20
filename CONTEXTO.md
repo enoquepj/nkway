@@ -29,7 +29,9 @@ Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem
 - src/erp/plan.tsx: planos free, pro e ultra
 - src/erp/cloud.ts e src/lib/supabase.ts: modo nuvem
 - src/erp/offline.ts, useOffline.ts e StatusConexao.tsx: fila offline
-- src/erp/pages/PDV.tsx: frente de caixa (cerca de 1.400 linhas)
+- src/erp/pages/PDV.tsx: frente de caixa (cerca de 1.700 linhas). Pagamento dividido: estados pagamentos/pagMsg, funções calcularRegistro, registrarPagamento, confirmarVenda, enterPagamento, teclaPagRef (teclado). Busca ao vivo: sugestoes/listaBusca/teclaBusca
+- src/erp/checkout/pdvConfig.ts: interpretarEntrada, buscarProduto (Enter) e sugerirPorNome (nome começa com, sem acento/maiúscula)
+- Venda.pagamentos (types.ts) guarda a divisão; Venda.pagamento = forma de maior valor. valorAPrazo() calcula a parte boleto/prazo (vira conta a receber)
 - src/erp/dev/ e pages/DevConsole.tsx: console do desenvolvedor (Ctrl+Shift+D) e testes
 - src/erp/ui.tsx e src/utils/cn.ts: componentes de interface
 - supabase/schema.sql: banco multiempresa com RLS
@@ -38,12 +40,14 @@ Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem
 
 ## 5. Situação atual
 - Build OK, 16 módulos funcionando em modo demo
-- Pendente: a senha do console (devAuth.ts) aparece no README e no DEV.md
+- Resolvido: a senha do console agora fica só como hash (HASH_PADRAO em devAuth.ts), fora do código e dos documentos
 - Pendente: apagar o arquivo .zip duplicado do repositório
 - Pendente: configurar o Supabase
 
 ## 6. Histórico
 - 2026-10-19: projeto trazido para o arena.ai, build validado, CONTEXTO.md criado
+- 2026-10-19: PDV: pagamento dividido (várias formas, saldo, troco), teclado ↑↓/Enter/F10/Esc, valor editável, busca ao vivo por início do nome, correção do "3x" que abria a balança para produto comum. Arquivos: PDV.tsx, pdvConfig.ts, types.ts, store.tsx, Financeiro.tsx, Documento.tsx, CHECKLIST.md
+- 2026-10-19: senha do console trocada por hash (devAuth.ts) e removida do README, DEV.md e CHECKLIST.md. Botão ContextoViewer adicionado
 
 ## 7. Próxima tarefa
 (escreva aqui o que quer fazer no próximo chat)
