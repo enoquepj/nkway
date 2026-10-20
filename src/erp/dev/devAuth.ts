@@ -15,11 +15,16 @@ const KEY_HASH = "nkway.dev.hash";
 const KEY_TENTATIVAS = "nkway.dev.tentativas";
 const KEY_VERSAO = "nkway.dev.versao";
 
-/** Senha definitiva do desenvolvedor. */
-export const SENHA_PADRAO = "Pc_123456@";
+/**
+ * Hash SHA-256 da senha definitiva do desenvolvedor (formato: sha256("nkway::" + senha)).
+ * A senha em texto puro NÃO fica no código. Para trocar:
+ *   node -e 'console.log(require("crypto").createHash("sha256").update("nkway::NOVA_SENHA").digest("hex"))'
+ * Cole o resultado aqui e incremente VERSAO_SENHA.
+ */
+const HASH_PADRAO = "329d63b18a67f7ca00d26e1104ddbf42c289b75ba5e16ec565c66749cd880043";
 
 /**
- * Versão da senha embutida. Ao alterar SENHA_PADRAO, incremente este número:
+ * Versão da senha embutida. Ao alterar HASH_PADRAO, incremente este número:
  * o hash antigo salvo no navegador é descartado e a nova senha passa a valer.
  */
 const VERSAO_SENHA = "2";
@@ -47,7 +52,7 @@ async function hashAtual(): Promise<string> {
   // definiu uma senha própria pelo console.
   if (salvo && (versaoOk || custom)) return salvo;
 
-  const h = await hash(SENHA_PADRAO);
+  const h = HASH_PADRAO;
   localStorage.setItem(KEY_HASH, h);
   localStorage.setItem(KEY_VERSAO, VERSAO_SENHA);
   localStorage.removeItem("nkway.dev.custom");
@@ -130,7 +135,7 @@ export async function trocarSenha(
 
 /** Restaura a senha embutida no código (usar se esquecer a personalizada) */
 export async function restaurarSenhaPadrao() {
-  localStorage.setItem(KEY_HASH, await hash(SENHA_PADRAO));
+  localStorage.setItem(KEY_HASH, HASH_PADRAO);
   localStorage.setItem(KEY_VERSAO, VERSAO_SENHA);
   localStorage.removeItem("nkway.dev.custom");
   localStorage.removeItem(KEY_TENTATIVAS);
@@ -144,5 +149,5 @@ export function sairDev() {
 
 /** Indica se ainda está usando a senha padrão (deve alertar o usuário) */
 export async function usandoSenhaPadrao(): Promise<boolean> {
-  return (await hashAtual()) === (await hash(SENHA_PADRAO));
+  return (await hashAtual()) === HASH_PADRAO;
 }

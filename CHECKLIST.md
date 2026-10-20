@@ -7,7 +7,7 @@ npm install
 npm run dev          # abre http://localhost:5173
 ```
 - [ ] Tela de login abre sem erro
-- [ ] `Ctrl+Shift+D` → senha `Pc_123456@` → **aba Testes mostra 51 verificações**
+- [ ] `Ctrl+Shift+D` → senha do desenvolvedor → **aba Testes mostra 51 verificações**
 - [ ] Botão ▶ Rodar testes → placar em ou acima de ~90%
 
 ---
@@ -19,6 +19,15 @@ npm run dev          # abre http://localhost:5173
 - [ ] Voltar pra primeira conta → dados dela estão lá
 
 ## 2. Cadastros
+### 2.0 Listas de cadastro (Produtos, Clientes, Fornecedores)
+- [ ] Clicar no título da coluna ordena (▲/▼) · clicar de novo inverte
+- [ ] Busca "TENIS" encontra "Tênis" · CPF/CNPJ sem pontos encontra o cadastro
+- [ ] Produtos → Estoque "Abaixo do mínimo" · Clientes → "Pessoa jurídica" · Fornecedores → Prazo 16–30 dias
+- [ ] Clientes → Crédito "Com valores em aberto" mostra Ana Ribeiro e Mercado Bom Preço LTDA
+- [ ] "⬇ Exportar" baixa CSV que abre no Excel com acentos e vírgula decimal
+- [ ] Paginação: "Por página" 10 → navega com ‹ ›
+- [ ] Clique no nome (ou duplo clique na linha) abre a edição · Excluir pede confirmação
+
 ### 2.1 Produtos
 - [ ] Nome vazio → não salva
 - [ ] Editar produto → mostra NCM, CFOP, GTIN, unidade, marca
@@ -41,7 +50,13 @@ npm run dev          # abre http://localhost:5173
 - [ ] Resultados múltiplos → clique no produto certo
 - [ ] F4 → cancela último item, sem travamento
 - [ ] Cliente com limite de crédito + venda a prazo alta → bloqueia
-- [ ] Fechar → modal total com pagamento e troco em dinheiro
+- [ ] Digitar "ca" → lista ao vivo dos produtos que começam com "ca" (maiúsc./minúsc. tanto faz) · ↑↓ + Enter adiciona
+- [ ] Fechar (F10) → ↑↓ percorre as formas de pagamento, a selecionada fica destacada
+- [ ] Valor recebido editável · dinheiro 50 + Enter → tela continua aberta mostrando "Restante"
+- [ ] ↓ Pix + Enter → registra o saldo · Enter de novo confirma a venda
+- [ ] Dinheiro acima do total → mostra troco · cartão/pix acima do saldo → limitado ao saldo
+- [ ] Apagar o valor e apertar F10 sem registrar nada → "Registre ao menos uma forma de pagamento"
+- [ ] Parte "a prazo" → conta a receber só com o valor dessa parte
 - [ ] Recibo volta automaticamente pra espera
 - [ ] **F6 vendas do dia**: reimprimir e cancelar (prazo!) funcionam
 
@@ -58,6 +73,15 @@ npm run dev          # abre http://localhost:5173
 - [ ] CSC incompleto → alerta âmbar; completo → verde
 - [ ] Cupom mostra "Tributos estimados CBS/IBS"
 
+## 5.1 Filtros de Vendas (NF-e / Documentos)
+- [ ] Período "Hoje" mostra as vendas do dia · "Mês anterior" esconde as de hoje
+- [ ] Pagamento "pix" + "qualquer parte do pagamento" encontra venda dividida dinheiro + pix
+- [ ] Busca "bone" encontra a venda do Boné · busca por parte da chave de acesso (com espaços) funciona
+- [ ] Avançados → "Pagamento dividido" / "Com troco" / Total de "1.000"
+- [ ] Agrupar por forma → subtotal e ticket médio por grupo
+- [ ] Resumo por forma: dinheiro sem contar o troco
+- [ ] Nota com número pulado → aviso amarelo de inutilização
+
 ## 6. Compras & Estoque
 - [ ] XML de exemplo → importa 3 produtos
 - [ ] Lançar entrada → **custo médio** recalcula, estoque soma
@@ -69,6 +93,15 @@ npm run dev          # abre http://localhost:5173
 - [ ] Lançamento atrasado aparece em vermelho "Atrasado"
 - [ ] Baixar título → muda para "Pago"
 - [ ] Saldo projetado = a receber − a pagar
+- [ ] Caixa "Vencimento" lista: Todos, Hoje, Próx. 7 dias, Próx. 30 dias, Vencidos + 30 dias, Este mês, Mês anterior, Personalizado
+- [ ] Caixa "Situação" abre lista com caixas de marcar e contagem · clicar fora fecha
+- [ ] Botão "⚡ Cobrança do dia" → mostra só Vencido + Vence hoje
+- [ ] Chips de situação mostram a quantidade ao lado de cada opção
+- [ ] Busca "FORNECEDOR textil" encontra "Fornecedor Têxtil" (sem diferenciar maiúsculas e acentos)
+- [ ] Filtros avançados → Valor de "1.000" → só lançamentos a partir de R$ 1.000,00
+- [ ] Categoria "não é" Vendas → esconde as vendas
+- [ ] Agrupar por categoria → subtotais por grupo
+- [ ] Sair e voltar ao Financeiro → os filtros continuam aplicados · "Limpar filtros" zera tudo
 
 ## 8. Plano & Trial (Dev Console)
 - [ ] Simuladores → "Expirar trial" → banner vermelho e paywall volta aos 50 produtos

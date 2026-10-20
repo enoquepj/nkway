@@ -7,6 +7,7 @@ import {
   gerarChave,
   tributosEstimados,
   type ItemVenda,
+  type PagamentoParcial,
   type Produto,
   type Venda,
 } from "../types";
@@ -17,9 +18,11 @@ import {
   carregarConfig,
   interpretarEntrada,
   salvarConfig,
+  sugerirPorNome,
   type PdvConfig,
 } from "../checkout/pdvConfig";
 import Documento from "../Documento";
+import { lerNumero } from "../filtros";
 import { cn } from "../../utils/cn";
 
 const PAGAMENTOS: Venda["pagamento"][] = ["dinheiro", "pix", "debito", "credito", "boleto", "prazo"];
@@ -37,6 +40,14 @@ const T_PAG_MAP: Record<Venda["pagamento"], string> = {
 // inteiro quando algum preco esta corrompido (ex.: produto sem preço).
 const fmt = (n: number) =>
   typeof n === "number" && Number.isFinite(n) ? brl(n) : brl(0);
+const r2 = (n: number) => Math.round(n * 100) / 100;
+/** aceita "50", "50,5", "1.234,56", "1.000" (milhar) ou "50.5" */
+const lerValor = lerNumero;
+const rotuloPag = (p: Venda["pagamento"]) => (p === "prazo" ? "a prazo" : p);
+const ICONE_PAG: Record<Venda["pagamento"], string> = {
+  dinheiro: "💵", pix: "⚡", debito: "💳", credito: "💳", boleto: "🧾", prazo: "📒",
+};
+
 const fmtQtd = (n: number, un: string) =>
   un === "KG" ? `${n.toFixed(3).replace(".", ",")} kg` : `${n}`;
 
@@ -69,6 +80,14 @@ export default function PDV() {
   const [modelo, setModelo] = useState<Venda["fiscal"] extends infer _T ? "NFC-e" | "NF-e" | "SAT" : never>("NFC-e");
   const [desconto, setDesconto] = useState(0);
   const [valorPago, setValorPago] = useState("");
+  // ---- pagamentos divididos ----
+  const [pagamentos, setPagamentos] = useState<PagamentoParcial[]>([]);
+  const [pagMsg, setPagMsg] = useState<{ tipo: "erro" | "ok" | "info"; texto: string } | null>(null);
+  const valorRef = useRef<HTMLInputElement>(null);
+  /** forma selecionada imediata (setas repetidas antes do re-render) */
+  const formaRef = useRef<Venda["pagamento"]>("dinheiro");
+  // ---- sugestões da busca (setas ↑↓) ----
+  const [selBusca, setSelBusca] = useState(-1);
   // ---- frete / transporte (novo bloco fiscal) ----
   const [frete, setFrete] = useState(0);
   const [trnCnpj, setTrnCnpj] = useState("");
@@ -126,6 +145,37 @@ export default function PDV() {
     () => cfg.skusEspera.map((s) => db.produtos.find((p) => p.sku === s)).filter(Boolean) as Produto[],
     [db.produtos, cfg.skusEspera],
   );
+
+  // ---------------- sugestões ao vivo: nome começa com o texto digitado ----------------
+  const sugestoes = useMemo(() => {
+    const interp = interpretarEntrada(busca, cfg.etiquetaBalanca);
+    const termo = interp.tipo === "busca" ? interp.termo : interp.tipo === "qtd" ? interp.resto : "";
+    return sugerirPorNome(termo, db.produtos);
+  }, [busca, db.produtos, cfg.etiquetaBalanca]);
+  // resultado do Enter (busca ampla) tem prioridade; enquanto digita, mostra as sugestões
+  const listaBusca = resultados.length > 0 ? resultados : sugestoes.itens;
+  const modoSugestao = resultados.length === 0 && sugestoes.itens.length > 0;
+
+  function escolherDaLista(p: Produto) {
+    // "3x cam" + escolher "Camiseta" → aplica a quantidade digitada junto
+    const interp = interpretarEntrada(busca, cfg.etiquetaBalanca);
+    if (interp.tipo === "qtd" && interp.valor > 0 && !p.pesavel) adicionar(p, interp.valor);
+    else adicionar(p);
+  }
+
+  function teclaBusca(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!listaBusca.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelBusca((i) => (i + 1) % listaBusca.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelBusca((i) => (i <= 0 ? listaBusca.length - 1 : i - 1));
+    } else if (e.key === "Enter" && selBusca >= 0 && listaBusca[selBusca]) {
+      e.preventDefault();
+      escolherDaLista(listaBusca[selBusca]);
+    }
+  }
 
   // ---------------- relógio da tela de espera ----------------
   const [agora, setAgora] = useState(new Date());
@@ -196,8 +246,8 @@ export default function PDV() {
   }
 
   function adicionar(produto: Produto, qtd?: number, precoCalculado?: number) {
-    if (!produto.pesavel && (qtd == null)) {
-      const q = qtdPendente && qtdPendente > 0 ? qtdPendente : 1;
+    if (!produto.pesavel) {
+      const q = qtd != null && qtd > 0 ? qtd : qtdPendente && qtdPendente > 0 ? qtdPendente : 1;
       setItens((prev) => {
         const ex = prev.find((i) => i.produtoId === produto.id);
         if (ex)
@@ -239,6 +289,7 @@ export default function PDV() {
     setUltimo({ produtoId: produto.id, nome: produto.nome, qtd: qtd ?? qtdPendente ?? 1, preco: precoCalculado ?? produto.preco, unidade: produto.unidade });
     setQtdPendente(null);
     setResultados([]);
+    setSelBusca(-1);
     setBusca("");
     setMsg(null);
   }
@@ -313,10 +364,169 @@ export default function PDV() {
   }
 
   // ---------------- página de pagamento ----------------
+  const totalCobrar = r2(total + frete);
+  const totalPagoReg = r2(pagamentos.reduce((s, p) => s + p.valor, 0));
+  const restante = Math.max(0, r2(totalCobrar - totalPagoReg));
+  const troco = Math.max(0, r2(totalPagoReg - totalCobrar));
+  const valorDigitado = lerValor(valorPago);
+  const quitado = pagamentos.length > 0 && restante <= 0;
+
+  const focarValor = () =>
+    setTimeout(() => {
+      valorRef.current?.focus();
+      valorRef.current?.select();
+    }, 30);
+
   function abrirPagamento() {
+    setPagamentos([]);
+    setPagamento("dinheiro");
+    formaRef.current = "dinheiro";
+    setPagMsg(null);
+    setValorPago(r2(total + frete).toFixed(2));
     setPagModal(true);
-    setValorPago((total + frete).toFixed(2));
+    focarValor();
   }
+
+  function fecharPagamento() {
+    if (pagamentos.length && !confirm("Fechar e descartar os pagamentos já registrados?")) return;
+    setPagamentos([]);
+    setPagMsg(null);
+    setPagModal(false);
+    focar();
+  }
+
+  // frete alterado com a tela aberta → sugere o novo saldo no campo de valor
+  useEffect(() => {
+    if (pagModal) setValorPago(restante > 0 ? restante.toFixed(2) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frete]);
+
+  /** Seleciona a forma; ajusta o valor sugerido sem apagar o que o operador digitou */
+  function escolherForma(forma: Venda["pagamento"]) {
+    formaRef.current = forma;
+    setPagamento(forma);
+    setPagMsg(null);
+    const v = lerValor(valorPago);
+    if (restante > 0 && (!Number.isFinite(v) || v <= 0 || (forma !== "dinheiro" && v > restante)))
+      setValorPago(restante.toFixed(2));
+    focarValor();
+  }
+
+  /**
+   * Calcula a lista após lançar `valor` na forma `forma` (função pura).
+   * Só dinheiro pode passar do saldo (gera troco); demais formas são limitadas ao saldo.
+   */
+  function calcularRegistro(lista: PagamentoParcial[], forma: Venda["pagamento"], valor: number) {
+    const pago = r2(lista.reduce((s, p) => s + p.valor, 0));
+    const saldo = Math.max(0, r2(totalCobrar - pago));
+    if (saldo <= 0) return { erro: "Saldo já quitado. Pressione Enter ou F10 para confirmar a venda." };
+    if (!Number.isFinite(valor) || valor <= 0) return { erro: "Informe um valor válido maior que zero." };
+    let v = r2(valor);
+    let ajustado = false;
+    if (forma !== "dinheiro" && v > saldo) { v = saldo; ajustado = true; }
+    const existente = lista.find((p) => p.forma === forma);
+    const nova = existente
+      ? lista.map((p) => (p.forma === forma ? { ...p, valor: r2(p.valor + v) } : p))
+      : [...lista, { forma, valor: v }];
+    const novoSaldo = Math.max(0, r2(totalCobrar - r2(nova.reduce((s, p) => s + p.valor, 0))));
+    return { nova, v, ajustado, novoSaldo };
+  }
+
+  function aplicarRegistro(r: { nova: PagamentoParcial[]; v: number; ajustado: boolean; novoSaldo: number }, forma: Venda["pagamento"]) {
+    setPagamentos(r.nova);
+    setValorPago(r.novoSaldo > 0 ? r.novoSaldo.toFixed(2) : "");
+    const extra = r.ajustado ? ` (limitado ao saldo; troco só em dinheiro)` : "";
+    setPagMsg(
+      r.novoSaldo > 0
+        ? { tipo: "info", texto: `✓ ${rotuloPag(forma)} ${fmt(r.v)} registrado${extra}. Falta ${fmt(r.novoSaldo)}: escolha outra forma (↑↓) e Enter.` }
+        : { tipo: "ok", texto: `✓ Saldo quitado${extra}. Pressione Enter ou F10 para confirmar a venda.` },
+    );
+    focarValor();
+  }
+
+  function registrarPagamento() {
+    const r = calcularRegistro(pagamentos, pagamento, valorDigitado);
+    if ("erro" in r) { setPagMsg({ tipo: r.erro!.startsWith("Saldo") ? "ok" : "erro", texto: r.erro! }); return; }
+    aplicarRegistro(r, pagamento);
+  }
+
+  function removerPagamento(forma: Venda["pagamento"]) {
+    const nova = pagamentos.filter((p) => p.forma !== forma);
+    setPagamentos(nova);
+    const saldo = Math.max(0, r2(totalCobrar - r2(nova.reduce((s, p) => s + p.valor, 0))));
+    setValorPago(saldo.toFixed(2));
+    setPagMsg({ tipo: "info", texto: `Pagamento em ${rotuloPag(forma)} removido. Falta ${fmt(saldo)}.` });
+    focarValor();
+  }
+
+  /** Confirma a venda. Se nada foi registrado mas há forma + valor, registra automaticamente. */
+  function confirmarVenda() {
+    if (!fiscalLiberado) {
+      setPagMsg({ tipo: "erro", texto: "Emissão fiscal é do plano Pro. Use “Gerar DAV”." });
+      return;
+    }
+    let lista = pagamentos;
+    if (lista.length === 0) {
+      if (!(valorDigitado > 0)) {
+        setPagMsg({ tipo: "erro", texto: "Registre ao menos uma forma de pagamento." });
+        focarValor();
+        return;
+      }
+      const r = calcularRegistro(lista, pagamento, valorDigitado);
+      if ("erro" in r) { setPagMsg({ tipo: "erro", texto: r.erro! }); return; }
+      if (r.novoSaldo > 0) { aplicarRegistro(r, pagamento); return; }
+      lista = r.nova;
+    }
+    const saldo = Math.max(0, r2(totalCobrar - r2(lista.reduce((s, p) => s + p.valor, 0))));
+    if (saldo > 0) {
+      setPagMsg({ tipo: "erro", texto: `Falta ${fmt(saldo)}. Registre outra forma de pagamento antes de confirmar.` });
+      focarValor();
+      return;
+    }
+    finalizar(lista);
+  }
+
+  /** Enter na tela de pagamento */
+  function enterPagamento() {
+    if (restante > 0 && valorDigitado > 0) return registrarPagamento();
+    if (quitado || pagamentos.length === 0) return confirmarVenda();
+    setPagMsg({ tipo: "erro", texto: `Informe o valor a lançar. Falta ${fmt(restante)}.` });
+    focarValor();
+  }
+
+  // teclado da tela de pagamento: ↑↓ formas · Enter registra/confirma · F10 confirma · Esc fecha
+  const teclaPagRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  teclaPagRef.current = (e: KeyboardEvent) => {
+    const alvo = e.target as HTMLElement | null;
+    if (e.key === "Escape") { e.preventDefault(); fecharPagamento(); return; }
+    if (e.key === "F10") { e.preventDefault(); confirmarVenda(); return; }
+    // não interfere em selects/campos de frete/botões de ação
+    const noValor = alvo === valorRef.current;
+    const naForma = !!alvo?.dataset?.pag;
+    const livre = noValor || naForma || !alvo || alvo === document.body || alvo.tagName === "DIV";
+    if (!livre) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const i = PAGAMENTOS.indexOf(formaRef.current);
+      const prox = e.key === "ArrowDown" ? (i + 1) % PAGAMENTOS.length : (i - 1 + PAGAMENTOS.length) % PAGAMENTOS.length;
+      escolherForma(PAGAMENTOS[prox]);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (naForma) {
+        const f = alvo!.dataset.pag as Venda["pagamento"];
+        if (f !== pagamento) { escolherForma(f); return; }
+      }
+      enterPagamento();
+    }
+  };
+  useEffect(() => {
+    if (!pagModal) return;
+    const h = (e: KeyboardEvent) => teclaPagRef.current(e);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [pagModal]);
 
   /** Gera DAV (Documento Auxiliar de Venda — sem valor fiscal) */
   function gerarDav() {
@@ -348,6 +558,8 @@ export default function PDV() {
 
     setRecibo(venda);
     setPagModal(false);
+    setPagamentos([]);
+    setPagMsg(null);
     setItens([]);
     setUltimo(null);
     setDesconto(0);
@@ -355,11 +567,15 @@ export default function PDV() {
     setEtapa("espera");
   }
 
-  function finalizar() {
+  function finalizar(lista: PagamentoParcial[]) {
     const cliente = db.clientes.find((c) => c.id === clienteId);
-    const totalComFrete = Math.round((total + frete) * 100) / 100;
+    const totalComFrete = r2(total + frete);
     const numero = (db.vendas[0]?.numero ?? 1000) + 1;
     const nota = db.vendas.filter((v) => v.fiscal).length + 1;
+    // forma principal = maior valor (compatibilidade com relatórios e tPag)
+    const principal = [...lista].sort((a, b) => b.valor - a.valor)[0].forma;
+    const emDinheiro = r2(lista.filter((p) => p.forma === "dinheiro").reduce((s, p) => s + p.valor, 0));
+    const vTroco = Math.max(0, r2(lista.reduce((s, p) => s + p.valor, 0) - totalComFrete));
 
     const venda: Venda = {
       id: crypto.randomUUID(),
@@ -371,10 +587,11 @@ export default function PDV() {
       desconto,
       vFrete: frete,
       transporte: frete > 0 ? { modFrete: "1" as const, vFrete: frete, transportadorCnpj: trnCnpj || undefined, transportadorNome: trnNome || undefined, placa: placa || undefined, ufVeiculo: placaUf || undefined } : null,
-      tPag: T_PAG_MAP[pagamento],
-      vPago: pagamento === "dinheiro" ? Number(valorPago) : undefined,
-      vTroco: pagamento === "dinheiro" && Number(valorPago) > totalComFrete ? Math.round((Number(valorPago) - totalComFrete) * 100) / 100 : undefined,
-      pagamento,
+      tPag: T_PAG_MAP[principal],
+      vPago: emDinheiro > 0 ? emDinheiro : undefined,
+      vTroco: vTroco > 0 ? vTroco : undefined,
+      pagamento: principal,
+      pagamentos: lista,
       data: Date.now(),
       tipo: "fiscal",
       status: "faturado",
@@ -394,6 +611,8 @@ export default function PDV() {
 
     setRecibo(venda);
     setPagModal(false);
+    setPagamentos([]);
+    setPagMsg(null);
     setItens([]);
     setUltimo(null);
     setDesconto(0);
@@ -613,30 +832,47 @@ export default function PDV() {
           <input
             ref={inputRef}
             value={busca}
-            onChange={(e) => setBusca(e.target.value)}
+            onChange={(e) => { setBusca(e.target.value); setResultados([]); setSelBusca(-1); }}
+            onKeyDown={teclaBusca}
+            role="combobox"
+            aria-expanded={listaBusca.length > 0}
+            aria-controls="lista-busca"
             placeholder='Digite/bipe o produto, ou "3x" antes · F2 foco'
             className="h-16 flex-1 rounded-2xl border-2 border-white/20 bg-white px-6 text-2xl font-bold tracking-wide text-slate-900 outline-none placeholder:font-normal placeholder:text-slate-400 focus:border-sky-400"
             autoComplete="off"
           />
         </div>
 
-        {/* resultados da busca */}
-        {resultados.length > 0 && (
-          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {resultados.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => adicionar(p)}
-                className="flex items-center justify-between gap-2 rounded-xl bg-white/10 px-4 py-3 text-left text-sm transition hover:bg-white/20"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate font-bold">{p.nome}</span>
-                  <span className="text-xs text-slate-400">{p.sku} · {p.unidade}</span>
-                </span>
-                <span className="shrink-0 font-black text-sky-300">{fmt(p.preco)}</span>
-              </button>
-            ))}
+        {/* resultados da busca (ao vivo enquanto digita, ou após Enter) */}
+        {listaBusca.length > 0 && (
+          <div className="mt-2">
+            <p className="mb-1.5 text-[11px] font-medium text-slate-400">
+              {modoSugestao
+                ? `${sugestoes.total} produto(s) começando com o texto digitado${sugestoes.total > sugestoes.itens.length ? ` · mostrando ${sugestoes.itens.length}` : ""} · ↑↓ escolhe · Enter adiciona`
+                : "↑↓ escolhe · Enter adiciona · ou clique no produto"}
+            </p>
+            <div id="lista-busca" role="listbox" className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
+              {listaBusca.map((p, i) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  role="option"
+                  aria-selected={i === selBusca}
+                  onClick={() => escolherDaLista(p)}
+                  onMouseEnter={() => setSelBusca(i)}
+                  className={cn(
+                    "flex items-center justify-between gap-2 rounded-xl px-4 py-3 text-left text-sm transition",
+                    i === selBusca ? "bg-sky-500 text-white ring-2 ring-sky-300" : "bg-white/10 hover:bg-white/20",
+                  )}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-bold">{p.nome}</span>
+                    <span className={cn("text-xs", i === selBusca ? "text-sky-100" : "text-slate-400")}>{p.sku} · {p.unidade} · est. {p.estoque}</span>
+                  </span>
+                  <span className={cn("shrink-0 font-black", i === selBusca ? "text-white" : "text-sky-300")}>{fmt(p.preco)}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -663,11 +899,12 @@ export default function PDV() {
 
       {/* ----------------------------- pagamento ----------------------------- */}
       {pagModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm" onClick={() => setPagModal(false)}>
-          <div className="mx-4 w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm" onClick={fecharPagamento}>
+          <div className="mx-4 grid max-h-[96vh] w-full max-w-4xl gap-6 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl md:grid-cols-2" onClick={(e) => e.stopPropagation()}>
+           <div>
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-black text-slate-900">TOTAL — Fechamento da venda</h3>
-              <button onClick={() => setPagModal(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+              <button onClick={fecharPagamento} className="text-slate-400 hover:text-slate-600 md:hidden">✕</button>
             </div>
             <div className="mb-4 text-center">
               <p className="text-sm text-slate-500">Total a cobrar</p>
@@ -752,45 +989,130 @@ export default function PDV() {
                 )}
               </div>
             </details>
-            <p className="mb-2 text-xs font-medium text-slate-600">Forma de pagamento</p>
-            <div className="grid grid-cols-3 gap-2">
-              {PAGAMENTOS.map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setPagamento(p)}
-                  className={cn(
-                    "rounded-xl py-3 text-sm font-bold capitalize transition",
-                    pagamento === p ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200",
-                  )}
-                >
-                  {p === "prazo" ? "a prazo" : p}
-                </button>
-              ))}
+           </div>
+
+           {/* ------------------- coluna de pagamento ------------------- */}
+           <div className="flex flex-col">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Forma de pagamento</p>
+              <button onClick={fecharPagamento} className="hidden text-slate-400 hover:text-slate-600 md:block">✕</button>
             </div>
-            {pagamento === "dinheiro" && (
-              <div className="mt-4 rounded-xl bg-slate-50 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <label className="text-sm text-slate-600">Valor recebido</label>
+            <div role="listbox" aria-label="Formas de pagamento" className="grid gap-1.5">
+              {PAGAMENTOS.map((p, i) => {
+                const ativo = pagamento === p;
+                const lancado = pagamentos.find((x) => x.forma === p);
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    role="option"
+                    aria-selected={ativo}
+                    data-pag={p}
+                    onClick={() => escolherForma(p)}
+                    className={cn(
+                      "flex items-center gap-3 rounded-xl border-2 px-4 py-2.5 text-left text-sm font-bold capitalize transition",
+                      ativo
+                        ? "border-sky-600 bg-sky-600 text-white shadow-lg shadow-sky-200 ring-4 ring-sky-100"
+                        : "border-transparent bg-slate-100 text-slate-700 hover:bg-slate-200",
+                    )}
+                  >
+                    <span className={cn("w-4 text-xs", ativo ? "text-white" : "text-slate-400")}>{ativo ? "▶" : i + 1}</span>
+                    <span>{ICONE_PAG[p]}</span>
+                    <span className="flex-1">{rotuloPag(p)}</span>
+                    {lancado && (
+                      <span className={cn("rounded-md px-2 py-0.5 text-xs", ativo ? "bg-white/20" : "bg-emerald-100 text-emerald-700")}>
+                        {fmt(lancado.valor)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* valor a lançar — sempre habilitado enquanto houver saldo */}
+            <div className="mt-3 rounded-xl bg-slate-50 p-3">
+              <label htmlFor="valor-pag" className="mb-1 block text-xs font-medium text-slate-600">
+                {pagamento === "dinheiro" ? "Valor recebido em dinheiro" : `Valor em ${rotuloPag(pagamento)}`}
+              </label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">R$</span>
                   <input
-                    type="number" step="0.01" value={valorPago}
-                    onChange={(e) => setValorPago(e.target.value)}
-                    className="w-32 rounded-lg border border-slate-300 px-3 py-2 text-right text-lg font-black outline-none focus:border-sky-500"
+                    id="valor-pag"
+                    ref={valorRef}
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={valorPago}
+                    disabled={quitado}
+                    placeholder={quitado ? "Saldo quitado" : "0,00"}
+                    onChange={(e) => { setValorPago(e.target.value.replace(/[^\d.,]/g, "")); setPagMsg(null); }}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="w-full rounded-lg border-2 border-slate-300 bg-white py-2 pl-10 pr-3 text-right text-xl font-black outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
-                {Number(valorPago) > total && (
-                  <p className="mt-2 text-right text-xl font-black text-emerald-600">
-                    Troco: {fmt(Number(valorPago) - total)}
-                  </p>
-                )}
-                {Number(valorPago) < total && (
-                  <p className="mt-2 text-right text-xs font-bold text-rose-600">Faltam {fmt(total - Number(valorPago))}</p>
-                )}
+                <button
+                  type="button"
+                  onClick={registrarPagamento}
+                  disabled={quitado}
+                  className="rounded-lg bg-sky-600 px-4 text-sm font-black text-white transition hover:bg-sky-500 disabled:opacity-40"
+                >
+                  Registrar ↵
+                </button>
               </div>
+              {pagamento === "dinheiro" && restante > 0 && valorDigitado > restante && (
+                <p className="mt-1 text-right text-xs font-bold text-emerald-600">Troco previsto: {fmt(r2(valorDigitado - restante))}</p>
+              )}
+              <p className="mt-1.5 text-[11px] text-slate-400">↑↓ escolhe a forma · Enter registra · F10 confirma · Esc fecha</p>
+            </div>
+
+            {/* pagamentos registrados */}
+            {pagamentos.length > 0 && (
+              <ul className="mt-3 divide-y divide-slate-100 rounded-xl border border-slate-200">
+                {pagamentos.map((p) => (
+                  <li key={p.forma} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <span className="font-medium capitalize text-slate-700">{ICONE_PAG[p.forma]} {rotuloPag(p.forma)}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="font-bold text-slate-900">{fmt(p.valor)}</span>
+                      <button type="button" onClick={() => removerPagamento(p.forma)} title="Remover pagamento"
+                        className="rounded px-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600">✕</button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
+
+            {/* resumo: saldo restante e troco */}
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-xl bg-slate-50 p-2">
+                <p className="text-[10px] font-bold uppercase text-slate-500">Pago</p>
+                <p className="text-sm font-black text-slate-900">{fmt(totalPagoReg)}</p>
+              </div>
+              <div className={cn("rounded-xl p-2", restante > 0 ? "bg-rose-50" : "bg-emerald-50")}>
+                <p className="text-[10px] font-bold uppercase text-slate-500">Restante</p>
+                <p className={cn("text-sm font-black", restante > 0 ? "text-rose-600" : "text-emerald-600")}>{fmt(restante)}</p>
+              </div>
+              <div className="rounded-xl bg-emerald-50 p-2">
+                <p className="text-[10px] font-bold uppercase text-slate-500">Troco</p>
+                <p className="text-sm font-black text-emerald-600">{fmt(troco)}</p>
+              </div>
+            </div>
+
+            {pagMsg && (
+              <p role="status" className={cn("mt-3 rounded-lg px-3 py-2 text-sm font-semibold",
+                pagMsg.tipo === "erro" ? "bg-rose-50 text-rose-700" : pagMsg.tipo === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-sky-50 text-sky-800")}>
+                {pagMsg.texto}
+              </p>
+            )}
+
             <button
-              onClick={finalizar}
-              className="mt-5 w-full rounded-xl bg-emerald-600 py-4 text-lg font-black text-white transition hover:bg-emerald-500 disabled:opacity-40"
-              disabled={pagamento === "dinheiro" && Number(valorPago) < total || !fiscalLiberado}
+              type="button"
+              onClick={confirmarVenda}
+              className={cn(
+                "mt-4 w-full rounded-xl py-4 text-lg font-black text-white transition disabled:opacity-40",
+                quitado ? "bg-emerald-600 hover:bg-emerald-500 ring-4 ring-emerald-100" : "bg-emerald-600/80 hover:bg-emerald-600",
+              )}
+              disabled={!fiscalLiberado}
               title={!fiscalLiberado ? "Emissão fiscal é do plano Pro" : ""}
             >
               CONFIRMAR · F10
@@ -809,6 +1131,7 @@ export default function PDV() {
                 Emissão fiscal disponível no plano Pro. No Grátis, emitimos DAV.
               </p>
             )}
+           </div>
           </div>
         </div>
       )}

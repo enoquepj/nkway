@@ -13,6 +13,10 @@ import {
   validarCpf,
 } from "../receita";
 import { Badge, Button, Card, Field, PageHeader } from "../ui";
+import { casaTexto, citaNome, dataLocal, diasEntre, lerNumero, useFiltrosSalvos } from "../filtros";
+import { BuscaGlobal, ChipAtivo, IntervaloFiltro, LinhaFiltros, MultiSelectFiltro, PainelFiltros, SelectFiltro, inputFiltro } from "../FiltroUI";
+import { BotaoExportar, Paginacao, ThOrd, exportarCsv, useOrdenacao, usePaginacao } from "../Tabela";
+import { cn } from "../../utils/cn";
 
 const vazio: Omit<Cliente, "id"> = {
   nome: "",
@@ -33,7 +37,44 @@ const vazio: Omit<Cliente, "id"> = {
   condicaoPadrao: "a vista",
 };
 
-const hoje = new Date().toISOString().slice(0, 10);
+type Credito = "aberto" | "vencido" | "limite85" | "semLimite";
+type Col = "nome" | "documento" | "cidade" | "uf" | "aberto" | "comprado" | "ultima";
+
+const CREDITO: { valor: Credito; rotulo: string }[] = [
+  { valor: "aberto", rotulo: "Com valores em aberto" },
+  { valor: "vencido", rotulo: "Com títulos vencidos" },
+  { valor: "limite85", rotulo: "Acima de 85% do limite" },
+  { valor: "semLimite", rotulo: "Sem limite definido" },
+];
+const CONTRIBUINTE: { valor: "1" | "2" | "9"; rotulo: string }[] = [
+  { valor: "1", rotulo: "Contribuinte ICMS" },
+  { valor: "2", rotulo: "Isento de IE" },
+  { valor: "9", rotulo: "Não contribuinte" },
+];
+const CONDICOES = ["a vista", "7d", "14d", "30d", "60d"] as const;
+
+const FILTROS_PADRAO = {
+  busca: "",
+  pessoa: "todos" as "todos" | "pf" | "pj",
+  ufs: [] as string[],
+  cidade: "",
+  sefaz: "todos" as "todos" | "ok" | "incompleto",
+  credito: [] as Credito[],
+  contribuinte: [] as ("1" | "2" | "9")[],
+  condicoes: [] as string[],
+  compras: "todos" as "todos" | "nunca" | "30" | "60" | "90" | "recente30",
+  compradoDe: "",
+  compradoAte: "",
+  limiteDe: "",
+  limiteAte: "",
+  avancado: false,
+};
+
+const pessoaDe = (doc: string) => {
+  const n = (doc ?? "").replace(/\D/g, "").length;
+  return n === 14 ? "pj" : n === 11 ? "pf" : "";
+};
+const unicos = (xs: (string | undefined)[]) => [...new Set(xs.filter((x): x is string => !!x))].sort((a, b) => a.localeCompare(b, "pt-BR"));
 
 export default function Clientes() {
   const { db, addCliente, delCliente, updCliente } = useStore();
@@ -42,13 +83,16 @@ export default function Clientes() {
   const [consultando, setConsultando] = useState(false);
   const [msgConsulta, setMsgConsulta] = useState<string | null>(null);
 
+  const { f: fl, set, toggle, limpar } = useFiltrosSalvos("clientes", FILTROS_PADRAO);
+  const hoje = dataLocal();
+
   /** Uso de crédito por cliente: títulos a receber em aberto */
   const usoCredito = useMemo(() => {
     const map = new Map<string, { aberto: number; vencido: number }>();
     db.lancamentos
       .filter((l) => l.tipo === "receber" && !l.pago)
       .forEach((l) => {
-        const c = db.clientes.find((cli) => l.descricao.includes(cli.nome));
+        const c = db.clientes.find((cli) => citaNome(l.descricao, cli.nome));
         if (!c) return;
         const cur = map.get(c.id) ?? { aberto: 0, vencido: 0 };
         cur.aberto += l.valor;
@@ -56,7 +100,103 @@ export default function Clientes() {
         map.set(c.id, cur);
       });
     return map;
-  }, [db]);
+  }, [db, hoje]);
+
+  /** Histórico de compras: total faturado e data da última compra */
+  const compras = useMemo(() => {
+    const map = new Map<string, { total: number; ultima: number; qtd: number }>();
+    db.vendas
+      .filter((v) => v.clienteId && v.status === "faturado")
+      .forEach((v) => {
+        const cur = map.get(v.clienteId!) ?? { total: 0, ultima: 0, qtd: 0 };
+        cur.total += v.total;
+        cur.qtd += 1;
+        cur.ultima = Math.max(cur.ultima, v.data);
+        map.set(v.clienteId!, cur);
+      });
+    return map;
+  }, [db.vendas]);
+
+  const ufs = useMemo(() => unicos(db.clientes.map((c) => c.uf?.toUpperCase())), [db.clientes]);
+  const cidades = useMemo(() => unicos(db.clientes.filter((c) => !fl.ufs.length || fl.ufs.includes((c.uf ?? "").toUpperCase())).map((c) => c.cidade)), [db.clientes, fl.ufs]);
+
+  const cMin = lerNumero(fl.compradoDe), cMax = lerNumero(fl.compradoAte);
+  const lMin = lerNumero(fl.limiteDe), lMax = lerNumero(fl.limiteAte);
+  const usoDe = (c: Cliente) => usoCredito.get(c.id) ?? { aberto: 0, vencido: 0 };
+  const compraDe = (c: Cliente) => compras.get(c.id) ?? { total: 0, ultima: 0, qtd: 0 };
+
+  const filtrados = db.clientes.filter((c) => {
+    if (fl.pessoa !== "todos" && pessoaDe(c.documento) !== fl.pessoa) return false;
+    if (fl.ufs.length && !fl.ufs.includes((c.uf ?? "").toUpperCase())) return false;
+    if (fl.cidade && c.cidade !== fl.cidade) return false;
+    if (fl.sefaz !== "todos" && (fl.sefaz === "ok") !== statusSefazCliente(c).ok) return false;
+    const u = usoDe(c), lim = c.limiteCredito ?? 0;
+    for (const x of fl.credito) {
+      if (x === "aberto" && !(u.aberto > 0)) return false;
+      if (x === "vencido" && !(u.vencido > 0)) return false;
+      if (x === "limite85" && !(lim > 0 && u.aberto / lim >= 0.85)) return false;
+      if (x === "semLimite" && lim > 0) return false;
+    }
+    if (fl.contribuinte.length && !fl.contribuinte.includes((c.indIe ?? "9") as "1" | "2" | "9")) return false;
+    if (fl.condicoes.length && !fl.condicoes.includes(c.condicaoPadrao ?? "a vista")) return false;
+    const cp = compraDe(c);
+    if (fl.compras !== "todos") {
+      const dias = cp.ultima ? diasEntre(dataLocal(new Date(cp.ultima)), hoje) : Infinity;
+      if (fl.compras === "nunca" && cp.qtd > 0) return false;
+      if (fl.compras === "recente30" && !(dias <= 30)) return false;
+      if (["30", "60", "90"].includes(fl.compras) && !(cp.qtd > 0 && dias > Number(fl.compras))) return false;
+    }
+    if (Number.isFinite(cMin) && cp.total < cMin) return false;
+    if (Number.isFinite(cMax) && cp.total > cMax) return false;
+    if (Number.isFinite(lMin) && lim < lMin) return false;
+    if (Number.isFinite(lMax) && lim > lMax) return false;
+    return casaTexto(fl.busca, [c.nome, c.documento, c.email, c.telefone, c.cidade, c.bairro, c.logradouro, c.cep, c.uf, c.ie]);
+  });
+
+  const ord = useOrdenacao<Cliente, Col>(filtrados, {
+    nome: (c) => c.nome,
+    documento: (c) => c.documento,
+    cidade: (c) => c.cidade,
+    uf: (c) => c.uf,
+    aberto: (c) => usoDe(c).aberto,
+    comprado: (c) => compraDe(c).total,
+    ultima: (c) => compraDe(c).ultima || null,
+  }, { col: "nome", dir: "asc" });
+  const pag = usePaginacao(ord.ordenada, "clientes");
+
+  const totAberto = filtrados.reduce((s, c) => s + usoDe(c).aberto, 0);
+  const totVencido = filtrados.reduce((s, c) => s + usoDe(c).vencido, 0);
+  const totComprado = filtrados.reduce((s, c) => s + compraDe(c).total, 0);
+
+  const ativos: { id: string; rotulo: string; remover: () => void }[] = [];
+  if (fl.busca.trim()) ativos.push({ id: "b", rotulo: `Busca: “${fl.busca.trim()}”`, remover: () => set("busca", "") });
+  if (fl.pessoa !== "todos") ativos.push({ id: "p", rotulo: fl.pessoa === "pf" ? "Pessoa física" : "Pessoa jurídica", remover: () => set("pessoa", "todos") });
+  fl.ufs.forEach((u) => ativos.push({ id: `u-${u}`, rotulo: `UF: ${u}`, remover: () => toggle("ufs", u) }));
+  if (fl.cidade) ativos.push({ id: "ci", rotulo: `Cidade: ${fl.cidade}`, remover: () => set("cidade", "") });
+  if (fl.sefaz !== "todos") ativos.push({ id: "s", rotulo: fl.sefaz === "ok" ? "Cadastro OK p/ NF-e" : "Cadastro incompleto", remover: () => set("sefaz", "todos") });
+  fl.credito.forEach((x) => ativos.push({ id: `cr-${x}`, rotulo: CREDITO.find((c) => c.valor === x)!.rotulo, remover: () => toggle("credito", x) }));
+  fl.contribuinte.forEach((x) => ativos.push({ id: `ct-${x}`, rotulo: CONTRIBUINTE.find((c) => c.valor === x)!.rotulo, remover: () => toggle("contribuinte", x) }));
+  fl.condicoes.forEach((x) => ativos.push({ id: `cd-${x}`, rotulo: `Condição: ${x}`, remover: () => toggle("condicoes", x) }));
+  if (fl.compras !== "todos") ativos.push({ id: "cp", rotulo: fl.compras === "nunca" ? "Nunca comprou" : fl.compras === "recente30" ? "Comprou nos últimos 30 dias" : `Sem comprar há +${fl.compras} dias`, remover: () => set("compras", "todos") });
+  if (Number.isFinite(cMin) || Number.isFinite(cMax)) ativos.push({ id: "tc", rotulo: `Comprado ${Number.isFinite(cMin) ? brl(cMin) : "…"} a ${Number.isFinite(cMax) ? brl(cMax) : "…"}`, remover: () => { set("compradoDe", ""); set("compradoAte", ""); } });
+  if (Number.isFinite(lMin) || Number.isFinite(lMax)) ativos.push({ id: "li", rotulo: `Limite ${Number.isFinite(lMin) ? brl(lMin) : "…"} a ${Number.isFinite(lMax) ? brl(lMax) : "…"}`, remover: () => { set("limiteDe", ""); set("limiteAte", ""); } });
+
+  function excluir(c: Cliente) {
+    if (confirm(`Excluir o cliente "${c.nome}"?`)) delCliente(c.id);
+  }
+
+  function exportar() {
+    exportarCsv("clientes",
+      ["Nome / Razão social", "CPF/CNPJ", "Tipo", "E-mail", "Telefone", "CEP", "Endereço", "Número", "Bairro", "Cidade", "UF", "IE", "Limite de crédito", "Em aberto", "Vencido", "Total comprado", "Última compra", "Situação SEFAZ"],
+      ord.ordenada.map((c) => {
+        const u = usoDe(c), cp = compraDe(c);
+        return [c.nome, c.documento, pessoaDe(c.documento) === "pj" ? "PJ" : pessoaDe(c.documento) === "pf" ? "PF" : "", c.email, c.telefone, c.cep, c.logradouro, c.numero, c.bairro, c.cidade, c.uf, c.ie,
+          c.limiteCredito ?? 0, u.aberto, u.vencido, cp.total, cp.ultima ? new Date(cp.ultima).toLocaleDateString("pt-BR") : "", statusSefazCliente(c).ok ? "OK" : "Incompleto"];
+      }));
+  }
+
+  const num = (v: string) => v.replace(/[^\d.,]/g, "");
+  const th = { atual: ord.col, dir: ord.dir, onOrdenar: ord.ordenar };
 
   function salvar(e: React.FormEvent) {
     e.preventDefault();
@@ -110,101 +250,169 @@ export default function Clientes() {
       <PageHeader
         title="Clientes"
         subtitle={`${db.clientes.length} cadastrados · campos exigidos pela SEFAZ + limite de crédito`}
-        action={<Button onClick={() => { setF(vazio); setOpen(true); }}>+ Novo cliente</Button>}
+        action={
+          <div className="flex gap-2">
+            <BotaoExportar onClick={exportar} total={filtrados.length} />
+            <Button onClick={() => { setF(vazio); setOpen(true); }}>+ Novo cliente</Button>
+          </div>
+        }
       />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {db.clientes.map((c) => {
-          const st = statusSefazCliente(c);
-          const uso = usoCredito.get(c.id) ?? { aberto: 0, vencido: 0 };
-          const limite = c.limiteCredito ?? 0;
-          const pct = limite > 0 ? Math.min(100, (uso.aberto / limite) * 100) : 0;
-          const totalComprado = db.vendas
-            .filter((v) => v.clienteId === c.id && v.status === "faturado")
-            .reduce((s, v) => s + v.total, 0);
+      <PainelFiltros>
+        <BuscaGlobal value={fl.busca} onChange={(v) => set("busca", v)}
+          placeholder="Buscar por nome, CPF/CNPJ (com ou sem pontos), e-mail, telefone, cidade, bairro, CEP, IE…" />
+        <LinhaFiltros>
+          <SelectFiltro rotulo="Tipo de pessoa" valor={fl.pessoa} padrao="todos" onChange={(v) => set("pessoa", v)} largura="min-w-[150px]"
+            opcoes={[{ valor: "todos", rotulo: "Todos" }, { valor: "pf", rotulo: "Pessoa física (CPF)" }, { valor: "pj", rotulo: "Pessoa jurídica (CNPJ)" }]} />
+          <MultiSelectFiltro rotulo="UF" opcoes={ufs.map((u) => ({ valor: u, rotulo: u }))} selecionados={fl.ufs}
+            onToggle={(v) => { toggle("ufs", v); set("cidade", ""); }} onLimpar={() => set("ufs", [])} largura="min-w-[110px]" />
+          <SelectFiltro rotulo="Cidade" valor={fl.cidade} padrao="" onChange={(v) => set("cidade", v)}
+            opcoes={[{ valor: "", rotulo: "Todas" }, ...cidades.map((c) => ({ valor: c, rotulo: c }))]} />
+          <MultiSelectFiltro rotulo="Crédito / Financeiro" opcoes={CREDITO} selecionados={fl.credito}
+            onToggle={(v) => toggle("credito", v)} onLimpar={() => set("credito", [])} />
+          <SelectFiltro rotulo="Cadastro SEFAZ" valor={fl.sefaz} padrao="todos" onChange={(v) => set("sefaz", v)}
+            opcoes={[{ valor: "todos", rotulo: "Todos" }, { valor: "ok", rotulo: "OK para NF-e" }, { valor: "incompleto", rotulo: "Faltam dados" }]} />
+        </LinhaFiltros>
 
-          return (
-            <Card key={c.id} className="p-5">
-              <div className="flex items-start gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-bold text-sky-700">
-                  {c.nome.slice(0, 2).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold text-slate-900">{c.nome}</p>
-                  <p className="text-xs text-slate-400">{c.documento}</p>
-                </div>
-                <button
-                  onClick={() => delCliente(c.id)}
-                  className="text-slate-300 transition hover:text-rose-500"
-                >
-                  ✕
-                </button>
-              </div>
+        <button type="button" onClick={() => set("avancado", !fl.avancado)} className="text-xs font-semibold text-sky-700 hover:underline">
+          {fl.avancado ? "▾ Ocultar filtros avançados" : "▸ Filtros avançados (última compra, contribuinte, condição, total comprado, limite)"}
+        </button>
+        {fl.avancado && (
+          <div className="rounded-lg bg-slate-50 p-3">
+            <LinhaFiltros>
+              <SelectFiltro rotulo="Última compra" valor={fl.compras} padrao="todos" onChange={(v) => set("compras", v)} largura="min-w-[200px]"
+                opcoes={[
+                  { valor: "todos", rotulo: "Todos" },
+                  { valor: "recente30", rotulo: "Comprou nos últimos 30 dias" },
+                  { valor: "30", rotulo: "Sem comprar há +30 dias" },
+                  { valor: "60", rotulo: "Sem comprar há +60 dias" },
+                  { valor: "90", rotulo: "Sem comprar há +90 dias" },
+                  { valor: "nunca", rotulo: "Nunca comprou" },
+                ]} />
+              <MultiSelectFiltro rotulo="Contribuinte ICMS" opcoes={CONTRIBUINTE} selecionados={fl.contribuinte}
+                onToggle={(v) => toggle("contribuinte", v)} onLimpar={() => set("contribuinte", [])} />
+              <MultiSelectFiltro rotulo="Condição de pagamento" opcoes={CONDICOES.map((c) => ({ valor: c, rotulo: c === "a vista" ? "À vista" : c }))} selecionados={fl.condicoes}
+                onToggle={(v) => toggle("condicoes", v)} onLimpar={() => set("condicoes", [])} />
+              <IntervaloFiltro rotulo="Total comprado (R$)">
+                de <input inputMode="decimal" value={fl.compradoDe} onChange={(e) => set("compradoDe", num(e.target.value))} placeholder="0,00" className={cn(inputFiltro, "w-24 text-right")} aria-label="Comprado de" />
+                até <input inputMode="decimal" value={fl.compradoAte} onChange={(e) => set("compradoAte", num(e.target.value))} placeholder="sem limite" className={cn(inputFiltro, "w-24 text-right")} aria-label="Comprado até" />
+              </IntervaloFiltro>
+              <IntervaloFiltro rotulo="Limite de crédito (R$)">
+                de <input inputMode="decimal" value={fl.limiteDe} onChange={(e) => set("limiteDe", num(e.target.value))} placeholder="0,00" className={cn(inputFiltro, "w-24 text-right")} aria-label="Limite de" />
+                até <input inputMode="decimal" value={fl.limiteAte} onChange={(e) => set("limiteAte", num(e.target.value))} placeholder="sem limite" className={cn(inputFiltro, "w-24 text-right")} aria-label="Limite até" />
+              </IntervaloFiltro>
+            </LinhaFiltros>
+          </div>
+        )}
 
-              <div className="mt-3">
-                {st.ok ? (
-                  <Badge tone="green">✓ OK para autorização NF-e</Badge>
-                ) : (
-                  <div>
-                    <Badge tone="red">⚠ Faltam dados p/ SEFAZ</Badge>
-                    <p className="mt-1 text-[11px] text-rose-600">
-                      {st.faltando.slice(0, 2).join(", ")}
-                      {st.faltando.length > 2 ? ` +${st.faltando.length - 2}` : ""}
-                    </p>
-                  </div>
-                )}
-              </div>
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-3">
+          {ativos.length === 0 ? <span className="text-xs text-slate-400">Nenhum filtro ativo</span> : (
+            <>
+              {ativos.map((a) => <ChipAtivo key={a.id} onRemover={a.remover}>{a.rotulo}</ChipAtivo>)}
+              <button onClick={limpar} className="ml-1 text-xs font-semibold text-rose-600 hover:underline">Limpar filtros</button>
+            </>
+          )}
+        </div>
+      </PainelFiltros>
 
-              <dl className="mt-3 space-y-1.5 text-sm text-slate-600">
-                <div className="flex gap-2 truncate"><dt>✉️</dt><dd className="truncate">{c.email || "—"}</dd></div>
-                <div className="flex gap-2"><dt>📞</dt><dd>{c.telefone || "—"}</dd></div>
-                <div className="flex gap-2">
-                  <dt>📍</dt>
-                  <dd className="text-xs leading-tight">
-                    {c.logradouro
-                      ? `${c.logradouro}, ${c.numero} — ${c.bairro}, ${c.cidade}/${c.uf} · ${c.cep}`
-                      : c.cidade || "—"}
-                  </dd>
-                </div>
-              </dl>
-
-              <div className="mt-3 rounded-lg bg-slate-50 p-3">
-                <div className="flex justify-between text-[11px] text-slate-500">
-                  <span>
-                    Crédito: {brl(uso.aberto)}
-                    {limite > 0 ? ` / limite ${brl(limite)}` : ""}
-                  </span>
-                  {uso.vencido > 0 && (
-                    <span className="font-bold text-rose-600">vencido {brl(uso.vencido)}</span>
-                  )}
-                </div>
-                {limite > 0 && (
-                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className={`h-full rounded-full ${
-                        pct > 85 ? "bg-rose-500" : pct > 60 ? "bg-amber-400" : "bg-sky-500"
-                      }`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                )}
-                <p className="mt-1.5 text-[11px] text-slate-400">
-                  Total comprado: <b className="text-slate-700">{brl(totalComprado)}</b>
-                </p>
-              </div>
-
-              <div className="mt-3 flex justify-end">
-                <button
-                  onClick={() => { setF({ ...c }); setOpen(true); }}
-                  className="text-xs font-semibold text-sky-600 hover:underline"
-                >
-                  Editar
-                </button>
-              </div>
-            </Card>
-          );
-        })}
+      <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg bg-slate-50 px-4 py-2 text-xs text-slate-600">
+        <span><b className="text-slate-900">{filtrados.length}</b> de {db.clientes.length} cliente(s)</span>
+        <span>A receber em aberto: <b className="text-slate-900">{brl(totAberto)}</b></span>
+        {totVencido > 0 && <span>Vencido: <b className="text-rose-600">{brl(totVencido)}</b></span>}
+        <span>Total comprado: <b className="text-emerald-700">{brl(totComprado)}</b></span>
       </div>
+
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500">
+              <tr>
+                <ThOrd col="nome" {...th}>Cliente</ThOrd>
+                <ThOrd col="documento" {...th}>CPF / CNPJ</ThOrd>
+                <th className="px-4 py-3 uppercase tracking-wide">Contato</th>
+                <ThOrd col="cidade" {...th}>Cidade / UF</ThOrd>
+                <ThOrd col="aberto" {...th} alinhar="right">Crédito</ThOrd>
+                <ThOrd col="comprado" {...th} alinhar="right">Comprado</ThOrd>
+                <ThOrd col="ultima" {...th}>Última compra</ThOrd>
+                <th className="px-4 py-3 uppercase tracking-wide">SEFAZ</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pag.itens.map((c) => {
+                const st = statusSefazCliente(c);
+                const uso = usoDe(c);
+                const cp = compraDe(c);
+                const limite = c.limiteCredito ?? 0;
+                const pct = limite > 0 ? Math.min(100, (uso.aberto / limite) * 100) : 0;
+                const pes = pessoaDe(c.documento);
+                return (
+                  <tr key={c.id} className="hover:bg-slate-50/70" onDoubleClick={() => { setF({ ...c }); setOpen(true); }}>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-100 text-xs font-bold text-sky-700">
+                          {c.nome.slice(0, 2).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <button type="button" onClick={() => { setF({ ...c }); setOpen(true); }} className="max-w-[240px] truncate text-left font-medium text-slate-800 hover:text-sky-700 hover:underline">
+                            {c.nome}
+                          </button>
+                          {pes && <p className="text-[11px] text-slate-400">{pes === "pj" ? "Pessoa jurídica" : "Pessoa física"}{c.condicaoPadrao ? ` · ${c.condicaoPadrao}` : ""}</p>}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-600">{c.documento || "—"}</td>
+                    <td className="px-4 py-3 text-xs text-slate-600">
+                      <p>{c.telefone || "—"}</p>
+                      <p className="max-w-[200px] truncate text-slate-400">{c.email}</p>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {c.cidade || "—"}{c.uf ? `/${c.uf.toUpperCase()}` : ""}
+                      {c.bairro && <p className="text-[11px] text-slate-400">{c.bairro}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className={cn("font-semibold", uso.vencido > 0 ? "text-rose-600" : "text-slate-800")}>{brl(uso.aberto)}</span>
+                      {limite > 0 && (
+                        <>
+                          <p className="text-[10px] text-slate-400">de {brl(limite)}</p>
+                          <div className="ml-auto mt-1 h-1 w-20 overflow-hidden rounded-full bg-slate-200">
+                            <div className={cn("h-full rounded-full", pct > 85 ? "bg-rose-500" : pct > 60 ? "bg-amber-400" : "bg-sky-500")} style={{ width: `${pct}%` }} />
+                          </div>
+                        </>
+                      )}
+                      {uso.vencido > 0 && <p className="text-[10px] font-bold text-rose-600">vencido {brl(uso.vencido)}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                      {brl(cp.total)}
+                      {cp.qtd > 0 && <p className="text-[10px] font-normal text-slate-400">{cp.qtd} compra(s)</p>}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">
+                      {cp.ultima ? new Date(cp.ultima).toLocaleDateString("pt-BR") : <span className="text-slate-300">nunca</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {st.ok ? <Badge tone="green">✓ OK</Badge> : (
+                        <span title={`Faltam: ${st.faltando.join(", ")}`}><Badge tone="red">⚠ {st.faltando.length} pendência(s)</Badge></span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right">
+                      <button onClick={() => { setF({ ...c }); setOpen(true); }} className="mr-3 text-xs font-semibold text-sky-600 hover:underline">Editar</button>
+                      <button onClick={() => excluir(c)} className="text-xs font-semibold text-rose-500 hover:underline">Excluir</button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtrados.length === 0 && (
+                <tr><td colSpan={9} className="py-12 text-center text-slate-400">
+                  {db.clientes.length === 0 ? "Nenhum cliente cadastrado." : (
+                    <>Nenhum cliente com esses filtros. <button onClick={limpar} className="font-semibold text-sky-600 hover:underline">Limpar filtros</button></>
+                  )}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <Paginacao {...pag} />
+      </Card>
 
       {open && (
         <div

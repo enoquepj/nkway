@@ -64,7 +64,7 @@ Os arquivos `netlify.toml` e `vercel.json` já estão configurados.
 
 **Sistema:** crie a conta na tela inicial (trial Pro de 14 dias).
 
-**Console do desenvolvedor:** `Ctrl + Shift + D` → senha `Pc_123456@`
+**Console do desenvolvedor:** `Ctrl + Shift + D` → senha do desenvolvedor (definida pelo proprietário, não documentada)
 
 ---
 

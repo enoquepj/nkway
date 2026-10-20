@@ -10,21 +10,24 @@ O console fica **oculto e protegido por senha**.
 | **URL** | `?dev=1` → ex.: `http://localhost:5173/?dev=1` |
 | **Bloquear** | `Ctrl + Shift + D` de novo, ou o botão na faixa roxa |
 
-### 🔑 Senha padrão
+### 🔑 Senha do desenvolvedor
 
-```
-Pc_123456@
-```
-
-Esta é a **senha definitiva**, embutida em `src/erp/dev/devAuth.ts`
-(constante `SENHA_PADRAO`).
+A senha **não fica escrita** no código nem na documentação. Em
+`src/erp/dev/devAuth.ts` existe apenas o **hash SHA-256** dela
+(constante `HASH_PADRAO`). Guarde a senha com você.
 
 Opcionalmente você pode definir uma senha pessoal apenas para o seu
 navegador em: Console → aba *Simuladores* → **🔐 Senha do console**.
-O botão *↺ Restaurar senha definitiva* volta para `Pc_123456@`.
+O botão *↺ Restaurar senha definitiva* volta para a senha do `HASH_PADRAO`.
 
-Ao alterar `SENHA_PADRAO` no código, incremente `VERSAO_SENHA` no mesmo
-arquivo — assim o hash antigo salvo nos navegadores é descartado.
+**Para trocar a senha definitiva:**
+
+```bash
+node -e 'console.log(require("crypto").createHash("sha256").update("nkway::NOVA_SENHA").digest("hex"))'
+```
+
+Cole o resultado em `HASH_PADRAO` e incremente `VERSAO_SENHA` no mesmo
+arquivo. Assim o hash antigo salvo nos navegadores é descartado.
 
 ### Proteções implementadas
 

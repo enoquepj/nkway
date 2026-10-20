@@ -206,6 +206,8 @@ export type Venda = {
   /** <pag><vPago> recebido e <vTroco> restante — só em dinheiro */
   vPago?: number;
   vTroco?: number;
+  /** Pagamentos divididos (várias formas na mesma venda). `pagamento` guarda a forma principal. */
+  pagamentos?: PagamentoParcial[];
   data: number;
   /** dav = Documento Auxiliar de Venda (sem valor fiscal) | fiscal = nota emitida */
   tipo: "dav" | "fiscal";
@@ -214,6 +216,20 @@ export type Venda = {
   observacao?: string;
   fiscal?: Fiscal;
 };
+
+export type FormaPagamento = Venda["pagamento"];
+export type PagamentoParcial = { forma: FormaPagamento; valor: number };
+
+/** Parte da venda que vira conta a receber (boleto / a prazo) */
+export function valorAPrazo(v: Pick<Venda, "pagamento" | "pagamentos" | "total">): number {
+  if (v.pagamentos?.length)
+    return Math.round(
+      v.pagamentos
+        .filter((p) => p.forma === "boleto" || p.forma === "prazo")
+        .reduce((s, p) => s + p.valor, 0) * 100,
+    ) / 100;
+  return v.pagamento === "boleto" || v.pagamento === "prazo" ? v.total : 0;
+}
 
 /** Gera uma chave de acesso de 44 dígitos no formato da SEFAZ (simulada) */
 export const gerarChave = (numeroNota: number) => {

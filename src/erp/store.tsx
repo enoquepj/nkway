@@ -4,6 +4,7 @@ import {
   proximaNotaFiscal,
   seed,
   uid,
+  valorAPrazo,
   type Cancelamento,
   type Cliente,
   type ConfigFiscal,
@@ -89,13 +90,13 @@ function efeitos(s: DB, venda: Venda) {
     });
     return { ...p, estoque: saldo };
   });
-  const aPrazo = venda.pagamento === "boleto" || venda.pagamento === "prazo";
-  const lancamentos = aPrazo
+  const aReceber = valorAPrazo(venda);
+  const lancamentos = aReceber > 0
     ? [
         {
           id: uid(),
           descricao: `Venda #${venda.numero} — ${venda.clienteNome}`,
-          valor: venda.total,
+          valor: aReceber,
           tipo: "receber" as const,
           vencimento: new Date(Date.now() + 2592e6).toISOString().slice(0, 10),
           pago: false,

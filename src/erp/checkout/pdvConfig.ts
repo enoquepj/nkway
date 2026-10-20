@@ -72,6 +72,24 @@ export function interpretarEntrada(texto: string, cfgEtiqueta: PdvConfig["etique
   return { tipo: "busca", termo: t };
 }
 
+/** minúsculas e sem acentos — "Maçã" vira "maca" */
+export const normalizar = (s: string) =>
+  s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+/**
+ * Sugestões ao vivo enquanto o operador digita: produtos cujo NOME começa
+ * com o termo (sem diferenciar maiúsculas/minúsculas nem acentos).
+ * Só atua quando o termo contém ao menos uma letra (códigos/GTIN ficam de fora).
+ */
+export function sugerirPorNome(termo: string, produtos: Produto[], max = 12): { itens: Produto[]; total: number } {
+  const t = normalizar(termo.trim());
+  if (!t || !/[a-z]/.test(t)) return { itens: [], total: 0 };
+  const todos = produtos
+    .filter((p) => normalizar(p.nome).startsWith(t))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  return { itens: todos.slice(0, max), total: todos.length };
+}
+
 export type ResultadoBusca =
   | { tipo: "produto"; produto: Produto }
   | { tipo: "lista"; produtos: Produto[] }

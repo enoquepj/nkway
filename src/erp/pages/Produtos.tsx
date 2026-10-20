@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "../store";
 import { brl, type Produto } from "../types";
 import { Badge, Button, Card, Field, PageHeader } from "../ui";
 import Barcode from "../Barcode";
 import { UNIDADES, gerarGtin, validarGtin } from "../types";
 import { usePlan } from "../plan";
+import { casaTexto, lerNumero, useFiltrosSalvos } from "../filtros";
+import { BuscaGlobal, ChipAtivo, IntervaloFiltro, LinhaFiltros, MultiSelectFiltro, PainelFiltros, SelectFiltro, inputFiltro } from "../FiltroUI";
+import { BotaoExportar, Paginacao, ThOrd, exportarCsv, useOrdenacao, usePaginacao } from "../Tabela";
+import { cn } from "../../utils/cn";
 
 const vazio = {
   nome: "",
@@ -37,18 +41,125 @@ const vazio = {
   },
 };
 
+type SitEstoque = "ok" | "baixo" | "zerado" | "negativo";
+type Extra = "semGtin" | "gtinInvalido" | "semNcm" | "margemNegativa" | "custoZero";
+type Col = "sku" | "nome" | "categoria" | "custo" | "preco" | "margem" | "estoque";
+
+const SIT_ESTOQUE: { valor: SitEstoque; rotulo: string }[] = [
+  { valor: "ok", rotulo: "Estoque OK" },
+  { valor: "baixo", rotulo: "Abaixo do mínimo" },
+  { valor: "zerado", rotulo: "Zerado" },
+  { valor: "negativo", rotulo: "Negativo" },
+];
+const EXTRAS: { valor: Extra; rotulo: string }[] = [
+  { valor: "semGtin", rotulo: "Sem código de barras" },
+  { valor: "gtinInvalido", rotulo: "Código de barras inválido" },
+  { valor: "semNcm", rotulo: "Sem NCM / CFOP" },
+  { valor: "margemNegativa", rotulo: "Margem negativa" },
+  { valor: "custoZero", rotulo: "Custo zerado" },
+];
+
+const FILTROS_PADRAO = {
+  busca: "",
+  categorias: [] as string[],
+  marcas: [] as string[],
+  estoque: [] as SitEstoque[],
+  unidades: [] as string[],
+  fiscal: "todos" as "todos" | "ok" | "incompleto",
+  tipo: "todos" as "todos" | "unitario" | "pesavel",
+  extras: [] as Extra[],
+  precoDe: "",
+  precoAte: "",
+  margemDe: "",
+  margemAte: "",
+  estoqueDe: "",
+  estoqueAte: "",
+  avancado: false,
+};
+
+const sitEstoque = (p: Produto): SitEstoque =>
+  p.estoque < 0 ? "negativo" : p.estoque === 0 ? "zerado" : p.estoque <= p.estoqueMin ? "baixo" : "ok";
+const fiscalOkDe = (p: Produto) => !!p.impostos?.ncm && !!p.impostos?.cfop && (p.gtin === "" || validarGtin(p.gtin));
+const margemDe = (p: Produto) => (p.preco > 0 ? Math.round(((p.preco - p.custo) / p.preco) * 100) : 0);
+const unicos = (xs: string[]) => [...new Set(xs.filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR"));
+
 export default function Produtos() {
   const { db, addProduto, updProduto, delProduto } = useStore();
   const [form, setForm] = useState<typeof vazio & { id?: string }>(vazio);
   const [open, setOpen] = useState(false);
-  const [busca, setBusca] = useState("");
   const [bloqueio, setBloqueio] = useState(false);
   const [etiqueta, setEtiqueta] = useState<Produto | null>(null);
   const { plano, dentroDoLimite } = usePlan();
+  const { f, set, toggle, limpar } = useFiltrosSalvos("produtos", FILTROS_PADRAO);
 
-  const lista = db.produtos.filter((p) =>
-    (p.nome + p.sku + p.categoria).toLowerCase().includes(busca.toLowerCase()),
-  );
+  const categorias = useMemo(() => unicos(db.produtos.map((p) => p.categoria)), [db.produtos]);
+  const marcas = useMemo(() => unicos(db.produtos.map((p) => p.marca)), [db.produtos]);
+  const unidades = useMemo(() => unicos(db.produtos.map((p) => p.unidade || "UN")), [db.produtos]);
+
+  const pMin = lerNumero(f.precoDe), pMax = lerNumero(f.precoAte);
+  const mMin = lerNumero(f.margemDe), mMax = lerNumero(f.margemAte);
+  const eMin = lerNumero(f.estoqueDe), eMax = lerNumero(f.estoqueAte);
+
+  const aplicar = (ignorarEstoque = false) =>
+    db.produtos.filter((p) => {
+      if (f.categorias.length && !f.categorias.includes(p.categoria)) return false;
+      if (f.marcas.length && !f.marcas.includes(p.marca)) return false;
+      if (!ignorarEstoque && f.estoque.length && !f.estoque.includes(sitEstoque(p))) return false;
+      if (f.unidades.length && !f.unidades.includes(p.unidade || "UN")) return false;
+      if (f.fiscal !== "todos" && (f.fiscal === "ok") !== fiscalOkDe(p)) return false;
+      if (f.tipo !== "todos" && (f.tipo === "pesavel") !== !!p.pesavel) return false;
+      for (const x of f.extras) {
+        if (x === "semGtin" && p.gtin && p.gtin !== "SEM GTIN") return false;
+        if (x === "gtinInvalido" && (!p.gtin || p.gtin === "SEM GTIN" || validarGtin(p.gtin))) return false;
+        if (x === "semNcm" && p.impostos?.ncm && p.impostos?.cfop) return false;
+        if (x === "margemNegativa" && !(p.preco < p.custo)) return false;
+        if (x === "custoZero" && p.custo > 0) return false;
+      }
+      if (Number.isFinite(pMin) && p.preco < pMin) return false;
+      if (Number.isFinite(pMax) && p.preco > pMax) return false;
+      if (Number.isFinite(mMin) && margemDe(p) < mMin) return false;
+      if (Number.isFinite(mMax) && margemDe(p) > mMax) return false;
+      if (Number.isFinite(eMin) && p.estoque < eMin) return false;
+      if (Number.isFinite(eMax) && p.estoque > eMax) return false;
+      return casaTexto(f.busca, [p.nome, p.sku, p.gtin, p.codBalanca, p.marca, p.categoria, p.impostos?.ncm, p.impostos?.cest, p.preco]);
+    });
+
+  const filtrados = aplicar();
+  const contEstoque = useMemo(() => {
+    const c: Partial<Record<SitEstoque, number>> = {};
+    aplicar(true).forEach((p) => { const s = sitEstoque(p); c[s] = (c[s] ?? 0) + 1; });
+    return c;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.produtos, f]);
+
+  const ord = useOrdenacao<Produto, Col>(filtrados, {
+    sku: (p) => p.sku,
+    nome: (p) => p.nome,
+    categoria: (p) => p.categoria,
+    custo: (p) => p.custo,
+    preco: (p) => p.preco,
+    margem: (p) => margemDe(p),
+    estoque: (p) => p.estoque,
+  }, { col: "nome", dir: "asc" });
+  const pag = usePaginacao(ord.ordenada, "produtos");
+
+  const valorCusto = filtrados.reduce((s, p) => s + Math.max(0, p.estoque) * p.custo, 0);
+  const valorVenda = filtrados.reduce((s, p) => s + Math.max(0, p.estoque) * p.preco, 0);
+  const abaixoMin = filtrados.filter((p) => sitEstoque(p) !== "ok").length;
+
+  // ---- chips de filtros ativos
+  const ativos: { id: string; rotulo: string; remover: () => void }[] = [];
+  if (f.busca.trim()) ativos.push({ id: "b", rotulo: `Busca: “${f.busca.trim()}”`, remover: () => set("busca", "") });
+  f.categorias.forEach((c) => ativos.push({ id: `c-${c}`, rotulo: `Categoria: ${c}`, remover: () => toggle("categorias", c) }));
+  f.marcas.forEach((m) => ativos.push({ id: `m-${m}`, rotulo: `Marca: ${m}`, remover: () => toggle("marcas", m) }));
+  f.estoque.forEach((e) => ativos.push({ id: `e-${e}`, rotulo: SIT_ESTOQUE.find((x) => x.valor === e)!.rotulo, remover: () => toggle("estoque", e) }));
+  f.unidades.forEach((u) => ativos.push({ id: `u-${u}`, rotulo: `Unidade: ${u}`, remover: () => toggle("unidades", u) }));
+  if (f.fiscal !== "todos") ativos.push({ id: "fi", rotulo: f.fiscal === "ok" ? "Fiscal OK" : "Fiscal incompleto", remover: () => set("fiscal", "todos") });
+  if (f.tipo !== "todos") ativos.push({ id: "ti", rotulo: f.tipo === "pesavel" ? "Pesável (balança)" : "Unitário", remover: () => set("tipo", "todos") });
+  f.extras.forEach((x) => ativos.push({ id: `x-${x}`, rotulo: EXTRAS.find((e) => e.valor === x)!.rotulo, remover: () => toggle("extras", x) }));
+  if (Number.isFinite(pMin) || Number.isFinite(pMax)) ativos.push({ id: "pr", rotulo: `Preço ${Number.isFinite(pMin) ? brl(pMin) : "…"} a ${Number.isFinite(pMax) ? brl(pMax) : "…"}`, remover: () => { set("precoDe", ""); set("precoAte", ""); } });
+  if (Number.isFinite(mMin) || Number.isFinite(mMax)) ativos.push({ id: "mg", rotulo: `Margem ${Number.isFinite(mMin) ? mMin : "…"}% a ${Number.isFinite(mMax) ? mMax : "…"}%`, remover: () => { set("margemDe", ""); set("margemAte", ""); } });
+  if (Number.isFinite(eMin) || Number.isFinite(eMax)) ativos.push({ id: "es", rotulo: `Estoque ${Number.isFinite(eMin) ? eMin : "…"} a ${Number.isFinite(eMax) ? eMax : "…"}`, remover: () => { set("estoqueDe", ""); set("estoqueAte", ""); } });
 
   function salvar(e: React.FormEvent) {
     e.preventDefault();
@@ -66,8 +177,19 @@ export default function Produtos() {
     setOpen(false);
   }
 
-  const margem = (p: Produto) =>
-    p.preco > 0 ? Math.round(((p.preco - p.custo) / p.preco) * 100) : 0;
+  function excluir(p: Produto) {
+    if (confirm(`Excluir o produto "${p.nome}"?`)) delProduto(p.id);
+  }
+
+  function exportar() {
+    exportarCsv("produtos",
+      ["Código (SKU)", "Produto", "Categoria", "Marca", "Unidade", "Código de barras", "NCM", "CFOP", "Custo", "Preço", "Margem %", "Estoque", "Estoque mínimo", "Situação", "Fiscal"],
+      ord.ordenada.map((p) => [p.sku, p.nome, p.categoria, p.marca, p.unidade, p.gtin, p.impostos?.ncm, p.impostos?.cfop, p.custo, p.preco, margemDe(p), p.estoque, p.estoqueMin,
+        SIT_ESTOQUE.find((x) => x.valor === sitEstoque(p))!.rotulo, fiscalOkDe(p) ? "OK" : "Incompleto"]));
+  }
+
+  const num = (v: string) => v.replace(/[^\d.,-]/g, "");
+  const th = { atual: ord.col, dir: ord.dir, onOrdenar: ord.ordenar };
 
   return (
     <div>
@@ -75,52 +197,114 @@ export default function Produtos() {
         title="Produtos"
         subtitle={`${db.produtos.length} itens cadastrados`}
         action={
-          <Button onClick={() => { setForm(vazio); setOpen(true); }}>+ Novo produto</Button>
+          <div className="flex gap-2">
+            <BotaoExportar onClick={exportar} total={filtrados.length} />
+            <Button onClick={() => { setForm(vazio); setOpen(true); }}>+ Novo produto</Button>
+          </div>
         }
       />
 
-      <input
-        value={busca}
-        onChange={(e) => setBusca(e.target.value)}
-        placeholder="Buscar por nome, SKU ou categoria..."
-        className="mb-4 w-full max-w-md rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-      />
+      <PainelFiltros>
+        <BuscaGlobal value={f.busca} onChange={(v) => set("busca", v)}
+          placeholder="Buscar por nome, código (SKU), código de barras, marca, categoria, NCM…" />
+        <LinhaFiltros>
+          <MultiSelectFiltro rotulo="Categoria" opcoes={categorias.map((c) => ({ valor: c, rotulo: c }))} selecionados={f.categorias}
+            onToggle={(v) => toggle("categorias", v)} onLimpar={() => set("categorias", [])} />
+          <MultiSelectFiltro rotulo="Marca" opcoes={marcas.map((m) => ({ valor: m, rotulo: m }))} selecionados={f.marcas}
+            onToggle={(v) => toggle("marcas", v)} onLimpar={() => set("marcas", [])} />
+          <MultiSelectFiltro rotulo="Estoque" opcoes={SIT_ESTOQUE} selecionados={f.estoque} contagem={contEstoque}
+            onToggle={(v) => toggle("estoque", v)} onLimpar={() => set("estoque", [])} />
+          <SelectFiltro rotulo="Situação fiscal" valor={f.fiscal} padrao="todos" onChange={(v) => set("fiscal", v)}
+            opcoes={[{ valor: "todos", rotulo: "Todos" }, { valor: "ok", rotulo: "OK para NF-e" }, { valor: "incompleto", rotulo: "Dados incompletos" }]} />
+        </LinhaFiltros>
+
+        <button type="button" onClick={() => set("avancado", !f.avancado)} className="text-xs font-semibold text-sky-700 hover:underline">
+          {f.avancado ? "▾ Ocultar filtros avançados" : "▸ Filtros avançados (unidade, tipo, preço, margem, estoque, exceções)"}
+        </button>
+        {f.avancado && (
+          <div className="rounded-lg bg-slate-50 p-3">
+            <LinhaFiltros>
+              <MultiSelectFiltro rotulo="Unidade" opcoes={unidades.map((u) => ({ valor: u, rotulo: u }))} selecionados={f.unidades}
+                onToggle={(v) => toggle("unidades", v)} onLimpar={() => set("unidades", [])} largura="min-w-[120px]" />
+              <SelectFiltro rotulo="Tipo" valor={f.tipo} padrao="todos" onChange={(v) => set("tipo", v)} largura="min-w-[150px]"
+                opcoes={[{ valor: "todos", rotulo: "Todos" }, { valor: "unitario", rotulo: "Unitário" }, { valor: "pesavel", rotulo: "Pesável (balança)" }]} />
+              <MultiSelectFiltro rotulo="Exceções" opcoes={EXTRAS} selecionados={f.extras}
+                onToggle={(v) => toggle("extras", v)} onLimpar={() => set("extras", [])} />
+              <IntervaloFiltro rotulo="Preço de venda (R$)">
+                de <input inputMode="decimal" value={f.precoDe} onChange={(e) => set("precoDe", num(e.target.value))} placeholder="0,00" className={cn(inputFiltro, "w-24 text-right")} aria-label="Preço de" />
+                até <input inputMode="decimal" value={f.precoAte} onChange={(e) => set("precoAte", num(e.target.value))} placeholder="sem limite" className={cn(inputFiltro, "w-24 text-right")} aria-label="Preço até" />
+              </IntervaloFiltro>
+              <IntervaloFiltro rotulo="Margem (%)">
+                de <input inputMode="decimal" value={f.margemDe} onChange={(e) => set("margemDe", num(e.target.value))} className={cn(inputFiltro, "w-16 text-right")} aria-label="Margem de" />
+                até <input inputMode="decimal" value={f.margemAte} onChange={(e) => set("margemAte", num(e.target.value))} className={cn(inputFiltro, "w-16 text-right")} aria-label="Margem até" />
+              </IntervaloFiltro>
+              <IntervaloFiltro rotulo="Estoque (qtd.)">
+                de <input inputMode="decimal" value={f.estoqueDe} onChange={(e) => set("estoqueDe", num(e.target.value))} className={cn(inputFiltro, "w-16 text-right")} aria-label="Estoque de" />
+                até <input inputMode="decimal" value={f.estoqueAte} onChange={(e) => set("estoqueAte", num(e.target.value))} className={cn(inputFiltro, "w-16 text-right")} aria-label="Estoque até" />
+              </IntervaloFiltro>
+            </LinhaFiltros>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-3">
+          {ativos.length === 0 ? <span className="text-xs text-slate-400">Nenhum filtro ativo</span> : (
+            <>
+              {ativos.map((a) => <ChipAtivo key={a.id} onRemover={a.remover}>{a.rotulo}</ChipAtivo>)}
+              <button onClick={limpar} className="ml-1 text-xs font-semibold text-rose-600 hover:underline">Limpar filtros</button>
+            </>
+          )}
+        </div>
+      </PainelFiltros>
+
+      <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg bg-slate-50 px-4 py-2 text-xs text-slate-600">
+        <span><b className="text-slate-900">{filtrados.length}</b> de {db.produtos.length} produto(s)</span>
+        <span>Estoque a custo: <b className="text-slate-900">{brl(valorCusto)}</b></span>
+        <span>Estoque a preço de venda: <b className="text-emerald-700">{brl(valorVenda)}</b></span>
+        {abaixoMin > 0 && <span>Precisam de reposição: <b className="text-amber-700">{abaixoMin}</b></span>}
+      </div>
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500">
               <tr>
-                <th className="px-4 py-3">Produto</th>
-                <th className="px-4 py-3">Categoria</th>
-                <th className="px-4 py-3 text-right">Custo</th>
-                <th className="px-4 py-3 text-right">Venda</th>
-                <th className="px-4 py-3 text-right">Margem</th>
-                <th className="px-4 py-3 text-center">Estoque</th>
-                <th className="px-4 py-3">Fiscal</th>
+                <ThOrd col="sku" {...th}>Código</ThOrd>
+                <ThOrd col="nome" {...th}>Produto</ThOrd>
+                <ThOrd col="categoria" {...th}>Categoria</ThOrd>
+                <ThOrd col="custo" {...th} alinhar="right">Custo</ThOrd>
+                <ThOrd col="preco" {...th} alinhar="right">Venda</ThOrd>
+                <ThOrd col="margem" {...th} alinhar="right">Margem</ThOrd>
+                <ThOrd col="estoque" {...th} alinhar="center">Estoque</ThOrd>
+                <th className="px-4 py-3 uppercase tracking-wide">Fiscal</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {lista.map((p) => {
-                const fiscalOk = !!p.impostos?.ncm && !!p.impostos?.cfop && (p.gtin === "" || validarGtin(p.gtin));
+              {pag.itens.map((p) => {
+                const fiscalOk = fiscalOkDe(p);
+                const sit = sitEstoque(p);
+                const mg = margemDe(p);
                 return (
-                <tr key={p.id} className="hover:bg-slate-50/70">
+                <tr key={p.id} className="hover:bg-slate-50/70" onDoubleClick={() => { setForm(p); setOpen(true); }}>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-500">{p.sku}</td>
                   <td className="px-4 py-3">
-                    <p className="font-medium text-slate-800">{p.nome}</p>
+                    <button type="button" onClick={() => { setForm(p); setOpen(true); }} className="text-left font-medium text-slate-800 hover:text-sky-700 hover:underline">
+                      {p.nome}
+                    </button>
                     <p className="text-xs text-slate-400">
-                      {p.sku} · {p.marca || "s/ marca"} · {p.unidade || "UN"}
+                      {p.marca || "s/ marca"} · {p.unidade || "UN"}{p.pesavel ? " · ⚖ pesável" : ""}
                     </p>
                     {p.gtin && <p className="font-mono text-[10px] text-slate-400">{p.gtin}</p>}
                   </td>
                   <td className="px-4 py-3 text-slate-600">{p.categoria}</td>
                   <td className="px-4 py-3 text-right text-slate-600">{brl(p.custo)}</td>
                   <td className="px-4 py-3 text-right font-semibold text-slate-900">{brl(p.preco)}</td>
-                  <td className="px-4 py-3 text-right text-emerald-600">{margem(p)}%</td>
+                  <td className={cn("px-4 py-3 text-right", mg < 0 ? "font-bold text-rose-600" : "text-emerald-600")}>{mg}%</td>
                   <td className="px-4 py-3 text-center">
-                    <Badge tone={p.estoque === 0 ? "red" : p.estoque <= p.estoqueMin ? "amber" : "green"}>
-                      {p.estoque} un
+                    <Badge tone={sit === "ok" ? "green" : sit === "baixo" ? "amber" : "red"}>
+                      {p.estoque} {(p.unidade || "un").toLowerCase()}
                     </Badge>
+                    {sit !== "ok" && <p className="mt-0.5 text-[10px] text-slate-400">mín. {p.estoqueMin}</p>}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col gap-1">
@@ -132,23 +316,28 @@ export default function Produtos() {
                       </button>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <td className="whitespace-nowrap px-4 py-3 text-right">
                     <button onClick={() => { setForm(p); setOpen(true); }} className="mr-3 text-xs font-semibold text-sky-600 hover:underline">
                       Editar
                     </button>
-                    <button onClick={() => delProduto(p.id)} className="text-xs font-semibold text-rose-500 hover:underline">
+                    <button onClick={() => excluir(p)} className="text-xs font-semibold text-rose-500 hover:underline">
                       Excluir
                     </button>
                   </td>
                 </tr>
                 );
               })}
-              {lista.length === 0 && (
-                <tr><td colSpan={8} className="py-12 text-center text-slate-400">Nenhum produto encontrado.</td></tr>
+              {filtrados.length === 0 && (
+                <tr><td colSpan={9} className="py-12 text-center text-slate-400">
+                  {db.produtos.length === 0 ? "Nenhum produto cadastrado." : (
+                    <>Nenhum produto com esses filtros. <button onClick={limpar} className="font-semibold text-sky-600 hover:underline">Limpar filtros</button></>
+                  )}
+                </td></tr>
               )}
             </tbody>
           </table>
         </div>
+        <Paginacao {...pag} />
       </Card>
 
       {bloqueio && (

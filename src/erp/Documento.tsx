@@ -154,7 +154,7 @@ export default function Documento({
               {venda.transporte.placa ? ` · Placa ${venda.transporte.placa}/${venda.transporte.ufVeiculo}` : ""}
             </p>
           )}
-          {venda.pagamento === "dinheiro" && (venda.vPago ?? 0) > 0 && (
+          {(venda.vPago ?? 0) > 0 && (
             <>
               <div className="flex justify-between text-xs text-slate-500">
                 <span>Recebido</span>
@@ -173,7 +173,9 @@ export default function Documento({
             <span>{brl(venda.total)}</span>
           </div>
           <p className="mt-1 text-[11px] capitalize text-slate-500">
-            Pagamento: {venda.pagamento === "prazo" ? "a prazo" : venda.pagamento}
+            Pagamento: {venda.pagamentos && venda.pagamentos.length > 1
+              ? venda.pagamentos.map((p) => `${p.forma === "prazo" ? "a prazo" : p.forma} ${brl(p.valor)}`).join(" + ")
+              : venda.pagamento === "prazo" ? "a prazo" : venda.pagamento}
           </p>
           {venda.fiscal && totais && (
             <div className="mt-2 rounded bg-slate-50 p-2 text-[10px] text-slate-500">
