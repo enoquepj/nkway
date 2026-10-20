@@ -7,11 +7,11 @@
 | Criar repositório no GitHub | **Você**, no navegador | não |
 | Gerar o token | **Você**, no navegador | sim — só na sua tela |
 | Guardar o token | **Você**, no bloco de notas | fica só com você |
-| Rodar `./publicar.sh` | **Você**, no seu terminal | você cola na hora |
+| Rodar `./publicar.sh` | **Você**, no comando prompt do seu PC | você cola na hora |
 | Assistente (eu) | preparei o código e o script | **nunca vejo o token** |
 
 **O token nunca passa por mim.** Ele vai direto do seu navegador para o
-seu terminal, e do terminal para o GitHub. Não cole o token no chat.
+comando prompt, e do comando prompt para o GitHub. Não cole o token no chat.
 
 
 ## Etapa 1 — Criar o repositório vazio
@@ -28,7 +28,7 @@ seu terminal, e do terminal para o GitHub. Não cole o token no chat.
 
 ## Etapa 2 — Gerar o token de acesso
 
-O GitHub não aceita mais a senha da conta pelo terminal. É preciso um
+O GitHub não aceita mais a senha da conta pelo comando prompt. É preciso um
 **token**, que funciona como uma senha temporária.
 
 ### Caminho direto (mais fácil)
@@ -115,7 +115,7 @@ ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8
 
 ## Etapa 3 — Enviar o projeto
 
-No terminal, dentro da pasta do projeto:
+No comando prompt (Prompt de Comando do Windows), dentro da pasta do projeto:
 
 ```bash
 ./publicar.sh SEU_USUARIO_GITHUB
@@ -126,7 +126,7 @@ Quando aparecer:
 - **Username:** digite seu usuário do GitHub
 - **Password:** cole o **token** (não a senha da conta)
 
-> O terminal não mostra nada enquanto você cola a senha.
+> O comando prompt não mostra nada enquanto você cola a senha.
 > Isso é normal — cole e aperte Enter.
 
 **Pronto.** Seu repositório estará em:

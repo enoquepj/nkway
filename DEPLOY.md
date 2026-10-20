@@ -120,7 +120,7 @@ Nada exige servidor próprio, VPS ou manutenção de máquina.
 
 ### Opção A — Netlify Drop (1 minuto, sem conta técnica)
 
-1. Rode no terminal:
+1. Rode no comando prompt:
    ```bash
    npm run build
    ```

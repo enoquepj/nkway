@@ -75,7 +75,7 @@ Legenda: ✅ o campo já existe no modelo de dados (`src/erp/types.ts`) ou pode 
 
 ---
 
-### 📦 Módulo: Estoque e Logística
+### 📦 Módulo: Estoque e Logística · ✅ IMPLEMENTADO (itens ✅ em pages/Estoque.tsx)
 *   **Filtros Essenciais:**
     *   `Situação do estoque` ✅: [Chips: OK · Abaixo do mínimo · Zerado · Negativo] - *Reposição diária; calculada a partir de `estoque` e `estoqueMin`.*
     *   `Categoria` ✅: [Seleção múltipla] - *Navegação por seção da loja.*

@@ -1,173 +1,67 @@
- HEAD
-\# CONTEXTO DO PROJETO NKWAY (leia primeiro)
-
-
-
-Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem reescreva a stack. Abra apenas os arquivos necessários para a tarefa.
-
-
-
-\## Preferências do usuário (seguir sempre)
-
-\- Ao se referir ao terminal do computador do usuário, escrever \*\*comando prompt\*\* (Prompt de Comando do Windows), nunca "terminal"
-
-\- O usuário usa o GitHub Desktop: explicar processos só com cliques, sem comandos, a menos que ele peça
-
-\- Linguagem simples e um único caminho por vez
-
-\- O PC do usuário NÃO tem o Git instalado no comando prompt ('git' não é reconhecido). Nunca peça para ele digitar comandos git
-
-
-
-\## 1. Projeto
-
-\- Nome: NKWAY, ERP e PDV para pequenos negócios (interface em português)
-
-\- Repositório: https://github.com/enoquepj/nkway (branch main)
-
-\- Stack: React 19, TypeScript strict, Vite 7, Tailwind 4, Supabase opcional
-
-\- Sem arquivo .env o sistema roda em modo demo, com os dados no localStorage
-
-
-
-\## 2. Como restaurar (comando CONTINUAR) · ⚠️ PARA A IA EXECUTAR. O usuário NÃO roda estes comandos
-
-1\. git clone https://github.com/enoquepj/nkway /tmp/nkway
-
-2\. Copiar tudo para o projeto, exceto .git, \*.zip, package.json, package-lock.json e vite.config.ts
-
-3\. npm install @supabase/supabase-js@^2.109.0 fflate@0.8.2
-
-4\. npm run build (precisa passar sem erros)
-
-
-
-\## 3. Como salvar (comando SALVAR + token) · ⚠️ PARA A IA EXECUTAR. O usuário salva pelo GitHub Desktop (botão 📦 Baixar projeto)
-
-1\. Atualizar as seções 5, 6 e 7 deste arquivo
-
-2\. Copiar os arquivos alterados para /tmp/nkway
-
-3\. git add -A, depois git commit -m "resumo"
-
-4\. git push https://TOKEN@github.com/enoquepj/nkway main
-
-5\. Nunca gravar o token em nenhum arquivo. Confirmar ao usuário quais arquivos foram enviados
-
-
-
-\## 4. Onde fica cada coisa
-
-\- src/App.tsx: menu (MENU), navegação e providers. Página nova: criar em src/erp/pages e registrar no MENU e no switch
-
-\- src/erp/store.tsx: estado central (useStore): cadastros, vendas, estoque, kardex, financeiro
-
-\- src/erp/types.ts: tipos (Produto, Cliente, Venda, DB), seed() e uid()
-
-\- src/erp/auth.tsx: contas multiempresa e trial de 14 dias
-
-\- src/erp/plan.tsx: planos free, pro e ultra
-
-\- src/erp/cloud.ts e src/lib/supabase.ts: modo nuvem
-
-\- src/erp/offline.ts, useOffline.ts e StatusConexao.tsx: fila offline
-
-\- src/erp/pages/PDV.tsx: frente de caixa (cerca de 1.700 linhas). Pagamento dividido: estados pagamentos/pagMsg, funções calcularRegistro, registrarPagamento, confirmarVenda, enterPagamento, teclaPagRef (teclado). Busca ao vivo: sugestoes/listaBusca/teclaBusca
-
-\- src/erp/checkout/pdvConfig.ts: interpretarEntrada, buscarProduto (Enter) e sugerirPorNome (nome começa com, sem acento/maiúscula)
-
-\- Venda.pagamentos (types.ts) guarda a divisão; Venda.pagamento = forma de maior valor. valorAPrazo() calcula a parte boleto/prazo (vira conta a receber)
-
-\- src/erp/dev/ e pages/DevConsole.tsx: console do desenvolvedor (Ctrl+Shift+D) e testes
-
-\- src/erp/ui.tsx e src/utils/cn.ts: componentes de interface
-
-\- supabase/schema.sql: banco multiempresa com RLS
-
-\- Convenção: as chaves do localStorage começam com "nkway."
-
-\- FILTROS.md: especificação dos filtros de Financeiro, Vendas, Estoque e Compras (✅ campo existe, ➕ campo novo)
-
-\- Filtros: base reutilizável em src/erp/filtros.ts (casaTexto, lerNumero, períodos, useFiltrosSalvos) e src/erp/FiltroUI.tsx (PainelFiltros, BuscaGlobal, LinhaFiltros, SelectFiltro = caixa única, MultiSelectFiltro = caixa com marcação múltipla e contagens, IntervaloFiltro, ChipAtivo). Padrão: filtros principais em caixas de seleção, não em fileiras de botões
-
-\- Tabelas: src/erp/Tabela.tsx (useOrdenacao + ThOrd = ordenar pelo título da coluna, usePaginacao + Paginacao, exportarCsv + BotaoExportar). citaNome() em filtros.ts liga lançamento ↔ cliente ignorando LTDA/ME/acentos
-
-\- Cadastros em lista com filtros: Produtos ✅ · Clientes ✅ · Fornecedores ✅
-
-\- Status dos filtros: Financeiro ✅ · Vendas ✅ (itens ✅ do FILTROS.md) · Estoque ⏳ · Compras ⏳. Nos multi-selects use toggle() do useFiltrosSalvos (seguro para cliques rápidos)
-
-\- src/ContextoViewer.tsx + src/backupProjeto.ts: botão amarelo "Contexto / Backup" (só para desenvolvimento): copia o CONTEXTO.md e baixa o projeto completo em .zip (fflate, import.meta.glob ?raw, UTF-8 nativo). Testado: o .zip recompila o projeto idêntico byte a byte. Para remover: apagar os dois arquivos, a linha em src/main.tsx e a dependência fflate
-
-
-
-\## 5. Situação atual
-
-\- Build OK (TypeScript strict sem erros), 16 módulos funcionando em modo demo
-
-\- Feito nesta fase: PDV com pagamento dividido e busca ao vivo · filtros do Financeiro e de Vendas · cadastros em lista com filtros, ordenação, paginação e exportação CSV
-
-\- Pendente: filtros de Estoque e de Compras (ver FILTROS.md)
-
-\- Pendente: campos ➕ do FILTROS.md (ex.: data da baixa e forma de pagamento no Lancamento, operador na Venda)
-
-\- Pendente: apagar o arquivo .zip duplicado do repositório
-
-\- Pendente: configurar o Supabase
-
-\- Atenção: o vínculo lançamento ↔ cliente/fornecedor ainda é pelo nome na descrição (citaNome); o ideal é um campo contraparteId
-
-
-
-\## 6. Histórico (do mais antigo para o mais recente)
-
-1\. 2026-10-19: projeto trazido para o arena.ai, build validado, CONTEXTO.md criado
-
-2\. 2026-10-19: senha do console trocada por hash (devAuth.ts) e removida do README, DEV.md e CHECKLIST.md. Botão ContextoViewer adicionado
-
-3\. 2026-10-19: PDV: pagamento dividido (várias formas, saldo, troco), teclado ↑↓/Enter/F10/Esc, valor editável, busca ao vivo por início do nome, correção do "3x" que abria a balança para produto comum. Arquivos: PDV.tsx, pdvConfig.ts, types.ts, store.tsx, Financeiro.tsx, Documento.tsx
-
-4\. 2026-10-19: criado FILTROS.md (especificação de filtros dos 4 módulos, baseada em types.ts)
-
-5\. 2026-10-19: filtros do Financeiro (situação, período, categoria é/não é, faixas de atraso, valor de/até, agrupamento, busca global, filtros salvos). lerNumero aceita "1.000" como milhar (também no PDV)
-
-6\. 2026-10-19: filtros de Vendas (período, situação, forma principal/qualquer parte, cliente, modelo, nº da nota, produto, categoria, exceções, total, horário, agrupamento com ticket médio, busca por chave/CPF/produto, aviso de numeração pulada, marcador de venda na fila offline)
-
-7\. 2026-10-19: filtros principais trocados por caixas de seleção (SelectFiltro / MultiSelectFiltro) no Financeiro e em Vendas
-
-8\. 2026-10-19: cadastros (Produtos, Clientes, Fornecedores) em lista com filtros, ordenação por coluna, paginação, exportar CSV, editar com clique no nome/duplo clique, confirmação ao excluir. Corrigido vínculo cliente ↔ conta a receber com sufixo LTDA (citaNome) e notas de fornecedor ligadas pelo CNPJ
-
-9\. 2026-10-20: botão "📦 Baixar projeto (.zip)" para levar a versão ao GitHub sem token (GitHub Desktop)
-
-
-
-\## 7. Próxima tarefa
-
-Implementar os filtros de Estoque e Logística (FILTROS.md) em src/erp/pages/Estoque.tsx, reaproveitando filtros.ts e FiltroUI.tsx
-
-
 # CONTEXTO DO PROJETO NKWAY (leia primeiro)
 
 Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem reescreva a stack. Abra apenas os arquivos necessários para a tarefa.
+
+## 0. Como uma nova conversa localiza este projeto (já no GitHub)
+
+**Fonte da verdade:** o repositório GitHub abaixo. Tudo o que foi feito e testado nesta fase está (ou deve estar) na branch `main`.
+
+| Item | Valor |
+|---|---|
+| Repositório | https://github.com/enoquepj/nkway |
+| Branch | `main` |
+| Arquivo de memória | `CONTEXTO.md` (este arquivo, na raiz) |
+| Visibilidade | privado (a IA precisa de token de leitura **ou** o usuário deixa público por um tempo) |
+
+### O que a IA deve fazer ao receber CONTINUAR
+1. Clonar `https://github.com/enoquepj/nkway` (branch `main`)
+2. Ler **somente** este `CONTEXTO.md` primeiro
+3. Restaurar o código no ambiente (seção 2) e rodar `npm run build`
+4. Confirmar que existem: `src/erp/Tabela.tsx`, `src/erp/filtros.ts`, `src/erp/FiltroUI.tsx`, filtros em Financeiro/Vendas e listas em Produtos/Clientes/Fornecedores
+5. Executar a **seção 7 (Próxima tarefa)** ou o pedido do usuário, abrindo só os arquivos necessários
+6. Ao final, atualizar as seções 5, 6 e 7 e orientar o salvamento pelo GitHub Desktop (📦 Baixar projeto), sem pedir comandos git ao usuário
+
+### Mensagem pronta — o usuário cola isto num chat NOVO
+```
+CONTINUAR NKWAY
+Repositório: https://github.com/enoquepj/nkway
+Branch: main
+
+1. Clone o repositório e leia SOMENTE o arquivo CONTEXTO.md primeiro.
+2. Restaure o projeto pela seção 2 do CONTEXTO.md (não adapte a stack).
+3. Rode npm run build e confirme que passa.
+4. Confirme que estão no código: Tabela.tsx, filtros.ts, FiltroUI.tsx, PDV com pagamento dividido, filtros de Financeiro e Vendas, cadastros em lista.
+5. Execute a tarefa da seção 7 (Próxima tarefa), ou a tarefa que eu descrever abaixo.
+6. Siga as Preferências do usuário. Não peça comandos git nem "terminal" — use "comando prompt" se precisar citar, e GitHub Desktop com cliques.
+7. Ao final, atualize CONTEXTO.md (seções 5–7) e diga como salvar pelo botão 📦 Baixar projeto + GitHub Desktop.
+
+Tarefa agora: (escreva aqui o que quer — ou deixe em branco para seguir a seção 7)
+```
+Se o repositório estiver privado e a IA não conseguir clonar, o usuário envia um token Fine-grained só de leitura (Contents: Read-only) ou deixa o repo público temporariamente.
+
+## Preferências do usuário (seguir sempre)
+- Ao se referir ao terminal do computador do usuário, escrever **comando prompt** (Prompt de Comando do Windows), nunca "terminal"
+- O usuário usa o GitHub Desktop: explicar processos só com cliques, sem comandos, a menos que ele peça
+- Linguagem simples e um único caminho por vez
+- O PC do usuário NÃO tem o Git instalado no comando prompt ('git' não é reconhecido). Nunca peça para ele digitar comandos git
+- Salvar no GitHub: botão amarelo 📦 Baixar projeto (.zip) → extrair → copiar para a pasta do repositório → Commit → Push no GitHub Desktop
 
 ## 1. Projeto
 - Nome: NKWAY, ERP e PDV para pequenos negócios (interface em português)
 - Repositório: https://github.com/enoquepj/nkway (branch main)
 - Stack: React 19, TypeScript strict, Vite 7, Tailwind 4, Supabase opcional
 - Sem arquivo .env o sistema roda em modo demo, com os dados no localStorage
+- Dependências além do template: `@supabase/supabase-js`, `fflate` (backup .zip)
 
-## 2. Como restaurar (comando CONTINUAR)
+## 2. Como restaurar (comando CONTINUAR) · ⚠️ PARA A IA EXECUTAR. O usuário NÃO roda estes comandos
 1. git clone https://github.com/enoquepj/nkway /tmp/nkway
 2. Copiar tudo para o projeto, exceto .git, *.zip, package.json, package-lock.json e vite.config.ts
-3. npm install @supabase/supabase-js@^2.109.0
+3. npm install @supabase/supabase-js@^2.109.0 fflate@0.8.2
 4. npm run build (precisa passar sem erros)
 
-## 3. Como salvar (comando SALVAR + token)
-1. Atualizar as seções 5 e 6 deste arquivo
-2. Copiar os arquivos alterados para /tmp/nkway
-3. git add -A, depois git commit -m "resumo"
-4. git push https://TOKEN@github.com/enoquepj/nkway main
-5. Nunca gravar o token em nenhum arquivo. Confirmar ao usuário quais arquivos foram enviados
+## 3. Como salvar · ⚠️ Usuário: GitHub Desktop. IA só se houver token SALVAR
+**Usuário (padrão):** botão 📦 Baixar projeto (.zip) → extrair → copiar/substituir na pasta do repo → Summary → Commit to main → Push origin  
+**IA (só com token):** atualizar seções 5–7, copiar arquivos, commit, push; nunca gravar o token em arquivo
 
 ## 4. Onde fica cada coisa
 - src/App.tsx: menu (MENU), navegação e providers. Página nova: criar em src/erp/pages e registrar no MENU e no switch
@@ -177,33 +71,38 @@ Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem
 - src/erp/plan.tsx: planos free, pro e ultra
 - src/erp/cloud.ts e src/lib/supabase.ts: modo nuvem
 - src/erp/offline.ts, useOffline.ts e StatusConexao.tsx: fila offline
-- src/erp/pages/PDV.tsx: frente de caixa (cerca de 1.700 linhas). Pagamento dividido: estados pagamentos/pagMsg, funções calcularRegistro, registrarPagamento, confirmarVenda, enterPagamento, teclaPagRef (teclado). Busca ao vivo: sugestoes/listaBusca/teclaBusca
-- src/erp/checkout/pdvConfig.ts: interpretarEntrada, buscarProduto (Enter) e sugerirPorNome (nome começa com, sem acento/maiúscula)
-- Venda.pagamentos (types.ts) guarda a divisão; Venda.pagamento = forma de maior valor. valorAPrazo() calcula a parte boleto/prazo (vira conta a receber)
-- src/erp/dev/ e pages/DevConsole.tsx: console do desenvolvedor (Ctrl+Shift+D) e testes
-- src/erp/ui.tsx e src/utils/cn.ts: componentes de interface
-- supabase/schema.sql: banco multiempresa com RLS
-- Convenção: as chaves do localStorage começam com "nkway."
-- FILTROS.md: especificação dos filtros de Financeiro, Vendas, Estoque e Compras (✅ campo existe, ➕ campo novo)
-- Filtros: base reutilizável em src/erp/filtros.ts (casaTexto, lerNumero, períodos, useFiltrosSalvos) e src/erp/FiltroUI.tsx (PainelFiltros, BuscaGlobal, LinhaFiltros, SelectFiltro = caixa única, MultiSelectFiltro = caixa com marcação múltipla e contagens, IntervaloFiltro, ChipAtivo). Padrão: filtros principais em caixas de seleção, não em fileiras de botões
-- Status dos filtros: Financeiro ✅ · Vendas ✅ (itens ✅ do FILTROS.md) · Estoque ⏳ · Compras ⏳. Nos multi-selects use toggle() do useFiltrosSalvos (seguro para cliques rápidos)
-- src/ContextoViewer.tsx: botão amarelo "Copiar CONTEXTO.md" (só para desenvolvimento). Para remover: apagar o arquivo e a linha correspondente em src/main.tsx
+- src/erp/pages/PDV.tsx: frente de caixa. Pagamento dividido + teclado ↑↓/Enter/F10/Esc + busca ao vivo por início do nome
+- src/erp/checkout/pdvConfig.ts: interpretarEntrada, buscarProduto, sugerirPorNome
+- Venda.pagamentos: divisão; Venda.pagamento = forma de maior valor; valorAPrazo() para boleto/prazo
+- src/erp/filtros.ts + FiltroUI.tsx: base de filtros (casaTexto, lerNumero, períodos, useFiltrosSalvos, SelectFiltro, MultiSelectFiltro)
+- src/erp/Tabela.tsx: ordenação, paginação, exportar CSV
+- Cadastros com lista + filtros: pages/Produtos.tsx, Clientes.tsx, Fornecedores.tsx
+- Filtros prontos: pages/Financeiro.tsx, Vendas.tsx, Estoque.tsx · Pendente: Entradas.tsx (Compras)
+- pages/Estoque.tsx: abas Posição e Kardex com filtros em caixas; CSV; ajuste de inventário mantido
+- FILTROS.md: especificação ✅/➕ por módulo
+- src/ContextoViewer.tsx + backupProjeto.ts: botão amarelo Contexto / Backup (.zip)
+- Convenção: chaves localStorage com prefixo `nkway.`
 
 ## 5. Situação atual
-- Build OK, 16 módulos funcionando em modo demo
-- Resolvido: a senha do console agora fica só como hash (HASH_PADRAO em devAuth.ts), fora do código e dos documentos
-- Pendente: apagar o arquivo .zip duplicado do repositório
-- Pendente: configurar o Supabase
+- Build OK (TypeScript strict), 16 módulos em modo demo
+- Publicado no GitHub (usuário concluiu Commit + Push / Publish pelo GitHub Desktop; lista local zerada)
+- Feito: PDV pagamento dividido e busca ao vivo · filtros Financeiro, Vendas e Estoque (caixas de seleção) · cadastros em lista (Produtos, Clientes, Fornecedores) · backup .zip · CONTEXTO.md como memória
+- Pendente: filtros de Compras (Entradas) · campos ➕ do FILTROS.md · apagar .zip duplicado no repo · Supabase
+- Atenção: vínculo lançamento ↔ cliente ainda por nome (citaNome); ideal contraparteId
+- Repo costuma estar privado: clone na IA exige token de leitura ou repo público temporário
 
-## 6. Histórico
-- 2026-10-19: projeto trazido para o arena.ai, build validado, CONTEXTO.md criado
-- 2026-10-19: filtros principais trocados por caixas de seleção (Vencimento/Período, Situação, Categoria, Pagamento, Cliente e avançados) no Financeiro e em Vendas
-- 2026-10-19: filtros de Vendas (período, situação, forma principal/qualquer parte, cliente, modelo, nº da nota, produto, categoria, exceções, total, horário, agrupamento com ticket médio, busca por chave/CPF/produto, aviso de numeração pulada, marcador de venda na fila offline)
-- 2026-10-19: filtros do Financeiro (situação, período, categoria é/não é, faixas de atraso, valor de/até, agrupamento, busca global, filtros salvos). lerNumero aceita "1.000" como milhar (também no PDV)
-- 2026-10-19: criado FILTROS.md (especificação de filtros dos 4 módulos, baseada em types.ts)
-- 2026-10-19: PDV: pagamento dividido (várias formas, saldo, troco), teclado ↑↓/Enter/F10/Esc, valor editável, busca ao vivo por início do nome, correção do "3x" que abria a balança para produto comum. Arquivos: PDV.tsx, pdvConfig.ts, types.ts, store.tsx, Financeiro.tsx, Documento.tsx, CHECKLIST.md
-- 2026-10-19: senha do console trocada por hash (devAuth.ts) e removida do README, DEV.md e CHECKLIST.md. Botão ContextoViewer adicionado
+## 6. Histórico (do mais antigo para o mais recente)
+1. 2026-10-19: projeto trazido para o arena.ai, build validado, CONTEXTO.md criado
+2. 2026-10-19: senha do console trocada por hash (devAuth.ts); botão ContextoViewer
+3. 2026-10-19: PDV pagamento dividido, teclado, busca ao vivo, correção "3x"
+4. 2026-10-19: FILTROS.md criado
+5. 2026-10-19: filtros do Financeiro
+6. 2026-10-19: filtros de Vendas
+7. 2026-10-19: filtros em caixas de seleção (SelectFiltro / MultiSelectFiltro)
+8. 2026-10-19: cadastros em lista + CSV; citaNome; notas de fornecedor por CNPJ
+9. 2026-10-20: botão 📦 Baixar projeto (.zip); preferências (comando prompt, GitHub Desktop)
+10. 2026-10-20: usuário publicou no GitHub via Desktop (merge do CONTEXTO.md resolvido); mensagem CONTINUAR padronizada na seção 0
+11. 2026-10-20: filtros de Estoque (posição: situação/categoria/marca/produto/saldo/valor; kardex: período/tipo/direção/divergências/produto) + ordenação, paginação e CSV
 
 ## 7. Próxima tarefa
-Implementar os filtros de Estoque e Logística (FILTROS.md) em src/erp/pages/Estoque.tsx, reaproveitando filtros.ts e FiltroUI.tsx
-cd3cd2c3e904a0b0cd0176433f33441aeaa8a872
+Implementar os filtros de Compras e Suprimentos (FILTROS.md) em src/erp/pages/Entradas.tsx (e Devolucoes se couber), no mesmo padrão de caixas de seleção
