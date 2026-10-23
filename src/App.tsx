@@ -9,6 +9,9 @@ import Vendas from "./erp/pages/Vendas";
 import Planos from "./erp/pages/Planos";
 import Entradas from "./erp/pages/Entradas";
 import Estoque from "./erp/pages/Estoque";
+import ManutencaoPrecos from "./erp/pages/ManutencaoPrecos";
+import ConfigCertificado from "./erp/dfe/ConfigCertificado";
+import DashboardNfe from "./erp/dfe/DashboardNfe";
 import Mdfe from "./erp/pages/Mdfe";
 import Fornecedores from "./erp/pages/Fornecedores";
 import Devolucoes from "./erp/pages/Devolucoes";
@@ -31,14 +34,16 @@ const MENU = [
   { id: "fornecedores", label: "Fornecedores", icon: "🏭", grupo: "Cadastros" },
   // ─── Vendas rápidas ───
   { id: "dashboard", label: "Visão geral", icon: "📊", grupo: "Caixa e Venda" },
-  { id: "vendas", label: "DAV / Orçamentos", icon: "📄", grupo: "Caixa e Venda" },
   { id: "pdv", label: "PDV — Frente de Caixa", icon: "🧾", grupo: "Caixa e Venda" },
-  { id: "nfe", label: "NF-e / Documentos", icon: "🧾", grupo: "Caixa e Venda" },
+  { id: "vendas", label: "Documentos fiscais", icon: "📄", grupo: "Caixa e Venda" },
   { id: "mdfe", label: "MDF-e (transporte)", icon: "🚚", grupo: "Caixa e Venda" },
   // ─── Compras & Movimento ───
-  { id: "entradas", label: "Entrada por XML", icon: "📥", grupo: "Compras" },
+  { id: "entradas", label: "Entrada de mercadoria", icon: "📥", grupo: "Compras" },
+  { id: "dfe", label: "DF-e / NF-e recebidas", icon: "📡", grupo: "Compras" },
+  { id: "dfeCert", label: "Certificado A1 (DF-e)", icon: "🔐", grupo: "Compras" },
   { id: "devolucoes", label: "Devoluções", icon: "↩️", grupo: "Compras" },
   { id: "estoque", label: "Gestão de estoque", icon: "🏷️", grupo: "Estoque" },
+  { id: "precos", label: "Manutenção de preços", icon: "💲", grupo: "Estoque" },
   // ─── Gestão & Relatórios ───
   { id: "financeiro", label: "Financeiro", icon: "💳", grupo: "Financeiro" },
   { id: "relatorios", label: "Relatórios", icon: "📊", grupo: "Relatórios" },
@@ -239,14 +244,23 @@ function Shell() {
         <main className="flex-1 p-5 lg:p-8">
           {page === "dashboard" && <Dashboard />}
           {page === "pdv" && <PDV />}
-          {page === "vendas" && <Vendas abaInicial="dav" />}
-          {page === "nfe" && <Vendas abaInicial="fiscal" />}
+          {page === "vendas" && <Vendas abaInicial="fiscal" />}
           {page === "relatorios" && <Relatorios />}
           {page === "produtos" && <Produtos />}
           {page === "clientes" && <Clientes />}
           {page === "financeiro" && <Financeiro />}
           {page === "entradas" && <Entradas />}
+          {page === "dfe" && (
+            <DashboardNfe
+              onImportarXml={(xml) => {
+                sessionStorage.setItem("nkway.dfe.xml", xml);
+                setPage("entradas");
+              }}
+            />
+          )}
+          {page === "dfeCert" && <ConfigCertificado />}
           {page === "estoque" && <Estoque />}
+          {page === "precos" && <ManutencaoPrecos />}
           {page === "mdfe" && <Mdfe />}
           {page === "fornecedores" && <Fornecedores />}
           {page === "devolucoes" && <Devolucoes />}

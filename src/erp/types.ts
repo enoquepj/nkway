@@ -318,11 +318,15 @@ export type ItemEntrada = {
   cfop: string;
   unidade: string;
   qtd: number;
+  /** quantidade original da nota (para conferência / divergência) */
+  qtdNota?: number;
   custo: number;
   /** preço de venda sugerido no momento da entrada */
   preco: number;
   /** cEAN do XML — código de barras do fornecedor */
   gtin?: string;
+  /** nome do item como veio no XML/SEFAZ (antes do vínculo interno) */
+  nomeFornecedor?: string;
 };
 
 export type ItemVenda = {
@@ -345,7 +349,7 @@ export type Entrada = {
   total: number;
   emissao: string; // yyyy-mm-dd
   status: "pendente" | "conferida" | "lancada";
-  origem: "xml" | "manual";
+  origem: "xml" | "manual" | "sefaz";
   gerarFinanceiro: boolean;
 };
 

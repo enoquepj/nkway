@@ -4,6 +4,9 @@ Instruções para a IA: leia só este arquivo antes de começar. Não adapte nem
 
 ## 0. Como uma nova conversa localiza este projeto (já no GitHub)
 
+**Memorando de acesso/configuração futura:** arquivo **`MEMORANDO.md`** na raiz (índice de pastas, DF-e, secrets, GitHub Desktop).  
+**Roteiro DF-e completo:** `supabase/DFE_ROTEIRO_CONFIG.md`
+
 **Fonte da verdade:** o repositório GitHub abaixo. Tudo o que foi feito e testado nesta fase está (ou deve estar) na branch `main`.
 
 | Item | Valor |
@@ -27,7 +30,7 @@ CONTINUAR NKWAY
 Repositório: https://github.com/enoquepj/nkway
 Branch: main
 
-1. Clone o repositório e leia SOMENTE o arquivo CONTEXTO.md primeiro.
+1. Clone o repositório e leia SOMENTE CONTEXTO.md e MEMORANDO.md primeiro.
 2. Restaure o projeto pela seção 2 do CONTEXTO.md (não adapte a stack).
 3. Rode npm run build e confirme que passa.
 4. Confirme que estão no código: Tabela.tsx, filtros.ts, FiltroUI.tsx, PDV com pagamento dividido, filtros de Financeiro e Vendas, cadastros em lista.
@@ -79,6 +82,10 @@ Se o repositório estiver privado e a IA não conseguir clonar, o usuário envia
 - Cadastros com lista + filtros: pages/Produtos.tsx, Clientes.tsx, Fornecedores.tsx
 - Filtros prontos: pages/Financeiro.tsx, Vendas.tsx, Estoque.tsx · Pendente: Entradas.tsx (Compras)
 - pages/Estoque.tsx: abas Posição e Kardex com filtros em caixas; CSV; ajuste de inventário mantido
+- pages/Entradas.tsx: abas Lista / XML / Chave SEFAZ / Manual; BuscaProduto por nome; TelaTratamento (vínculo fornecedor↔interno, markup/margem, qtd nota vs entrada, preço); xmlNfe.importarPorChaveSefaz()
+- pages/ManutencaoPrecos.tsx: markup, preço, estoque, alteração em massa (% / R$ / markup), arredondamento
+- Menu: um único item "Documentos fiscais" (DAV + NF-e na mesma tela Vendas). Removido menu duplicado nfe
+- Relatórios: filtros de período/status/tipo/cliente/categoria/pagamento/modelo; abas Vendas, ABC, Clientes, Financeiro, Fiscal, Estoque; pré-visualizar, imprimir e CSV
 - FILTROS.md: especificação ✅/➕ por módulo
 - src/ContextoViewer.tsx + backupProjeto.ts: botão amarelo Contexto / Backup (.zip)
 - Convenção: chaves localStorage com prefixo `nkway.`
@@ -86,7 +93,7 @@ Se o repositório estiver privado e a IA não conseguir clonar, o usuário envia
 ## 5. Situação atual
 - Build OK (TypeScript strict), 16 módulos em modo demo
 - Publicado no GitHub (usuário concluiu Commit + Push / Publish pelo GitHub Desktop; lista local zerada)
-- Feito: PDV pagamento dividido e busca ao vivo · filtros Financeiro, Vendas e Estoque (caixas de seleção) · cadastros em lista (Produtos, Clientes, Fornecedores) · backup .zip · CONTEXTO.md como memória
+- Feito: PDV · filtros · cadastros · Documentos fiscais · Relatórios · Entrada estilo HOTLINE (XML/SEFAZ/manual + tratamento) · Manutenção de preços · backup · CONTEXTO.md
 - Pendente: filtros de Compras (Entradas) · campos ➕ do FILTROS.md · apagar .zip duplicado no repo · Supabase
 - Atenção: vínculo lançamento ↔ cliente ainda por nome (citaNome); ideal contraparteId
 - Repo costuma estar privado: clone na IA exige token de leitura ou repo público temporário
@@ -103,6 +110,9 @@ Se o repositório estiver privado e a IA não conseguir clonar, o usuário envia
 9. 2026-10-20: botão 📦 Baixar projeto (.zip); preferências (comando prompt, GitHub Desktop)
 10. 2026-10-20: usuário publicou no GitHub via Desktop (merge do CONTEXTO.md resolvido); mensagem CONTINUAR padronizada na seção 0
 11. 2026-10-20: filtros de Estoque (posição: situação/categoria/marca/produto/saldo/valor; kardex: período/tipo/direção/divergências/produto) + ordenação, paginação e CSV
+12. 2026-10-20: menu unificado "Documentos fiscais"; Relatórios com filtros, pré-visualização, impressão e CSV (padrão ERP varejo)
+13. 2026-10-20: Entrada (XML + manual) e Manutenção de preços (markup, estoque, massa R$/%)
+14. 2026-10-20: Entrada estilo HOTLINE — busca produto por nome, importação por chave SEFAZ, tela de tratamento (vínculo, margem/markup, qtd, preço) para XML e SEFAZ
 
 ## 7. Próxima tarefa
-Implementar os filtros de Compras e Suprimentos (FILTROS.md) em src/erp/pages/Entradas.tsx (e Devolucoes se couber), no mesmo padrão de caixas de seleção
+Filtros de lista em Entradas (status, fornecedor, período, origem XML/manual) e/ou melhorias pedidas pelo usuário

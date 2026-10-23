@@ -82,6 +82,9 @@ Para ativar a nuvem: rode `supabase/schema.sql` no Supabase e defina
 
 ## Documentação
 
+- [`MEMORANDO.md`](MEMORANDO.md) — **índice de acesso** e configurações futuras (comece por aqui se for configurar o sistema)
+- [`CONTEXTO.md`](CONTEXTO.md) — memória do projeto para retomar em novos chats de IA
+- [`supabase/DFE_ROTEIRO_CONFIG.md`](supabase/DFE_ROTEIRO_CONFIG.md) — configurar DF-e / NF-e de entrada (Supabase + A1 + SEFAZ)
 - [`DEPLOY.md`](DEPLOY.md) — hospedagem, custos e passo a passo
 - [`DEV.md`](DEV.md) — ambiente de desenvolvedor e roteiro de testes
 - [`supabase/schema.sql`](supabase/schema.sql) — schema multi-tenant
