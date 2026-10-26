@@ -12,6 +12,9 @@ export default function Login() {
     nome: "",
     email: "",
     senha: "",
+    porte: "mei" as "mei" | "me" | "epp" | "outros",
+    regime: "mei" as "mei" | "simples" | "simples_excedente" | "presumido" | "real",
+    uf: "SP",
   });
 
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -30,6 +33,9 @@ export default function Login() {
             nome: f.nome || "Administrador",
             email: f.email,
             senha: f.senha,
+            porte: f.porte,
+            regime: f.porte === "mei" ? "mei" : f.regime === "mei" ? "simples" : f.regime,
+            uf: f.uf,
           });
     setErro(r);
     setEnviando(false);
@@ -60,10 +66,11 @@ export default function Login() {
           </p>
           <ul className="mt-8 space-y-3 text-sm text-slate-300">
             {[
-              "PDV com venda fiscal (NFC-e, NF-e e SAT)",
-              "DAV: faça orçamentos e pedidos e fature depois",
-              "Baixa automática de estoque e do financeiro",
-              "Cancele quando quiser, sem fidelidade",
+              "Feito para MEI, ME e Simples Nacional",
+              "PDV, DAV, estoque e financeiro em um só lugar",
+              "Entrada de mercadoria e preparação para NFC-e",
+              "Nuvem Supabase opcional — seus dados em qualquer PC",
+              "14 dias de trial Pro, sem cartão",
             ].map((t) => (
               <li key={t} className="flex gap-3">
                 <span className="text-emerald-400">✓</span> {t}
@@ -115,9 +122,56 @@ export default function Login() {
             <div className="space-y-3">
               {modo === "signup" && (
                 <>
-                  <input className={input} placeholder="Nome da empresa" value={f.empresa} onChange={set("empresa")} />
-                  <input className={input} placeholder="CNPJ (opcional)" value={f.cnpj} onChange={set("cnpj")} />
+                  <input className={input} placeholder="Nome da empresa / nome fantasia" value={f.empresa} onChange={set("empresa")} />
+                  <input className={input} placeholder="CNPJ (opcional no trial)" value={f.cnpj} onChange={set("cnpj")} />
                   <input className={input} placeholder="Seu nome" value={f.nome} onChange={set("nome")} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs font-medium text-slate-600">
+                      Porte
+                      <select
+                        className={input + " mt-1"}
+                        value={f.porte}
+                        onChange={(e) => {
+                          const porte = e.target.value as typeof f.porte;
+                          setF({
+                            ...f,
+                            porte,
+                            regime: porte === "mei" ? "mei" : f.regime === "mei" ? "simples" : f.regime,
+                          });
+                        }}
+                      >
+                        <option value="mei">MEI</option>
+                        <option value="me">ME (Microempresa)</option>
+                        <option value="epp">EPP</option>
+                        <option value="outros">Outros</option>
+                      </select>
+                    </label>
+                    <label className="block text-xs font-medium text-slate-600">
+                      UF
+                      <input className={input + " mt-1"} maxLength={2} value={f.uf} onChange={(e) => setF({ ...f, uf: e.target.value.toUpperCase() })} />
+                    </label>
+                  </div>
+                  {f.porte !== "mei" && (
+                    <label className="block text-xs font-medium text-slate-600">
+                      Regime tributário
+                      <select
+                        className={input + " mt-1"}
+                        value={f.regime}
+                        onChange={(e) => setF({ ...f, regime: e.target.value as typeof f.regime })}
+                      >
+                        <option value="simples">Simples Nacional</option>
+                        <option value="simples_excedente">Simples com excesso</option>
+                        <option value="presumido">Lucro Presumido</option>
+                        <option value="real">Lucro Real</option>
+                      </select>
+                    </label>
+                  )}
+                  {f.porte === "mei" && (
+                    <p className="rounded-lg bg-sky-50 px-3 py-2 text-[11px] text-sky-800">
+                      MEI: regime e CRT 4 aplicados automaticamente. DAS e limites de faturamento do MEI continuam sendo
+                      obrigação sua com o contador — o NKWAY organiza a loja e o caixa.
+                    </p>
+                  )}
                 </>
               )}
               <input className={input} type="email" required placeholder="E-mail" value={f.email} onChange={set("email")} />

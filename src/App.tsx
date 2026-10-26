@@ -25,6 +25,7 @@ import { AuthProvider, useAuth } from "./erp/auth";
 import Login from "./erp/pages/Login";
 import TrialBanner from "./erp/TrialBanner";
 import StatusConexao from "./erp/StatusConexao";
+import SyncBanner from "./erp/SyncBanner";
 import { cn } from "./utils/cn";
 
 const MENU = [
@@ -67,9 +68,37 @@ function Shell() {
     return () => window.removeEventListener("nkway:sair-pdv", h);
   }, [setPage]);
   const [menuAberto, setMenuAberto] = useState(false);
-  const { db, reset } = useStore();
+  const { db, reset, setConfigFiscal } = useStore();
   const { plano } = usePlan();
   const { conta, sair, emTrial, diasRestantes, modo } = useAuth();
+
+  // Aplica porte/regime do cadastro (MEI/ME/Simples) na config fiscal local
+  useEffect(() => {
+    if (!conta) return;
+    const regime =
+      conta.porte === "mei" || conta.regime === "mei"
+        ? "mei"
+        : conta.regime === "simples" ||
+            conta.regime === "simples_excedente" ||
+            conta.regime === "presumido" ||
+            conta.regime === "real"
+          ? conta.regime
+          : db.configFiscal.regime;
+    const crt = regime === "mei" ? 4 : regime === "simples" ? 1 : regime === "simples_excedente" ? 2 : 3;
+    if (
+      db.configFiscal.regime !== regime ||
+      db.configFiscal.crt !== crt ||
+      (conta.uf && db.configFiscal.ufPadrao !== conta.uf)
+    ) {
+      setConfigFiscal({
+        ...db.configFiscal,
+        regime: regime as typeof db.configFiscal.regime,
+        crt,
+        ufPadrao: conta.uf || db.configFiscal.ufPadrao,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conta?.id, conta?.porte, conta?.regime, conta?.uf]);
 
   const alertas = db.produtos.filter((p) => p.estoque <= p.estoqueMin).length;
 
@@ -188,6 +217,7 @@ function Shell() {
           </div>
         )}
         <TrialBanner onUpgrade={() => setPage("planos")} />
+        <SyncBanner />
         <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
           <button onClick={() => setMenuAberto(true)} className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden">
             ☰

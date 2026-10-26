@@ -11,6 +11,9 @@ export type Perfil = {
   cnpj: string;
   plano: "free" | "pro" | "ultra";
   trialFim: number;
+  porte?: string;
+  regime?: string;
+  uf?: string;
 };
 
 const sb = () => {
@@ -27,6 +30,9 @@ export async function cloudSignUp(d: {
   nome: string;
   email: string;
   senha: string;
+  porte?: string;
+  regime?: string;
+  uf?: string;
 }) {
   const { error } = await sb().auth.signUp({ email: d.email, password: d.senha });
   if (error) return error.message;
@@ -35,6 +41,9 @@ export async function cloudSignUp(d: {
     p_nome: d.empresa,
     p_cnpj: d.cnpj,
     p_usuario: d.nome,
+    p_porte: d.porte ?? "mei",
+    p_regime: d.regime ?? (d.porte === "mei" ? "mei" : "simples"),
+    p_uf: d.uf ?? "SP",
   });
   return e2?.message ?? null;
 }
@@ -55,7 +64,7 @@ export async function carregarPerfil(): Promise<Perfil | null> {
 
   const { data } = await sb()
     .from("usuarios")
-    .select("id, nome, email, empresa_id, empresas(nome, cnpj, plano, trial_fim)")
+    .select("id, nome, email, empresa_id, empresas(nome, cnpj, plano, trial_fim, porte, regime, uf)")
     .eq("id", user.id)
     .single();
   if (!data) return null;
@@ -70,6 +79,9 @@ export async function carregarPerfil(): Promise<Perfil | null> {
     cnpj: emp?.cnpj ?? "",
     plano: emp?.plano ?? "free",
     trialFim: emp?.trial_fim ? new Date(emp.trial_fim).getTime() : Date.now(),
+    porte: emp?.porte,
+    regime: emp?.regime,
+    uf: emp?.uf,
   };
 }
 

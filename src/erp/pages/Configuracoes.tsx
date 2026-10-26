@@ -28,8 +28,18 @@ export default function Configuracoes() {
     <div className="max-w-3xl">
       <PageHeader
         title="Configurações fiscais"
-        subtitle="Regime tributário e parâmetros de emissão de documentos"
+        subtitle="Regime tributário e parâmetros de emissão — MEI, ME e Simples"
       />
+
+      <Card className="mb-5 border-sky-200 bg-sky-50/80 p-4 text-sm text-sky-950">
+        <p className="font-bold">Guia rápido · MEI / ME / Simples</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-sky-900">
+          <li><b>MEI</b>: escolha o regime MEI (CRT 4). DAS e limite de faturamento do MEI são com o contador; aqui você organiza PDV, estoque e financeiro.</li>
+          <li><b>ME no Simples</b>: regime Simples Nacional (CRT 1) e CSOSN nos produtos (ex. 102/103 conforme sua atividade).</li>
+          <li><b>NFC-e</b>: preencha CSC (token da SEFAZ) só quando for emitir de verdade com provedor homologado.</li>
+          <li><b>Homologação</b>: deixe o ambiente em teste até o contador liberar produção.</li>
+        </ul>
+      </Card>
 
       <Card className="p-6">
         <h3 className="mb-4 text-sm font-bold uppercase text-slate-500">Regime tributário</h3>

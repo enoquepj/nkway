@@ -93,6 +93,7 @@ Se o repositório estiver privado e a IA não conseguir clonar, o usuário envia
 ## 5. Situação atual
 - Build OK (TypeScript strict), 16 módulos em modo demo
 - Publicado no GitHub (usuário concluiu Commit + Push / Publish pelo GitHub Desktop; lista local zerada)
+- Planos: MEI Start (free), ME/Simples (R$49,90), Loja+ (R$99,90); login com porte/regime; migration mei_simples_cloud; doc CUSTO_SUPABASE_MEI.md
 - Feito: PDV · filtros · cadastros · Documentos fiscais · Relatórios · Entrada estilo HOTLINE (XML/SEFAZ/manual + tratamento) · Manutenção de preços · backup · CONTEXTO.md
 - Pendente: filtros de Compras (Entradas) · campos ➕ do FILTROS.md · apagar .zip duplicado no repo · Supabase
 - Atenção: vínculo lançamento ↔ cliente ainda por nome (citaNome); ideal contraparteId

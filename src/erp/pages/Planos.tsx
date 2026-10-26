@@ -25,7 +25,7 @@ export default function Planos() {
     <div>
       <PageHeader
         title="Planos e assinatura"
-        subtitle="Comece grátis e evolua conforme seu negócio cresce"
+        subtitle="Preços e limites pensados para MEI, ME e Simples Nacional"
       />
 
       <Card className="mb-6 p-5">
@@ -111,10 +111,11 @@ export default function Planos() {
                 </span>
               )}
               <h3 className="text-lg font-bold text-slate-900">{p.nome}</h3>
+              <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-sky-700">{p.publicoAlvo}</p>
               <p className="mt-1 min-h-[40px] text-sm text-slate-500">{p.descricao}</p>
               <p className="mt-4">
                 <span className="text-4xl font-extrabold text-slate-900">
-                  {p.preco === 0 ? "R$ 0" : `R$ ${preco(p)}`}
+                  {p.preco === 0 ? "R$ 0" : brl(preco(p))}
                 </span>
                 <span className="text-sm text-slate-500">/mês</span>
               </p>

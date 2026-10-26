@@ -87,6 +87,13 @@ Se o repositório estiver **privado**, deixe público temporariamente ou envie t
 
 ---
 
+## 3.1 MEI / ME / Simples + nuvem
+| Arquivo | Uso |
+|---|---|
+| `supabase/migrations/20260322_mei_simples_cloud.sql` | Porte/regime na empresa + config_fiscal + signup |
+| `supabase/CUSTO_SUPABASE_MEI.md` | Custo-benefício Supabase 100% |
+| Login do app | Campos porte (MEI/ME), UF, regime |
+
 ## 4. Ordem curta — configurar DF-e no futuro
 
 1. Supabase: projeto + Auth + keys  

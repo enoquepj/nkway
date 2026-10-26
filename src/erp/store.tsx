@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { isCloud } from "../lib/supabase";
+import {
+  carregarEstadoNuvem,
+  salvarEstadoNuvem,
+  tamanhoEstadoBytes,
+  usoStorageLabel,
+  type SaveResult,
+} from "./syncErp";
 import {
   gerarChave,
   proximaNotaFiscal,
@@ -62,6 +70,13 @@ type Ctx = {
   toggleLancamento: (id: string) => void;
   delLancamento: (id: string) => void;
   reset: () => void;
+  /** Sync nuvem (erp_estados) */
+  syncVersion: number;
+  syncBytes: number;
+  syncMsg: string | null;
+  syncSalvando: boolean;
+  puxarNuvem: () => Promise<void>;
+  empurrarNuvem: (force?: boolean) => Promise<SaveResult>;
 };
 
 const StoreCtx = createContext<Ctx | null>(null);
@@ -133,16 +148,129 @@ export function StoreProvider({
     }
   });
 
+  const [syncVersion, setSyncVersion] = useState(0);
+  const [syncBytes, setSyncBytes] = useState(0);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [syncSalvando, setSyncSalvando] = useState(false);
+  const versionRef = useRef(0);
+  const hydrateRef = useRef(false);
+
   useEffect(() => {
     try {
       localStorage.setItem(KEY, JSON.stringify(db));
     } catch {
       /* quota estourada — ignora em vez de quebrar a tela */
     }
+    setSyncBytes(tamanhoEstadoBytes(db));
   }, [KEY, db]);
+
+  // Carrega snapshot da nuvem 1x (cloud)
+  useEffect(() => {
+    if (!isCloud || hydrateRef.current) return;
+    hydrateRef.current = true;
+    void (async () => {
+      try {
+        const r = await carregarEstadoNuvem();
+        if (!r) return;
+        setSyncVersion(r.meta.version);
+        versionRef.current = r.meta.version;
+        setSyncBytes(r.meta.tamanhoBytes || tamanhoEstadoBytes(db));
+        if (r.estado && r.meta.version > 0) {
+          const e = r.estado;
+          setDb((local) => ({
+            ...local,
+            produtos: (e.produtos as DB["produtos"]) ?? local.produtos,
+            clientes: (e.clientes as DB["clientes"]) ?? local.clientes,
+            vendas: (e.vendas as DB["vendas"]) ?? local.vendas,
+            lancamentos: (e.lancamentos as DB["lancamentos"]) ?? local.lancamentos,
+            fornecedores: (e.fornecedores as DB["fornecedores"]) ?? local.fornecedores,
+            entradas: (e.entradas as DB["entradas"]) ?? local.entradas,
+            movimentos: (e.movimentos as DB["movimentos"]) ?? local.movimentos,
+            devolucoes: (e.devolucoes as DB["devolucoes"]) ?? local.devolucoes,
+            mdfes: (e.mdfes as DB["mdfes"]) ?? local.mdfes,
+            cancelamentos: (e.cancelamentos as DB["cancelamentos"]) ?? local.cancelamentos,
+            inutilizacoes: (e.inutilizacoes as DB["inutilizacoes"]) ?? local.inutilizacoes,
+            configFiscal: (e.configFiscal as DB["configFiscal"]) ?? local.configFiscal,
+          }));
+          setSyncMsg(`Nuvem v${r.meta.version} · ${usoStorageLabel(r.meta.tamanhoBytes)}`);
+        }
+      } catch (e) {
+        setSyncMsg(e instanceof Error ? e.message : "Falha ao ler nuvem");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empresaId]);
+
+  // Debounce push para nuvem
+  useEffect(() => {
+    if (!isCloud || !hydrateRef.current) return;
+    const t = window.setTimeout(() => {
+      void (async () => {
+        setSyncSalvando(true);
+        const res = await salvarEstadoNuvem(db, versionRef.current, false);
+        setSyncSalvando(false);
+        if (res.ok) {
+          versionRef.current = res.version;
+          setSyncVersion(res.version);
+          setSyncBytes(res.tamanhoBytes);
+          setSyncMsg(`Salvo v${res.version} · ${usoStorageLabel(res.tamanhoBytes)}`);
+        } else if (res.erro === "LIMITE_10MB") {
+          setSyncMsg(res.mensagem);
+        } else if (res.erro === "CONFLITO_VERSAO") {
+          setSyncMsg(res.mensagem);
+        }
+      })();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [db, empresaId]);
+
+  const puxarNuvem = async () => {
+    const r = await carregarEstadoNuvem();
+    if (!r?.estado) return;
+    versionRef.current = r.meta.version;
+    setSyncVersion(r.meta.version);
+    const e = r.estado;
+    setDb((local) => ({
+      ...local,
+      produtos: (e.produtos as DB["produtos"]) ?? local.produtos,
+      clientes: (e.clientes as DB["clientes"]) ?? local.clientes,
+      vendas: (e.vendas as DB["vendas"]) ?? local.vendas,
+      lancamentos: (e.lancamentos as DB["lancamentos"]) ?? local.lancamentos,
+      fornecedores: (e.fornecedores as DB["fornecedores"]) ?? local.fornecedores,
+      entradas: (e.entradas as DB["entradas"]) ?? local.entradas,
+      movimentos: (e.movimentos as DB["movimentos"]) ?? local.movimentos,
+      devolucoes: (e.devolucoes as DB["devolucoes"]) ?? local.devolucoes,
+      mdfes: (e.mdfes as DB["mdfes"]) ?? local.mdfes,
+      cancelamentos: (e.cancelamentos as DB["cancelamentos"]) ?? local.cancelamentos,
+      inutilizacoes: (e.inutilizacoes as DB["inutilizacoes"]) ?? local.inutilizacoes,
+      configFiscal: (e.configFiscal as DB["configFiscal"]) ?? local.configFiscal,
+    }));
+    setSyncMsg(`Atualizado da nuvem v${r.meta.version}`);
+  };
+
+  const empurrarNuvem = async (force = false) => {
+    setSyncSalvando(true);
+    const res = await salvarEstadoNuvem(db, force ? 0 : versionRef.current, force);
+    setSyncSalvando(false);
+    if (res.ok) {
+      versionRef.current = res.version;
+      setSyncVersion(res.version);
+      setSyncBytes(res.tamanhoBytes);
+      setSyncMsg(`Salvo v${res.version} · ${usoStorageLabel(res.tamanhoBytes)}`);
+    } else {
+      setSyncMsg(res.mensagem);
+    }
+    return res;
+  };
 
   const value: Ctx = {
     db,
+    syncVersion,
+    syncBytes,
+    syncMsg,
+    syncSalvando,
+    puxarNuvem,
+    empurrarNuvem,
     addProduto: (p) => setDb((s) => ({ ...s, produtos: [{ ...p, id: uid() }, ...s.produtos] })),
     updProduto: (p) =>
       setDb((s) => ({ ...s, produtos: s.produtos.map((x) => (x.id === p.id ? p : x)) })),

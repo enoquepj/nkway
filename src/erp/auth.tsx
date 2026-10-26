@@ -2,6 +2,9 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { isCloud } from "../lib/supabase";
 import { carregarPerfil, cloudSignIn, cloudSignOut, cloudSignUp } from "./cloud";
 
+export type PorteEmpresa = "mei" | "me" | "epp" | "outros";
+export type RegimeEmpresa = "mei" | "simples" | "simples_excedente" | "presumido" | "real";
+
 export type Conta = {
   id: string;
   empresa: string;
@@ -13,6 +16,11 @@ export type Conta = {
   trialFim: number; // timestamp
   plano: "free" | "pro" | "ultra";
   trialUsado: boolean;
+  /** Porte declarado no cadastro (MEI/ME) */
+  porte?: PorteEmpresa;
+  /** Regime tributário inicial */
+  regime?: RegimeEmpresa;
+  uf?: string;
 };
 
 const DIA = 86400000;
@@ -70,6 +78,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       trialFim: p.trialFim,
       plano: p.plano,
       trialUsado: true,
+      porte: (p.porte as Conta["porte"]) || "mei",
+      regime: (p.regime as Conta["regime"]) || "simples",
+      uf: p.uf || "SP",
     };
     setContas((prev) => [...prev.filter((x) => x.id !== c.id), c]);
     setSessao(c.id);
@@ -113,7 +124,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     cadastrar: async (d) => {
       if (isCloud) {
-        const erro = await cloudSignUp({ ...d, email: d.email.trim() });
+        const erro = await cloudSignUp({
+          empresa: d.empresa,
+          cnpj: d.cnpj,
+          nome: d.nome,
+          email: d.email.trim(),
+          senha: d.senha,
+          porte: d.porte,
+          regime: d.regime,
+          uf: d.uf,
+        });
         if (erro) return erro;
         await sincronizarPerfil();
         return null;
@@ -136,12 +156,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (d.senha.length < 4) return "A senha deve ter ao menos 4 caracteres.";
       const nova: Conta = {
         ...d,
-        email: d.email.trim(),
-        id: Math.random().toString(36).slice(2, 10),
+        id: crypto.randomUUID(),
         criadoEm: Date.now(),
         trialFim: Date.now() + TRIAL_DIAS * DIA,
         plano: "free",
         trialUsado: true,
+        porte: d.porte ?? "mei",
+        regime: d.porte === "mei" || d.regime === "mei" ? "mei" : (d.regime ?? "simples"),
+        uf: d.uf ?? "SP",
       };
     setContas((p) => [...p, nova]);
     setSessao(nova.id);

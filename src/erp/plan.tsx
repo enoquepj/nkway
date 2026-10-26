@@ -8,72 +8,73 @@ export type Plano = {
   nome: string;
   preco: number;
   descricao: string;
+  publicoAlvo: string;
   limites: { produtos: number; clientes: number; vendasMes: number; usuarios: number };
   recursos: string[];
   naoInclui: string[];
   destaque?: boolean;
 };
 
+/** Planos pensados para MEI / ME / Simples (preço e limites alinhados ao porte). */
 export const PLANOS: Plano[] = [
   {
     id: "free",
-    nome: "Grátis",
+    nome: "MEI Start",
     preco: 0,
-    descricao: "Para quem está começando e quer organizar a operação.",
-    limites: { produtos: 50, clientes: 50, vendasMes: 100, usuarios: 1 },
+    descricao: "Organize a bancada e o caixa sem custo. Ideal para testar o NKWAY.",
+    publicoAlvo: "MEI e quem está formalizando",
+    limites: { produtos: 80, clientes: 80, vendasMes: 150, usuarios: 1 },
     recursos: [
-      "Até 50 produtos e 50 clientes",
-      "100 vendas por mês no PDV",
-      "DAV ilimitado (orçamentos e pedidos)",
-      "Entrada de mercadoria por XML da NF-e",
-      "Kardex, inventário e ajustes de estoque",
-      "PDV offline-first com sincronização",
-      "Controle de estoque com alerta mínimo",
+      "Até 80 produtos e 80 clientes",
+      "150 vendas/mês no PDV",
+      "DAV (orçamento e pedido) ilimitado",
+      "Entrada de mercadoria (XML / manual)",
+      "Estoque, kardex e alerta de mínimo",
       "Contas a pagar e a receber",
-      "Dashboard com indicadores básicos",
-      "1 usuário",
+      "PDV com modo offline (fila local)",
+      "1 usuário (dono)",
+      "Dados na nuvem quando o Supabase estiver ativo",
     ],
     naoInclui: [
-      "Emissão fiscal (NFC-e / NF-e / SAT)",
-      "MDF-e (manifesto de transporte)",
-      "Relatórios avançados e DRE",
-      "Multiusuário",
+      "Emissão fiscal real (NFC-e/NF-e) — em breve via provedor",
+      "Múltiplos usuários",
+      "DF-e automático em produção",
       "Suporte prioritário",
     ],
   },
   {
     id: "pro",
-    nome: "Pro",
-    preco: 89,
-    descricao: "Para lojas que já vendem todo dia e precisam emitir nota.",
-    limites: { produtos: 5000, clientes: 5000, vendasMes: 5000, usuarios: 5 },
+    nome: "ME / Simples",
+    preco: 49.9,
+    descricao: "Para ME no Simples que vende todo dia e precisa de nota e mais usuários.",
+    publicoAlvo: "ME e EPP no Simples Nacional",
+    limites: { produtos: 3000, clientes: 3000, vendasMes: 3000, usuarios: 3 },
     recursos: [
-      "Tudo do Grátis, sem limite prático",
-      "Emissão ilimitada de NFC-e, NF-e e SAT",
-      "Contingência fiscal offline automática",
-      "Emissão de MDF-e para transporte de carga",
-      "Faturamento de DAV em nota fiscal",
-      "Até 5 usuários com permissões",
-      "Relatórios avançados e exportação CSV",
-      "Integração Pix e boleto registrado",
-      "Suporte por chat em horário comercial",
+      "Tudo do MEI Start, com folga de limite",
+      "Até 3 usuários (dono, caixa, escritório)",
+      "Emissão NFC-e/NF-e (quando o provedor fiscal estiver ligado)",
+      "DF-e / entrada por XML e chave (com A1)",
+      "Manutenção de preços e markup em massa",
+      "Relatórios com filtro, impressão e CSV",
+      "Trial Pro de 14 dias ao criar a conta",
+      "Suporte por WhatsApp/e-mail em horário comercial",
     ],
-    naoInclui: ["API aberta e webhooks", "Multi-lojas / multi-CNPJ", "Gerente de conta"],
+    naoInclui: ["Multi-CNPJ / rede de lojas", "API e webhooks", "Gerente de conta"],
     destaque: true,
   },
   {
     id: "ultra",
-    nome: "Ultra",
-    preco: 249,
-    descricao: "Para redes, franquias e operações com múltiplos CNPJs.",
+    nome: "Loja+",
+    preco: 99.9,
+    descricao: "Para quem cresceu no Simples ou tem mais de uma operação.",
+    publicoAlvo: "ME/EPP em expansão",
     limites: { produtos: 1e9, clientes: 1e9, vendasMes: 1e9, usuarios: 1e9 },
     recursos: [
-      "Tudo do Pro, sem limites",
-      "Multi-lojas e multi-CNPJ",
-      "Usuários ilimitados",
-      "API e webhooks para integrações",
-      "DRE gerencial e curva ABC",
-      "Gerente de conta dedicado",
+      "Tudo do ME / Simples",
+      "Usuários e cadastros amplos",
+      "Multi-loja / multi-CNPJ (roadmap ativo)",
+      "Prioridade em novas integrações (Pix, TEF)",
+      "Exportações para o contador",
     ],
     naoInclui: [],
   },
@@ -100,7 +101,6 @@ export function PlanProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => localStorage.setItem(KEY, id), [id]);
 
-  // Durante o trial o usuário tem acesso aos recursos do Pro
   const efetivo: PlanId = id === "free" && emTrial ? "pro" : id;
   const plano = PLANOS.find((p) => p.id === efetivo)!;
 
