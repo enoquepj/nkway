@@ -5,9 +5,17 @@
 -- Rode no SQL Editor do Supabase (ou via CLI de migrations).
 -- =============================================================================
 
-create extension if not exists pgcrypto;
-create extension if not exists pg_cron;
--- create extension if not exists pg_net; -- descomente se disponível no projeto
+create extension if not exists pgcrypto with schema extensions;
+create extension if not exists pg_cron with schema extensions;
+-- create extension if not exists pg_net with schema extensions;
+
+-- Garante que pgp_sym_encrypt seja encontrada (Supabase usa schema extensions)
+do $$
+begin
+  execute 'grant usage on schema extensions to postgres, anon, authenticated, service_role';
+exception when others then
+  null;
+end $$;
 
 -- -----------------------------------------------------------------------------
 -- 1. Configuração fiscal por empresa (certificado A1 + controle de NSU)
@@ -113,9 +121,9 @@ create or replace function public.dfe_encrypt_password(plain text)
 returns bytea
 language sql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
-  select pgp_sym_encrypt(
+  select extensions.pgp_sym_encrypt(
     plain,
     coalesce(current_setting('app.dfe_secret', true), 'CHANGE_ME_DFE_SECRET_MIN_32_CHARS!!')
   );
@@ -125,9 +133,9 @@ create or replace function public.dfe_decrypt_password(cipher bytea)
 returns text
 language sql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
-  select pgp_sym_decrypt(
+  select extensions.pgp_sym_decrypt(
     cipher,
     coalesce(current_setting('app.dfe_secret', true), 'CHANGE_ME_DFE_SECRET_MIN_32_CHARS!!')
   );
@@ -305,28 +313,14 @@ create policy cert_a1_owner_delete on storage.objects
 --    Secrets: Dashboard → Edge Functions → Secrets
 --      DFE_CRON_SECRET = string aleatória longa
 -- -----------------------------------------------------------------------------
--- Exemplo com pg_net (Supabase):
-/*
-select cron.unschedule('nkway-dfe-dist-10min') where exists (
-  select 1 from cron.job where jobname = 'nkway-dfe-dist-10min'
-);
-
-select cron.schedule(
-  'nkway-dfe-dist-10min',
-  '*/10 * * * *',
-  $$
-  select net.http_post(
-    url := 'https://PROJECT_REF.supabase.co/functions/v1/dfe-dist',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key', true),
-      'x-dfe-cron-secret', current_setting('app.settings.dfe_cron_secret', true)
-    ),
-    body := jsonb_build_object('origem', 'pg_cron')
-  );
-  $$
-);
-*/
+-- Exemplo com pg_net (Supabase) — NÃO execute agora; descomente depois de
+-- configurar PROJECT_REF e secrets. Use agendamento a cada 10 minutos no
+-- Dashboard (Edge Functions → Schedules) ou o trecho abaixo com escape.
+-- select cron.schedule(
+--   'nkway-dfe-dist-10min',
+--   'every 10 minutes',
+--   $$ select net.http_post( ... ); $$
+-- );
 
 -- Alternativa sem pg_net: agende no Dashboard → Edge Functions → Schedules
 -- ou use um cron externo (GitHub Actions) batendo no mesmo endpoint a cada 10 min.
