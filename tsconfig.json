@@ -37,6 +37,16 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "src/App.tsx",
+    "src/main.tsx",
+    "src/ContextoViewer.tsx",
+    "src/backupProjeto.ts",
+    "src/vite-env.d.ts",
+    "src/erp",
+    "src/utils",
+    "src/lib/supabase.ts",
+    "vite.config.ts",
+    "supabase"
   ]
 }
