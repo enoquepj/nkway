@@ -1,9 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clientes,
+  devolucoes,
   empresas,
+  eventosFiscais,
+  inutilizacoes,
   mdfes,
   usuarios,
   contas,
@@ -26,6 +29,49 @@ function aleatorio(semente = 20260322) {
     return s / 4294967296;
   };
 }
+
+/** CNPJ válido: completa os dois dígitos verificadores do CNPJ base (8 + 4) */
+export function cnpjComDv(base: string): string {
+  const b = base.replace(/\D/g, "").slice(0, 12).padStart(12, "0");
+  const calc = (parte: string) => {
+    let soma = 0;
+    let peso = parte.length - 7;
+    for (let i = 0; i < parte.length; i++) {
+      soma += Number(parte[i]) * peso--;
+      if (peso < 2) peso = 9;
+    }
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+  const d1 = calc(b);
+  return `${b}${d1}${calc(`${b}${d1}`)}`;
+}
+
+/** CPF válido: completa os dois dígitos verificadores */
+export function cpfComDv(base: string): string {
+  const b = base.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
+  const calc = (parte: string) => {
+    let soma = 0;
+    for (let i = 0; i < parte.length; i++) soma += Number(parte[i]) * (parte.length + 1 - i);
+    const resto = (soma * 10) % 11;
+    return resto === 10 ? 0 : resto;
+  };
+  const d1 = calc(b);
+  return `${b}${d1}${calc(`${b}${d1}`)}`;
+}
+
+/** CNPJ formatado 00.000.000/0000-00 */
+const cnpjFmt = (base: string) => {
+  const c = cnpjComDv(base);
+  return `${c.slice(0, 2)}.${c.slice(2, 5)}.${c.slice(5, 8)}/${c.slice(8, 12)}-${c.slice(12)}`;
+};
+const cpfFmt = (base: string) => {
+  const c = cpfComDv(base);
+  return `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9)}`;
+};
+
+/** CNPJ do emitente demo (usado na chave de acesso e no cadastro da empresa) */
+export const CNPJ_DEMO = cnpjComDv("235678910001");
 
 const CATALOGO = [
   // nome, categoria, custo, preço, unidade, estoque inicial, mínimo, estoque de venda (pesável)
@@ -71,7 +117,7 @@ export async function semearAmbiente() {
     .values({
       nome: "COMERCIAL SÃO JORGE LTDA",
       nomeFantasia: "Mercado São Jorge",
-      cnpj: "23.567.891/0001-02",
+      cnpj: cnpjFmt("235678910001"),
       uf: "RO",
       municipio: "Ji-Paraná",
       codMunicipio: "1100866",
@@ -159,10 +205,10 @@ export async function semearAmbiente() {
     .returning({ id: clientes.id, nome: clientes.nome, condicaoPadrao: clientes.condicaoPadrao });
   const clientesCriados = [c1];
   for (const [nome, doc, cidade, limite, cond] of [
-    ["MERCADINHO BOA VISTA LTDA", "12.345.678/0001-90", "Ji-Paraná", 1500, "30d"],
-    ["RESTAURANTE SABOR CASEIRO", "98.765.432/0001-10", "Porto Velho", 2500, "14d"],
-    ["PADARIA PAO QUENTE ME", "45.678.912/0001-33", "Machadinho", 800, "7d"],
-    ["SILVANA LIMA DE SOUZA", "321.654.987-00", "Ji-Paraná", 400, "a vista"],
+    ["MERCADINHO BOA VISTA LTDA", cnpjFmt("123456780001"), "Ji-Paraná", 1500, "30d"],
+    ["RESTAURANTE SABOR CASEIRO", cnpjFmt("987654320001"), "Porto Velho", 2500, "14d"],
+    ["PADARIA PAO QUENTE ME", cnpjFmt("456789120001"), "Machadinho", 800, "7d"],
+    ["SILVANA LIMA DE SOUZA", cpfFmt("321654987"), "Ji-Paraná", 400, "a vista"],
   ] as const) {
     const [c] = await db
       .insert(clientes)
@@ -184,9 +230,9 @@ export async function semearAmbiente() {
 
   const fornecedorIds: { id: string; nome: string; cnpj: string }[] = [];
   for (const [nome, cnpj, cidade, prazo] of [
-    ["DISTRIBUIDORA NORTE SUL LTDA", "11.222.333/0001-44", "Porto Velho", 28],
-    ["ATACADAO AMAZONIA SA", "22.333.444/0001-55", "Cacoal", 21],
-    ["COMERCIAL RIO MADEIRA EIRELI", "33.444.555/0001-66", "Ji-Paraná", 14],
+    ["DISTRIBUIDORA NORTE SUL LTDA", cnpjFmt("112223330001"), "Porto Velho", 28],
+    ["ATACADAO AMAZONIA SA", cnpjFmt("223334440001"), "Cacoal", 21],
+    ["COMERCIAL RIO MADEIRA EIRELI", cnpjFmt("334445550001"), "Ji-Paraná", 14],
   ] as const) {
     const [f] = await db
       .insert(fornecedores)
@@ -200,6 +246,8 @@ export async function semearAmbiente() {
   const custoAtual = new Map(idsProduto.map((p) => [p.id, p.custo]));
   let numeroVenda = 0;
   let numeroNota = 0;
+  /** kardex é uma trilha cronológica: as entradas têm de vir DEPOIS da última venda */
+  let ultimoLancamento = agora.getTime();
 
   const inserirMovimento = async (
     produtoId: string,
@@ -225,6 +273,7 @@ export async function semearAmbiente() {
       observacao,
       data,
     });
+    ultimoLancamento = Math.max(ultimoLancamento, data.getTime());
   };
 
   for (let d = 29; d >= 0; d--) {
@@ -368,11 +417,12 @@ export async function semearAmbiente() {
   }
 
   /* ------------------------------------------------- entradas de mercadoria */
+  const CNPJ_FORNECEDOR_DEMO = cnpjComDv("112223330001");
   const chaveEntrada = (numero: number) =>
     gerarChave({
       uf: UF_NUMERO.RO,
       aamm: "2603",
-      cnpj: "11222333000144",
+      cnpj: CNPJ_FORNECEDOR_DEMO,
       modelo: "55",
       serie: "001",
       numeroNota: numero,
@@ -392,7 +442,9 @@ export async function semearAmbiente() {
       saldo.set(p.id, novoSaldo);
       custoAtual.set(p.id, custoMedio);
       await db.update(produtos).set({ estoque: novoSaldo, custo: custoMedio }).where(sql`id = ${p.id}`);
-      const dataMov = new Date(agora.getTime() - (e + 1) * 3 * 86_400_000);
+      // a nota foi emitida dias atrás, mas a mercadoria entra no kardex quando é recebida
+      // (depois do último movimento de venda) — senão a trilha deixa de ser cronológica
+      const dataMov = new Date(ultimoLancamento + (e + 1) * 60_000);
       await inserirMovimento(p.id, p.nome, "entrada", qtd, novoSaldo, custoMedio, `NF ${1200 + e} · ${forn.nome.slice(0, 20)}`, dataMov, `Custo médio recalculado: ${custo.toFixed(2)} → ${custoMedio.toFixed(2)}`);
       itensDaNota.push({
         produtoId: p.id,
@@ -431,7 +483,7 @@ export async function semearAmbiente() {
         itens: itensDaNota,
         observacao: e % 2 === 0 ? "XML importado do arquivo da SEFAZ" : "Capturado por chave de acesso (DF-e, modo demonstração)",
         createdAt: entradaId,
-        lancadaEm: entradaId,
+        lancadaEm: new Date(ultimoLancamento + (e + 1) * 60_000),
       })
       .returning({ id: entradas.id });
     await db.insert(contas).values({
@@ -457,7 +509,7 @@ export async function semearAmbiente() {
     serie: "1",
     chave: chaveEntrada(1297),
     fornecedor: "ATACADAO AMAZONIA SA",
-    cnpjFornecedor: "22333444000155",
+    cnpjFornecedor: cnpjComDv("223334440001"),
     emissao: iso(new Date(agora.getTime() - 86_400_000)),
     valorProdutos: 986.4,
     valorFrete: 38,
@@ -472,6 +524,116 @@ export async function semearAmbiente() {
     ],
     observacao: "XML recebido com divergência de quantidade em 1 item — aguardando conferência no recebimento.",
   });
+
+  /* --------------------------------- inutilização de numeração + carta de correção */
+  await db.insert(inutilizacoes).values({
+    empresaId,
+    modelo: "NFC-e",
+    serie: "1",
+    numeroInicial: 900001,
+    numeroFinal: 900005,
+    justificativa: "Perda de sequência no caixa 2 após queda de energia na loja",
+    status: "homologado",
+    protocolo: `111${String(agora.getTime()).slice(-13)}`,
+    createdAt: new Date(agora.getTime() - 2 * 3600_000),
+  });
+
+  const [ultimaNfe] = await db
+    .select({ id: vendas.id, chave: vendas.chave, protocolo: vendas.protocolo, numeroNota: vendas.numeroNota })
+    .from(vendas)
+    .where(sql`empresa_id = ${empresaId} and modelo = 'NF-e' and status = 'faturado'`)
+    .limit(1);
+  if (ultimaNfe?.chave && ultimaNfe.protocolo) {
+    await db.insert(eventosFiscais).values({
+      empresaId,
+      vendaId: ultimaNfe.id,
+      chave: ultimaNfe.chave,
+      tipo: "carta_correcao",
+      sequencia: 1,
+      descricao: "Correcao das informacoes adicionais de interesse do fisco: natureza da operacao reescrita como venda de mercadoria para revenda",
+      protocolo: `${ultimaNfe.protocolo}10`,
+      createdAt: new Date(agora.getTime() - 3600_000),
+    });
+  }
+
+  /* ------------------------------------------------- devolução de compra (CFOP 5201, NFref da entrada) */
+  const [primeiraEntrada] = await db
+    .select({ id: entradas.id, chave: entradas.chave, fornecedor: entradas.fornecedor, cnpj: entradas.cnpjFornecedor, fornecedorId: entradas.fornecedorId, numeroNota: entradas.numeroNota })
+    .from(entradas)
+    .where(and(eq(entradas.empresaId, empresaId), eq(entradas.status, "lancada")))
+    .orderBy(asc(entradas.emissao))
+    .limit(1);
+  if (primeiraEntrada) {
+    const itensOrigem = (await db.select({ itens: entradas.itens }).from(entradas).where(eq(entradas.id, primeiraEntrada.id)).limit(1))[0]?.itens ?? [];
+    const devItens = [] as { produtoId: string | null; nome: string; unidade: string; ncm: string; cfop: string; qtd: number; custo: number; total: number }[];
+    for (const i of itensOrigem.slice(0, 2)) {
+      if (!i.produtoId) continue;
+      const [p] = await db.select().from(produtos).where(eq(produtos.id, i.produtoId)).limit(1);
+      if (!p) continue;
+      const qtd = Math.min(i.qtdNota, 6);
+      if (qtd <= 0) continue;
+      if (Number(p.estoque) < qtd) continue;
+      const novo = round2(Number(p.estoque) - qtd);
+      await db.update(produtos).set({ estoque: novo, atualizadoEm: new Date() }).where(eq(produtos.id, p.id));
+      const dataDev = new Date(ultimoLancamento + 30 * 60_000);
+      await db.insert(movimentos).values({
+        empresaId,
+        produtoId: p.id,
+        produtoNome: p.nome,
+        tipo: "devolucao",
+        qtd: round2(-qtd),
+        saldoApos: novo,
+        custoUnit: round2(i.custo * 10000) / 10000,
+        custoMedioApos: Number(p.custo),
+        documento: `Devolução Nº 1 · NF ${primeiraEntrada.numeroNota}`,
+        observacao: "Produto em desacordo com o pedido",
+        data: dataDev,
+      });
+      devItens.push({
+        produtoId: p.id,
+        nome: i.nome,
+        unidade: i.unidade,
+        ncm: i.ncm,
+        cfop: "5201",
+        qtd,
+        custo: round2(i.custo * 10000) / 10000,
+        total: round2(qtd * i.custo),
+      });
+    }
+    if (devItens.length) {
+      const valor = round2(devItens.reduce((s, i) => s + i.total, 0));
+      await db.insert(devolucoes).values({
+        empresaId,
+        numero: 1,
+        serie: "1",
+        chave: gerarChave({ uf: UF_NUMERO.RO, aamm: "2603", cnpj: CNPJ_DEMO, modelo: "55", serie: "1", numeroNota: 1 }),
+        chaveReferente: primeiraEntrada.chave,
+        entradaId: primeiraEntrada.id,
+        fornecedor: primeiraEntrada.fornecedor,
+        cnpjFornecedor: primeiraEntrada.cnpj,
+        fornecedorId: primeiraEntrada.fornecedorId,
+        cfop: "5201",
+        emissao: iso(new Date(agora.getTime() - 86_400_000)),
+        valorProdutos: valor,
+        total: valor,
+        status: "emitida",
+        gerarFinanceiro: true,
+        motivo: "Produto em desacordo com o pedido",
+        itens: devItens,
+      });
+      await db.insert(contas).values({
+        empresaId,
+        tipo: "receber",
+        descricao: `Devolução Nº 1 — ${primeiraEntrada.fornecedor.slice(0, 30)}`,
+        categoria: "Devoluções",
+        contraparteNome: primeiraEntrada.fornecedor,
+        valor,
+        vencimento: iso(new Date(ultimoLancamento + 30 * 86_400_000)),
+        forma: "boleto",
+        status: "aberta",
+      });
+    }
+  }
 
   /* ------------------------------------------------- contas avulsas */
   await db.insert(contas).values([
@@ -532,7 +694,7 @@ export async function semearAmbiente() {
       empresaId,
       numero: 1,
       serie: "1",
-      chave: gerarChave({ uf: UF_NUMERO.RO, aamm: "2603", cnpj: "23567891000102", modelo: "58", serie: "001", numeroNota: 1 }),
+      chave: gerarChave({ uf: UF_NUMERO.RO, aamm: "2603", cnpj: CNPJ_DEMO, modelo: "58", serie: "001", numeroNota: 1 }),
       protocolo: `111${String(agora.getTime()).slice(-14)}`,
       ufInicio: "RO",
       ufFim: "RO",
@@ -541,7 +703,7 @@ export async function semearAmbiente() {
       placa: "RQD-4F18",
       rntrc: "12345678",
       condutor: "Marcos Vinícius Prado",
-      cpfCondutor: "12345678901",
+      cpfCondutor: cpfComDv("529982247"),
       documentos: [{ chave: mdfeNf.chave!, tipo: "NF-e", valor: round2(Number(mdfeNf.total)) }],
       pesoBruto: 842.5,
       valorCarga: round2(Number(mdfeNf.total)),

@@ -33,6 +33,8 @@ fi
 echo "→ API $BASE/api/health"
 curl -fsS "$BASE/api/health" >/dev/null 2>&1; marca $? "health 200"
 
+echo "→ rota sem sessão (espera 307 para /login)"
+
 echo "→ banco (contagens do seed)"
 BASE_URL=$(grep -E '^DATABASE_URL=' .env | cut -d= -f2-)
 psql "$BASE_URL" -tA -F' ' -c "
@@ -40,7 +42,9 @@ select 'empresas='|| (select count(*) from nk_empresa)
      ,' produtos='||(select count(*) from nk_produto)
      ,' vendas='  ||(select count(*) from nk_venda)
      ,' movimentos='||(select count(*) from nk_movimento)
-     ,' entradas='||(select count(*) from nk_entrada)" 2>/dev/null
+     ,' entradas='||(select count(*) from nk_entrada)
+     ,' inutilizacoes='||(select count(*) from nk_inutilizacao)
+     ,' eventos='||(select count(*) from nk_evento_fiscal)" 2>/dev/null
 marca $? "consulta Drizzle/Postgres"
 
 echo "→ rota sem sessão (espera 307 para /login)"
@@ -62,10 +66,26 @@ console.log("nkway.sessao="+p+"."+s);await c.end();})();' 2>/dev/null)
 if [[ -z "$COOKIE" ]]; then
   echo "  aviso: sem usuário no banco — rode build_and_start (ou npm run build + start) para o seed criar a empresa demo"
 else
-  for p in / /pdv /documentos /entradas /estoque /produtos /clientes /financeiro /relatorios /transporte /config; do
+  for p in / /pdv /documentos /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /config; do
     code=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" "$BASE$p")
     [[ "$code" == "200" ]]; marca $? "GET $p = $code"
   done
+
+  echo "→ console do dev (/api/diagnostico)"
+  DIAG=$(curl -s -H "Cookie: $COOKIE" "$BASE/api/diagnostico" 2>/dev/null)
+  if [[ -z "$DIAG" ]]; then
+    marca 1 "diagnostico respondeu"
+  else
+    TOTAL=$(node -e 'const j=JSON.parse(process.argv[1]);console.log(j.resumo?.total??0)' "$DIAG")
+    if [[ "$TOTAL" -gt 0 ]]; then marca 0 "bateria devolvida ($TOTAL verificações)"; else marca 1 "bateria vazia"; fi
+    node -e '
+      const j=JSON.parse(process.argv[1]);
+      const r=j.resumo??{};
+      console.log(`         resumo: ${r.passou}/${r.total} ok · ${r.falhou} reprovado(s) · ${r.criticos} crítico(s) · ${(j.modulos??[]).length} módulos · ${j.duracaoMs} ms`);
+      for(const t of (j.testes??[]).filter(x=>!x.passou))
+        console.log(`         ${t.critico?"FALHA":"atenção"} ${t.id} ${t.nome} — ${t.detalhe}`);
+    ' "$DIAG"
+  fi
 fi
 
 echo

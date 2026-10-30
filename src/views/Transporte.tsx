@@ -20,6 +20,8 @@ import { Tabela, type Coluna } from "@/components/Tabela";
 import { UFS, dataBR, dataHoraBR, formatChave, moeda, round2 } from "@/lib/dominio";
 import { cancelarMdfe, emitirMdfe, encerrarMdfe } from "@/server/acoes/transporte";
 import type { listarMdfes } from "@/server/dados";
+import { Impressao } from "@/components/Impressao";
+import type { Emitente } from "@/lib/danfe";
 
 type Mdfe = Awaited<ReturnType<typeof listarMdfes>>[number];
 type Nota = { chave: string; modelo: string; numeroNota: number; clienteNome: string; total: number; data: string };
@@ -28,10 +30,12 @@ export function TransporteView({
   mdfes,
   notas,
   empresa,
+  emitente,
 }: {
   mdfes: Mdfe[];
   notas: Nota[];
   empresa: { fantasia: string; razao: string; cnpj: string; ie: string; municipio: string; uf: string; endereco: string };
+  emitente: Emitente;
 }) {
   const toast = useToast();
   const [form, setForm] = useState({
@@ -52,6 +56,7 @@ export function TransporteView({
   const [cancelando, setCancelando] = useState<Mdfe | null>(null);
   const [motivo, setMotivo] = useState("");
   const [km, setKm] = useState("");
+  const [imprimindo, setImprimindo] = useState<Mdfe | null>(null);
 
   const carga = round2(selecionadas.reduce((s, ch) => s + (notas.find((n) => n.chave === ch)?.total ?? 0), 0));
   const viagens = mdfes.filter((m) => m.status === "autorizado").length;
@@ -266,8 +271,15 @@ export function TransporteView({
         descricao="Versão resumida para o vidro do caminhão"
         largura="max-w-xl"
         rodape={
-          <Button variante="secundario" icone="imprimir" onClick={() => window.print()}>
-            Imprimir
+          <Button
+            variante="secundario"
+            icone="imprimir"
+            onClick={() => {
+              if (vendo) setImprimindo(vendo);
+              setVendo(null);
+            }}
+          >
+            Imprimir A4
           </Button>
         }
       >
@@ -348,6 +360,37 @@ export function TransporteView({
           <Input valor={motivo} aoMudar={setMotivo} placeholder="ex.: viagem cancelada por falha no veículo" />
         </Campo>
       </Modal>
+      <Impressao
+      alvo={
+        imprimindo
+          ? {
+              tipo: "mdfe",
+              emit: emitente,
+              mdfe: {
+                numero: imprimindo.numero,
+                serie: imprimindo.serie,
+                chave: imprimindo.chave,
+                protocolo: imprimindo.protocolo ?? null,
+                status: imprimindo.status,
+                ufInicio: imprimindo.ufInicio,
+                ufFim: imprimindo.ufFim,
+                municipioCarregamento: imprimindo.municipioCarregamento,
+                municipioDescarregamento: imprimindo.municipioDescarregamento,
+                placa: imprimindo.placa,
+                rntrc: imprimindo.rntrc,
+                condutor: imprimindo.condutor,
+                cpfCondutor: imprimindo.cpfCondutor,
+                documentos: imprimindo.documentos,
+                pesoBruto: imprimindo.pesoBruto,
+                valorCarga: imprimindo.valorCarga,
+                emitidoEm: imprimindo.emitidoEm,
+                encerradoEm: imprimindo.encerradoEm ?? null,
+              },
+            }
+          : null
+      }
+      aoFechar={() => setImprimindo(null)}
+    />
     </>
   );
 }

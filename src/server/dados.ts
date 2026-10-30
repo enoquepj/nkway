@@ -3,8 +3,11 @@ import { db } from "@/db";
 import {
   clientes,
   contas,
+  devolucoes,
   entradas,
+  eventosFiscais,
   fornecedores,
+  inutilizacoes,
   mdfes,
   movimentos,
   produtos,
@@ -191,6 +194,7 @@ export type VendaDto = {
   davOrigemId: string | null;
   data: string;
   itens: { nome: string; qtd: number; precoUnit: number; total: number; unidade: string | null }[];
+  eventos: { id: string; tipo: string; sequencia: number; descricao: string; protocolo: string; em: string }[];
 };
 
 export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal" | "dav"; ids?: string[] }) {
@@ -208,6 +212,18 @@ export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal"
     .limit(500);
   const ids = linhas.map((l) => l.id);
   const itens = ids.length ? await db.select().from(vendaItens).where(inArray(vendaItens.vendaId, ids)) : [];
+  const evs = ids.length
+    ? await db
+        .select()
+        .from(eventosFiscais)
+        .where(and(eq(eventosFiscais.empresaId, empresaId), inArray(eventosFiscais.vendaId, ids)))
+    : [];
+  const eventosPorVenda = new Map<string, typeof evs>();
+  for (const e of evs) {
+    const l = eventosPorVenda.get(e.vendaId);
+    if (l) l.push(e);
+    else eventosPorVenda.set(e.vendaId, [e]);
+  }
   return linhas.map<VendaDto>((v) => ({
     id: v.id,
     numero: v.numero,
@@ -230,6 +246,16 @@ export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal"
     operador: v.operador,
     clienteId: v.clienteId,
     davOrigemId: v.davOrigemId,
+    eventos: (eventosPorVenda.get(v.id) ?? [])
+      .sort((a, b) => a.sequencia - b.sequencia)
+      .map((e) => ({
+        id: e.id,
+        tipo: e.tipo,
+        sequencia: e.sequencia,
+        descricao: e.descricao,
+        protocolo: e.protocolo ?? "",
+        em: e.createdAt ? new Date(e.createdAt).toISOString() : "",
+      })),
     data: v.data ? new Date(v.data).toISOString() : "",
     itens: itens
       .filter((i) => i.vendaId === v.id)
@@ -570,3 +596,141 @@ export async function proximaNumero(empresaId: string) {
 }
 
 export const _aux = { isNull, or, sql };
+
+/* ------------------------------------------------------------ devoluções */
+
+export type DevolucaoDto = {
+  id: string;
+  numero: number;
+  serie: string;
+  chave: string;
+  chaveReferente: string;
+  entradaId: string | null;
+  fornecedor: string;
+  cnpjFornecedor: string;
+  cfop: string;
+  emissao: string;
+  valorProdutos: number;
+  total: number;
+  status: string;
+  motivo: string;
+  itens: { produtoId: string | null; nome: string; unidade: string; ncm: string; cfop: string; qtd: number; custo: number; total: number }[];
+};
+
+export async function listarDevolucoes(empresaId: string) {
+  const linhas = await db
+    .select()
+    .from(devolucoes)
+    .where(eq(devolucoes.empresaId, empresaId))
+    .orderBy(desc(devolucoes.numero));
+  return linhas.map<DevolucaoDto>((d) => ({
+    id: d.id,
+    numero: d.numero,
+    serie: d.serie,
+    chave: d.chave,
+    chaveReferente: d.chaveReferente,
+    entradaId: d.entradaId,
+    fornecedor: d.fornecedor,
+    cnpjFornecedor: d.cnpjFornecedor,
+    cfop: d.cfop,
+    emissao: iso(d.emissao),
+    valorProdutos: N(d.valorProdutos),
+    total: N(d.total),
+    status: d.status,
+    motivo: d.motivo ?? "",
+    itens: (d.itens ?? []).map((i) => ({
+      produtoId: i.produtoId,
+      nome: i.nome,
+      unidade: i.unidade,
+      ncm: i.ncm,
+      cfop: i.cfop,
+      qtd: N(i.qtd, 3),
+      custo: N(i.custo, 4),
+      total: N(i.total),
+    })),
+  }));
+}
+
+/** entradas lançadas e elegíveis a devolução */
+export async function listarEntradasDevolviveis(empresaId: string) {
+  const linhas = await db
+    .select()
+    .from(entradas)
+    .where(and(eq(entradas.empresaId, empresaId), eq(entradas.status, "lancada")))
+    .orderBy(desc(entradas.emissao));
+  const feitas = await db.select({ entradaId: devolucoes.entradaId, itens: devolucoes.itens }).from(devolucoes).where(eq(devolucoes.empresaId, empresaId));
+  const ja = new Map<string, number>();
+  for (const f of feitas) for (const i of f.itens ?? []) if (i.produtoId) ja.set(i.produtoId, round2((ja.get(i.produtoId) ?? 0) + i.qtd));
+  return linhas.map((e) => {
+    const itens = (e.itens ?? []).map((i) => ({ ...i, disponivel: round2(Math.max(0, i.qtdNota - (i.produtoId ? ja.get(i.produtoId) ?? 0 : 0))) }));
+    return {
+      id: e.id,
+      numeroNota: e.numeroNota,
+      serie: e.serie,
+      chave: e.chave,
+      fornecedor: e.fornecedor,
+      cnpjFornecedor: e.cnpjFornecedor,
+      emissao: iso(e.emissao),
+      total: N(e.total),
+      itens,
+      podeDevolver: itens.some((i) => i.disponivel > 0),
+    };
+  });
+}
+
+/* -------------------------------------------------- numeração e eventos */
+
+export type InutilizacaoDto = {
+  id: string;
+  modelo: string;
+  serie: string;
+  numeroInicial: number;
+  numeroFinal: number;
+  justificativa: string;
+  status: string;
+  protocolo: string;
+  em: string;
+};
+
+export async function listarInutilizacoes(empresaId: string) {
+  const linhas = await db
+    .select()
+    .from(inutilizacoes)
+    .where(eq(inutilizacoes.empresaId, empresaId))
+    .orderBy(desc(inutilizacoes.createdAt));
+  return linhas.map<InutilizacaoDto>((i) => ({
+    id: i.id,
+    modelo: i.modelo,
+    serie: i.serie,
+    numeroInicial: i.numeroInicial,
+    numeroFinal: i.numeroFinal,
+    justificativa: i.justificativa,
+    status: i.status,
+    protocolo: i.protocolo ?? "",
+    em: i.createdAt ? new Date(i.createdAt).toISOString() : "",
+  }));
+}
+
+/** próximo número fiscal disponível, pulando os intervalos inutilizados */
+export async function proximoNumeroFiscal(empresaId: string, modelo: string, serie: string) {
+  const [r] = await db
+    .select({ n: sql<string | null>`max(${vendas.numeroNota})` })
+    .from(vendas)
+    .where(and(eq(vendas.empresaId, empresaId), eq(vendas.tipo, "fiscal"), eq(vendas.modelo, modelo), eq(vendas.serie, serie)));
+  let candidato = Number(r?.n ?? 0) + 1;
+  const faixas = await db
+    .select({ i: inutilizacoes.numeroInicial, f: inutilizacoes.numeroFinal, st: inutilizacoes.status })
+    .from(inutilizacoes)
+    .where(and(eq(inutilizacoes.empresaId, empresaId), eq(inutilizacoes.modelo, modelo), eq(inutilizacoes.serie, serie)));
+  const ativas = faixas.filter((x) => x.st !== "cancelado");
+  for (let volta = 0; volta < 200; volta++) {
+    const dentro = ativas.find((x) => candidato >= x.i && candidato <= x.f);
+    if (!dentro) break;
+    candidato = dentro.f + 1;
+  }
+  return candidato;
+}
+
+export async function listarProximoNumero(empresaId: string, modelo = "NFC-e", serie = "1") {
+  return proximoNumeroFiscal(empresaId, modelo, serie);
+}

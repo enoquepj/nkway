@@ -26,6 +26,10 @@ import { alternarItem, casaTexto, emPeriodo, type Periodo } from "@/lib/filtros"
 import { FORMAS_PAGAMENTO, dataHoraBR, formatChave, moeda, round2, rotuloForma, tributosEstimados } from "@/lib/dominio";
 import { cancelarVenda, faturarDav, excluirDav, type Pagamento } from "@/server/acoes/pdv";
 import type { VendaDto } from "@/server/dados";
+import { Impressao, type AlvoImpresso } from "@/components/Impressao";
+import type { Emitente } from "@/lib/danfe";
+import type { InutilizacaoDto } from "@/server/dados";
+import { NumeracaoView, type DocumentoResumo } from "@/views/Numeracao";
 
 const MOTIVOS = [
   "01 - Venda sem entrada ou saída de mercadoria",
@@ -43,12 +47,20 @@ const STATUS_TOM: Record<string, "ok" | "alerta" | "erro" | "neutro"> = {
 export function DocumentosView({
   vendas,
   empresa,
+  emitente,
+  inutilizacoes,
+  proximoNumero,
+  serieAtual,
 }: {
   vendas: VendaDto[];
   empresa: { fantasia: string; nome: string; cnpj: string; endereco: string; municipio: string; uf: string };
+  emitente: Emitente;
+  inutilizacoes: InutilizacaoDto[];
+  proximoNumero: number;
+  serieAtual: string;
 }) {
   const toast = useToast();
-  const [aba, setAba] = useState<"fiscal" | "dav">("fiscal");
+  const [aba, setAba] = useState<"fiscal" | "dav" | "numeracao">("fiscal");
   const [busca, setBusca] = useState("");
   const [periodo, setPeriodo] = useState<Periodo>({ inicio: "", fim: "" });
   const [status, setStatus] = useState<string[]>([]);
@@ -62,6 +74,8 @@ export function DocumentosView({
   const [novoModelo, setNovoModelo] = useState<"NFC-e" | "NF-e" | "SAT">("NFC-e");
   const [novoPagamento, setNovoPagamento] = useState("dinheiro");
   const [ocupado, setOcupado] = useState(false);
+  const [imprimindo, setImprimindo] = useState<AlvoImpresso | null>(null);
+  const [corrigindo, setCorrigindo] = useState<DocumentoResumo | null>(null);
 
   const filtroAtual = {
     busca,
@@ -105,6 +119,25 @@ export function DocumentosView({
 
   const totalSelecionado = round2(linhas.reduce((s, v) => s + (v.status === "cancelado" ? 0 : v.total), 0));
   const contagem = (tipo: "fiscal" | "dav") => vendas.filter((v) => v.tipo === tipo).length;
+  const documentosParaNumeracao: DocumentoResumo[] = useMemo(
+    () =>
+      vendas
+        .filter((v) => v.tipo === "fiscal")
+        .map((v) => ({
+          id: v.id,
+          numero: v.numero,
+          modelo: v.modelo,
+          serie: v.serie,
+          numeroNota: v.numeroNota,
+          chave: v.chave,
+          protocolo: v.protocolo,
+          status: v.status,
+          clienteNome: v.clienteNome,
+          data: v.data,
+          eventos: (v.eventos ?? []).map((e) => ({ ...e })),
+        })),
+    [vendas],
+  );
 
   const colunas: Coluna<VendaDto>[] = [
     {
@@ -203,9 +236,10 @@ export function DocumentosView({
         abas={[
           { id: "fiscal", rotulo: "Notas fiscais", contagem: contagem("fiscal") },
           { id: "dav", rotulo: "DAVs / orçamentos", contagem: contagem("dav") },
+          { id: "numeracao", rotulo: "Numeração e eventos" },
         ]}
         atual={aba}
-        aoTrocar={(i) => setAba(i as "fiscal" | "dav")}
+        aoTrocar={(i) => setAba(i as "fiscal" | "dav" | "numeracao")}
       />
 
       <BarraFiltros>
@@ -267,11 +301,77 @@ export function DocumentosView({
         largura="max-w-2xl"
         rodape={
           <>
-            <Button variante="secundario" icone="imprimir" onClick={() => window.print()}>
-              Imprimir
-            </Button>
+            {detalhe?.tipo === "fiscal" && (
+              <Button
+                variante="secundario"
+                icone="imprimir"
+                onClick={() => {
+                  setImprimindo({
+                    tipo: "nfe",
+                    emit: emitente,
+                    cscId: "00000000",
+                    doc: {
+                      modelo: detalhe.modelo ?? "NFC-e",
+                      serie: detalhe.serie,
+                      numero: detalhe.numeroNota ?? detalhe.numero,
+                      numeroInterno: detalhe.numero,
+                      chave: detalhe.chave,
+                      protocolo: detalhe.protocolo,
+                      autorizadaEm: null,
+                      status: detalhe.status,
+                      ambiente: 2,
+                      data: detalhe.data,
+                      operador: detalhe.operador,
+                      cliente: detalhe.clienteNome,
+                      itens: detalhe.itens.map((i) => ({
+                        nome: i.nome,
+                        qtd: i.qtd,
+                        unidade: i.unidade,
+                        precoUnit: i.precoUnit,
+                        total: i.total,
+                      })),
+                      subtotal: detalhe.subtotal,
+                      desconto: detalhe.desconto,
+                      frete: detalhe.vFrete,
+                      total: detalhe.total,
+                      pagamentos: detalhe.pagamentos,
+                      forma: detalhe.formaPagamento,
+                      troco: 0,
+                      observacao: detalhe.observacao,
+                    },
+                  });
+                  setDetalhe(null);
+                }}
+              >
+                Imprimir {detalhe.modelo === "NF-e" ? "DANFE A4" : "cupom 80 mm"}
+              </Button>
+            )}
             {detalhe?.tipo === "dav" && detalhe.status === "aberto" && (
               <Button onClick={() => { setFaturando(detalhe); setDetalhe(null); }}>Faturar em nota</Button>
+            )}
+            {detalhe?.tipo === "fiscal" && detalhe.status === "faturado" && (
+              <Button
+                variante="secundario"
+                icone="atualizar"
+                onClick={() => {
+                  setCorrigindo({
+                    id: detalhe.id,
+                    numero: detalhe.numero,
+                    modelo: detalhe.modelo,
+                    serie: detalhe.serie,
+                    numeroNota: detalhe.numeroNota,
+                    chave: detalhe.chave,
+                    protocolo: detalhe.protocolo,
+                    status: detalhe.status,
+                    clienteNome: detalhe.clienteNome,
+                    data: detalhe.data,
+                    eventos: detalhe.eventos,
+                  });
+                  setDetalhe(null);
+                }}
+              >
+                Carta de correção
+              </Button>
             )}
             {detalhe?.tipo === "dav" && detalhe.status === "aberto" && (
               <Button
@@ -455,6 +555,27 @@ export function DocumentosView({
           </p>
         </div>
       </Modal>
+      <Impressao alvo={imprimindo} aoFechar={() => setImprimindo(null)} />
+
+      {aba === "numeracao" && (
+        <NumeracaoView
+          inutilizacoes={inutilizacoes}
+          documentos={documentosParaNumeracao}
+          proximoNumero={proximoNumero}
+          serieAtual={serieAtual}
+        />
+      )}
+
+      {aba !== "numeracao" && corrigindo && (
+        <NumeracaoView
+          inutilizacoes={inutilizacoes}
+          documentos={documentosParaNumeracao}
+          proximoNumero={proximoNumero}
+          serieAtual={serieAtual}
+          abrirCorrecaoDe={corrigindo.id}
+          aoFecharCorrecao={() => setCorrigindo(null)}
+        />
+      )}
     </>
   );
 }

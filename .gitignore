@@ -1,6 +1,20 @@
-node_modules
-dist
+# dependências e build — nunca vão para o repositório
+node_modules/
+.next/
+out/
+build/
+next-env.d.ts
+
+# ambiente local — cada máquina tem o seu
 .env
-.env.local
+.env*.local
+
+# sistema operacional e editor
 .DS_Store
+Thumbs.db
 *.log
+.vscode/
+.idea/
+
+# tipos gerados pelo Next
+.next/types/

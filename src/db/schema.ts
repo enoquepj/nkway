@@ -288,6 +288,95 @@ export const mdfes = pgTable(
   (t) => [index("nk_mdfe_empresa_idx").on(t.empresaId)],
 );
 
+/** Devolução de compra — devolvemos mercadoria ao fornecedor (saída de estoque) */
+export const devolucoes = pgTable(
+  "nk_devolucao",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    numero: integer("numero").notNull(),
+    serie: text("serie").notNull().default("1"),
+    /** chave de acesso desta nota de devolução (44 dígitos) */
+    chave: text("chave").notNull().default(""),
+    /** NFref — chave da nota de entrada que originou a devolução */
+    chaveReferente: text("chave_referente").notNull().default(""),
+    entradaId: uuid("entrada_id"),
+    fornecedor: text("fornecedor").notNull().default(""),
+    cnpjFornecedor: text("cnpj_fornecedor").notNull().default(""),
+    fornecedorId: uuid("fornecedor_id"),
+    /** 5201 = devolução dentro do estado, 6201 = devolução para outro estado */
+    cfop: text("cfop").notNull().default("5201"),
+    emissao: date("emissao").notNull(),
+    valorProdutos: numeric("valor_produtos", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    total: numeric("total", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    /** aberta → emitida → cancelada */
+    status: text("status").notNull().default("emitida"),
+    gerarFinanceiro: boolean("gerar_financeiro").notNull().default(true),
+    motivo: text("motivo").default(""),
+    itens: jsonb("itens").$type<DevolucaoItem[]>().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_devolucao_empresa_idx").on(t.empresaId),
+    index("nk_devolucao_entrada_idx").on(t.entradaId),
+  ],
+);
+
+/** Inutilização de numeração — intervalo de nota que não será mais usado */
+export const inutilizacoes = pgTable(
+  "nk_inutilizacao",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    modelo: text("modelo").notNull().default("NFC-e"),
+    serie: text("serie").notNull().default("1"),
+    numeroInicial: integer("numero_inicial").notNull(),
+    numeroFinal: integer("numero_final").notNull(),
+    justificativa: text("justificativa").notNull(),
+    /** homologado → cancelado */
+    status: text("status").notNull().default("homologado"),
+    protocolo: text("protocolo").default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_inutilizacao_empresa_idx").on(t.empresaId),
+    index("nk_inutilizacao_modelo_idx").on(t.empresaId, t.modelo, t.serie),
+  ],
+);
+
+/** Eventos fiscais da NF-e/NFC-e — carta de correção e cancelamento */
+export const eventosFiscais = pgTable(
+  "nk_evento_fiscal",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    vendaId: uuid("venda_id").notNull(),
+    chave: text("chave").notNull().default(""),
+    /** carta_correcao | cancelamento */
+    tipo: text("tipo").notNull(),
+    /** número do evento por chave (1 a 20 na carta de correção) */
+    sequencia: integer("sequencia").notNull().default(1),
+    descricao: text("descricao").notNull(),
+    protocolo: text("protocolo").default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_evento_empresa_idx").on(t.empresaId),
+    index("nk_evento_venda_idx").on(t.vendaId),
+  ],
+);
+
+export type DevolucaoItem = {
+  produtoId: string | null;
+  nome: string;
+  unidade: string;
+  ncm: string;
+  cfop: string;
+  qtd: number;
+  custo: number;
+  total: number;
+};
+
 export type EntradaItem = {
   /** produto interno vinculado (null = novo, criado ao lançar) */
   produtoId: string | null;
@@ -312,5 +401,8 @@ export type VendaRow = typeof vendas.$inferSelect;
 export type VendaItemRow = typeof vendaItens.$inferSelect;
 export type MovimentoRow = typeof movimentos.$inferSelect;
 export type EntradaRow = typeof entradas.$inferSelect;
+export type DevolucaoRow = typeof devolucoes.$inferSelect;
+export type InutilizacaoRow = typeof inutilizacoes.$inferSelect;
+export type EventoFiscalRow = typeof eventosFiscais.$inferSelect;
 export type ContaRow = typeof contas.$inferSelect;
 export type MdfeRow = typeof mdfes.$inferSelect;

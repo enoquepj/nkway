@@ -35,6 +35,7 @@ const GRUPOS: { titulo: string; itens: { href: string; rotulo: string; icone: st
     titulo: "Compras e estoque",
     itens: [
       { href: "/entradas", rotulo: "Entrada de mercadoria", icone: "entrada" },
+      { href: "/devolucoes", rotulo: "Devoluções de compra", icone: "atualizar" },
       { href: "/estoque", rotulo: "Estoque e kardex", icone: "caixaEstoque" },
     ],
   },

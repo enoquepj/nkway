@@ -18,6 +18,7 @@ import {
 import { PLANOS_CFG, UFS, dataBR, moeda } from "@/lib/dominio";
 import { alterarPlano, criarOperador, removerOperador, salvarEmpresa, salvarFiscal } from "@/server/acoes/config";
 import { trocarSenha } from "@/server/acoes/auth";
+import { PainelDiagnostico } from "@/views/Diagnostico";
 
 type EmpresaCfg = {
   nome: string;
@@ -72,15 +73,6 @@ export function ConfigView({
   const [senha, setSenha] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
-
-  const checks = [
-    { r: "Banco PostgreSQL conectado", ok: true, d: "Drizzle · schema nk_* aplicado" },
-    { r: "Empresa e usuário logado", ok: true, d: `${e.nome} · ${equipe.length} acesso(s)` },
-    { r: "Catálogo carregado", ok: ambiente.produtosAtivos > 0, d: `${ambiente.produtosAtivos} produto(s) ativos de ${ambiente.produtosAtivos + (ambiente.produtos - ambiente.produtosAtivos)} cadastrados` },
-    { r: "Entradas aguardando tratamento", ok: ambiente.entradasPendentes === 0, d: ambiente.entradasPendentes ? `${ambiente.entradasPendentes} entrada(s) na fila de conferência` : "nenhuma pendência de recebimento" },
-    { r: "Documentos emitidos", ok: ambiente.documentos > 0, d: `${ambiente.documentos} documento(s) · ${ambiente.davs} DAV(s)` },
-    { r: "Financeiro com títulos", ok: ambiente.contas > 0, d: `${ambiente.contas} lançamento(s) entre pagar e receber` },
-  ];
 
   return (
     <>
@@ -415,23 +407,8 @@ export function ConfigView({
       )}
 
       {aba === "ambiente" && (
-        <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
-          <Card>
-            <CardTitulo titulo="Diagnóstico do ambiente" descricao="Verificações rápidas de integridade (o console do dev do protótipo virou esta aba)" icone="raio" />
-            <ul className="space-y-1.5">
-              {checks.map((c) => (
-                <li key={c.r} className={cn("flex items-start gap-2.5 rounded-lg px-2.5 py-2", c.ok ? "bg-way-50/60" : "bg-amber-50/70")}>
-                  <span className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full", c.ok ? "bg-way-600 text-white" : "bg-signal-500 text-white")}>
-                    <Icon name={c.ok ? "check" : "alerta"} className="size-3" strokeWidth={2.6} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-[12.5px] font-semibold text-ink-800">{c.r}</p>
-                    <p className="text-[11px] text-ink-400">{c.d}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Card>
+        <div className="space-y-4">
+          <PainelDiagnostico />
           <Card>
             <CardTitulo titulo="Estado dos dados" descricao="Contagens por módulo no tenant atual" icone="carteira" />
             <dl className="grid grid-cols-2 gap-2">

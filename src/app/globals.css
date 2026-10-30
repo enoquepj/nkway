@@ -112,3 +112,42 @@ button {
     background: #fff;
   }
 }
+
+/* Impressão de DANFE/DAMDFE: só a área do documento vai para o papel */
+@media print {
+  @page {
+    margin: 4mm;
+  }
+  html,
+  body {
+    background: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  /* esconde o painel inteiro por visibilidade (não derruba o layout do modal) */
+  body * {
+    visibility: hidden !important;
+    box-shadow: none !important;
+  }
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible !important;
+  }
+  .print-area {
+    position: fixed !important;
+    inset: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  .print-area > div {
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+  }
+}

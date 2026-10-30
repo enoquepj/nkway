@@ -31,6 +31,15 @@ async function proximoNumero(empresaId: string, campo: "numero" | "numeroNota") 
   return Number(r?.n ?? 0) + 1;
 }
 
+/**
+ * Número fiscal disponível: soma 1 ao último emitido e pula os intervalos inutilizados
+ * (importado por baixo para não virar server action).
+ */
+async function proximoNumeroFiscal(empresaId: string, modelo: string, serie: string) {
+  const { proximoNumeroNota } = await import("@/server/acoes/numeracao");
+  return proximoNumeroNota(empresaId, modelo, serie);
+}
+
 const diasCondicao = (c: string) => (c === "7d" ? 7 : c === "14d" ? 14 : c === "60d" ? 60 : c === "30d" ? 30 : 0);
 
 type ResultadoVenda =
@@ -93,9 +102,9 @@ async function gravarVenda(
 
     const numero = await proximoNumero(empresaId, "numero");
     const fiscal = input.tipo === "fiscal";
-    const numeroNota = fiscal ? await proximoNumero(empresaId, "numeroNota") : null;
     const fiscalCfg = (empresa.fiscal ?? {}) as Record<string, string | number>;
     const serie = String(fiscalCfg[input.modelo === "NF-e" ? "serieNfe" : input.modelo === "SAT" ? "serieNfce" : "serieNfce"] ?? "1");
+    const numeroNota = fiscal ? await proximoNumeroFiscal(empresaId, input.modelo, serie) : null;
     const chave = fiscal
       ? gerarChave({
           uf: UF_NUMERO[empresa.uf] ?? "00",

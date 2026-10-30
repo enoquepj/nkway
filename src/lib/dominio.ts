@@ -29,13 +29,16 @@ export function mascaraDocumento(v: string): string {
 
 export const dataBR = (v: string | Date | null | undefined) => {
   if (!v) return "—";
-  const d = typeof v === "string" ? new Date(`${v}T12:00:00`) : v;
+  const d = typeof v === "string" ? new Date(`${v.slice(0, 10)}T12:00:00`) : v;
+  const t = d.getTime();
+  if (Number.isNaN(t)) return "—";
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
 };
 
 export const dataHoraBR = (v: string | Date | null | undefined) => {
   if (!v) return "—";
   const d = typeof v === "string" ? new Date(v) : v;
+  if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
     month: "2-digit",
@@ -226,6 +229,81 @@ export const PLANOS_CFG: PlanoCfg[] = [
 
 export const planoById = (id: string | null | undefined) =>
   PLANOS_CFG.find((p) => p.id === id) ?? PLANOS_CFG[0];
+
+/**
+ * CFOP da devolução de compra: 5201 quando o fornecedor é do mesmo estado,
+ * 6201 quando é de outro estado (a UF da empresa decide).
+ */
+export function cfopDevolucao(ufEmpresa: string, ufFornecedor: string): "5201" | "6201" {
+  return (ufEmpresa || "").toUpperCase() === (ufFornecedor || "").toUpperCase() ? "5201" : "6201";
+}
+
+/** Dígito verificador da chave de acesso de 44 dígitos (módulo 11, pesos 2..9) */
+export function dvChaveAcesso(base43: string): number {
+  const d = soDigitos(base43);
+  if (d.length !== 43) return -1;
+  let soma = 0;
+  let peso = 2;
+  for (let i = d.length - 1; i >= 0; i--) {
+    soma += Number(d[i]) * peso;
+    peso = peso === 9 ? 2 : peso + 1;
+  }
+  const resto = soma % 11;
+  return resto < 2 ? 0 : 11 - resto;
+}
+
+/** Chave de acesso é válida quando tem 44 dígitos e o DV confere */
+export function validarChaveAcesso(chave: string | null | undefined): boolean {
+  const c = soDigitos(chave);
+  return c.length === 44 && dvChaveAcesso(c.slice(0, 43)) === Number(c[43]);
+}
+
+/** CPF — dígito verificador módulo 11 */
+export function validarCpf(v: string | null | undefined): boolean {
+  const c = soDigitos(v);
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const calc = (base: number) => {
+    let soma = 0;
+    for (let i = 0; i < base; i++) soma += Number(c[i]) * (base + 1 - i);
+    const resto = (soma * 10) % 11;
+    return resto === 10 ? 0 : resto;
+  };
+  return calc(9) === Number(c[9]) && calc(10) === Number(c[10]);
+}
+
+/** CNPJ — dígitos verificadores módulo 11 (pesos 2..9 alternando) */
+export function validarCnpj(v: string | null | undefined): boolean {
+  const c = soDigitos(v);
+  if (c.length !== 14 || /^(\d)\1{13}$/.test(c)) return false;
+  const calc = (base: number) => {
+    let soma = 0;
+    let peso = base - 7;
+    for (let i = 0; i < base; i++) {
+      soma += Number(c[i]) * peso--;
+      if (peso < 2) peso = 9;
+    }
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+  return calc(12) === Number(c[12]) && calc(13) === Number(c[13]);
+}
+
+/** Documento do destinatário: vazio = consumidor final sem identificação */
+export function tipoDocumento(v: string | null | undefined): "cpf" | "cnpj" | "vazio" | "invalido" {
+  const n = soDigitos(v).length;
+  if (n === 0) return "vazio";
+  if (n === 11) return "cpf";
+  if (n === 14) return "cnpj";
+  return "invalido";
+}
+
+export function documentoValido(v: string | null | undefined): boolean {
+  const t = tipoDocumento(v);
+  if (t === "vazio") return true;
+  if (t === "cpf") return validarCpf(v);
+  if (t === "cnpj") return validarCnpj(v);
+  return false;
+}
 
 export const diasAteTrial = (until: Date | string | null | undefined) => {
   if (!until) return Infinity;
