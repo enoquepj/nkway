@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { contas, devolucoes, entradas, movimentos, produtos } from "@/db/schema";
 import { cfopDevolucao, gerarChave, round2, UF_NUMERO, soDigitos, validarChaveAcesso } from "@/lib/dominio";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string; id?: string } | { ok: false; erro: string };
 
@@ -58,6 +58,7 @@ export async function emitirDevolucao(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId, empresa } = await tenant();
+    input = corpo(input);
     const [ent] = await db
       .select()
       .from(entradas)
@@ -68,9 +69,9 @@ export async function emitirDevolucao(input: {
     if (!validarChaveAcesso(ent.chave))
       return { ok: false, erro: "A nota de entrada não tem uma chave de acesso válida — o NFref precisa de 44 dígitos com DV." };
 
-    const itens = input.itens.filter((i) => i.qtd > 0);
+    const itens = (input.itens ?? []).filter((i) => i.qtd > 0);
     if (!itens.length) return { ok: false, erro: "Informe a quantidade devolvida de pelo menos um item." };
-    if (!input.motivo.trim()) return { ok: false, erro: "Descreva o motivo da devolução (exigido na autorização)." };
+    if (!texto(input.motivo).trim()) return { ok: false, erro: "Descreva o motivo da devolução (exigido na autorização)." };
 
     // valida saldo e produto de cada item
     for (const i of itens) {
@@ -131,7 +132,7 @@ export async function emitirDevolucao(input: {
         total,
         status: "emitida",
         gerarFinanceiro: input.gerarFinanceiro,
-        motivo: input.motivo.trim(),
+        motivo: texto(input.motivo).trim(),
         itens: linhas,
       })
       .returning({ id: devolucoes.id });
@@ -155,7 +156,7 @@ export async function emitirDevolucao(input: {
         custoUnit: round2(i.custo * 10000) / 10000,
         custoMedioApos: Number(p.custo),
         documento: `Devolução Nº ${numero} · NF ${ent.numeroNota}`,
-        observacao: input.motivo.trim(),
+        observacao: texto(input.motivo).trim(),
       });
     }
 
@@ -166,11 +167,15 @@ export async function emitirDevolucao(input: {
         tipo: "receber",
         descricao: `Devolução Nº ${numero} — ${ent.fornecedor.slice(0, 30)}`,
         categoria: "Devoluções",
+        contraparteId: ent.fornecedorId,
+        contraparteTipo: ent.fornecedorId ? "fornecedor" : null,
         contraparteNome: ent.fornecedor,
         valor: total,
         vencimento: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
         forma: "boleto",
         status: "aberta",
+        origem: "devolucao",
+        origemId: doc.id,
       });
     }
 
@@ -216,7 +221,15 @@ export async function cancelarDevolucao(devolucaoId: string, motivo: string): Pr
     await db
       .update(contas)
       .set({ status: "cancelada" })
-      .where(and(eq(contas.empresaId, empresaId), eq(contas.categoria, "Devoluções"), eq(contas.contraparteNome, d.fornecedor), eq(contas.valor, d.total), eq(contas.status, "aberta")));
+      .where(
+        and(
+          eq(contas.empresaId, empresaId),
+          eq(contas.categoria, "Devoluções"),
+          eq(contas.valor, d.total),
+          eq(contas.status, "aberta"),
+          d.fornecedorId ? eq(contas.contraparteId, d.fornecedorId) : eq(contas.contraparteNome, d.fornecedor),
+        ),
+      );
     await db.update(devolucoes).set({ status: "cancelada", motivo: `${d.motivo ?? ""} · cancelada: ${motivo.trim()}` }).where(eq(devolucoes.id, d.id));
     revalidar();
     return { ok: true, aviso: `Devolução Nº ${d.numero} cancelada — estoque restaurado.` };

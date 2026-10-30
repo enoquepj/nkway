@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { contas, entradas, fornecedores, movimentos, produtos, type EntradaItem } from "@/db/schema";
 import { hojeISO, round2, somaDias } from "@/lib/dominio";
 import { notaPorChaveDemo, parseNfeXml, type NfeXml } from "@/lib/xmlNfe";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; id?: string; aviso?: string } | { ok: false; erro: string };
 
@@ -110,7 +110,8 @@ async function criarDeNota(
 export async function importarXml(input: { xml: string; gerarFinanceiro: boolean; fornecedorId?: string | null }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
-    if (!input.xml.trim()) return { ok: false, erro: "Cole ou arraste o conteúdo do XML da NF-e." };
+    input = corpo(input);
+    if (!texto(input.xml).trim()) return { ok: false, erro: "Cole ou arraste o conteúdo do XML da NF-e." };
     const nota = parseNfeXml(input.xml);
     return await criarDeNota(empresaId, nota, "xml", input.gerarFinanceiro, input.fornecedorId ?? null);
   } catch (e) {
@@ -121,6 +122,7 @@ export async function importarXml(input: { xml: string; gerarFinanceiro: boolean
 export async function importarPorChave(input: { chave: string; gerarFinanceiro: boolean; fornecedorId?: string | null }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
+    input = corpo(input);
     const nota = notaPorChaveDemo(input.chave);
     return await criarDeNota(empresaId, nota, "sefaz", input.gerarFinanceiro, input.fornecedorId ?? null);
   } catch (e) {
@@ -141,7 +143,8 @@ export async function registrarEntradaManual(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
-    if (!input.fornecedor.trim()) return { ok: false, erro: "Informe o fornecedor da nota." };
+    input = corpo(input);
+    if (!texto(input.fornecedor).trim()) return { ok: false, erro: "Informe o fornecedor da nota." };
     const itensValidos = input.itens.filter((i) => i.qtd > 0 && i.custo > 0);
     if (itensValidos.length === 0) return { ok: false, erro: "Digite ao menos um item com quantidade e custo." };
     const itens: EntradaItem[] = itensValidos.map((i, idx) => ({
@@ -166,8 +169,8 @@ export async function registrarEntradaManual(input: {
         numeroNota: input.numeroNota || String(Date.now()).slice(-6),
         serie: input.serie || "1",
         chave: "",
-        fornecedor: input.fornecedor.trim().toUpperCase(),
-        cnpjFornecedor: input.cnpjFornecedor.replace(/\D/g, ""),
+        fornecedor: texto(input.fornecedor).trim().toUpperCase(),
+        cnpjFornecedor: texto(input.cnpjFornecedor).replace(/\D/g, ""),
         emissao: input.emissao || hojeISO(),
         valorProdutos,
         valorFrete: round2(input.valorFrete),
@@ -195,6 +198,7 @@ export async function salvarTratamento(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
+    input = corpo(input);
     const [e] = await db.select({ id: entradas.id, status: entradas.status }).from(entradas).where(and(eq(entradas.id, input.entradaId), eq(entradas.empresaId, empresaId))).limit(1);
     if (!e) return { ok: false, erro: "Entrada não encontrada." };
     if (e.status === "lancada") return { ok: false, erro: "Entrada já lançada no estoque — não é possível editar." };
@@ -294,6 +298,10 @@ export async function lancarEntrada(entradaId: string): Promise<Resultado> {
         tipo: "pagar",
         descricao: `NF ${entrada.numeroNota} ${entrada.fornecedor.slice(0, 30)}`,
         categoria: "Fornecedores",
+        contraparteId: entrada.fornecedorId,
+        origem: entrada.origem === "xml" || entrada.origem === "sefaz" ? "entrada_xml" : "entrada_manual",
+        origemId: entrada.id,
+        contraparteTipo: entrada.fornecedorId ? "fornecedor" : null,
         contraparteNome: entrada.fornecedor,
         valor: entrada.total || round2(itens.reduce((s, i) => s + i.qtd * i.custo, 0)),
         vencimento: somaDias(entrada.emissao || hojeISO(), prazo),

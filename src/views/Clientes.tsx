@@ -21,7 +21,7 @@ import {
 } from "@/components/ui";
 import { Tabela, type Coluna } from "@/components/Tabela";
 import { alternarItem, casaTexto } from "@/lib/filtros";
-import { UFS, dataBR, mascaraDocumento, moeda, round2 } from "@/lib/dominio";
+import { UFS, dataBR, documentoValido, mascaraDocumento, moeda, round2, soDigitos } from "@/lib/dominio";
 import { excluirCliente, excluirFornecedor, salvarCliente, salvarFornecedor } from "@/server/acoes/cadastros";
 import type { listarClientes, listarFornecedores } from "@/server/dados";
 
@@ -63,22 +63,71 @@ export function ClientesView({
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
 
-  const filtro = { busca, ufs, condicoes, soComSaldo };
+  const [tipoPessoa, setTipoPessoa] = useState("todos");
+  const [cidades, setCidades] = useState<string[]>([]);
+  const [creditos, setCreditos] = useState<string[]>([]);
+  const [sefaz, setSefaz] = useState("todos");
+  const [contribuinte, setContribuinte] = useState<string[]>([]);
+  const [recencia, setRecencia] = useState("todos");
+  const [totalMin, setTotalMin] = useState("");
+  const [totalMax, setTotalMax] = useState("");
+  const [limiteMin, setLimiteMin] = useState("");
+  const [limiteMax, setLimiteMax] = useState("");
+
+  const filtro = { busca, ufs, condicoes, soComSaldo, tipoPessoa, cidades, creditos, sefaz, contribuinte, recencia, totalMin, totalMax, limiteMin, limiteiteMax: "", limiteMax };
   const linhas = useMemo(
     () =>
       clientes.filter((c) => {
-        if (!casaTexto(`${c.nome} ${c.documento} ${c.email} ${c.telefone} ${c.cidade}`, busca)) return false;
+        // FILTROS.md: nome · CPF/CNPJ (com ou sem máscara) · e-mail · telefone · cidade · bairro · endereço · CEP · UF · IE
+        const digitos = soDigitos(busca);
+        const casaDoc = digitos.length >= 5 && soDigitos(c.documento).includes(digitos);
+        const texto = `${c.nome} ${c.documento} ${c.email} ${c.telefone} ${c.cidade} ${c.bairro} ${c.logradouro} ${c.cep} ${c.uf}`;
+        if (!casaTexto(texto, busca) && !casaDoc) return false;
         if (ufs.length && !ufs.includes(c.uf ?? "")) return false;
         if (condicoes.length && !condicoes.includes(c.condicaoPadrao)) return false;
         if (soComSaldo && c.saldoEmAberto <= 0) return false;
+        if (cidades.length && !cidades.includes(c.cidade ?? "")) return false;
+        // tipo de pessoa: PF (11 dígitos) / PJ (14)
+        const dv = soDigitos(c.documento).length;
+        if (tipoPessoa === "pf" && dv !== 11) return false;
+        if (tipoPessoa === "pj" && dv !== 14) return false;
+        // crédito e inadimplência
+        const usoLimite = c.limiteCredito > 0 ? (c.saldoEmAberto / c.limiteCredito) * 100 : 0;
+        if (creditos.includes("em_aberto") && c.saldoEmAberto <= 0) return false;
+        if (creditos.includes("acima_85") && !(c.limiteCredito > 0 && usoLimite > 85)) return false;
+        if (creditos.includes("sem_limite") && c.limiteCredito > 0) return false;
+        if (creditos.includes("limite_disponivel") && !(c.limiteCredito > c.saldoEmAberto)) return false;
+        // cadastro SEFAZ (documento válido para autorização)
+        if (sefaz === "ok" && !documentoValido(c.documento)) return false;
+        if (sefaz === "pendencia" && documentoValido(c.documento)) return false;
+        // contribuinte ICMS (indIEDest)
+        if (contribuinte.length && !contribuinte.includes(String(c.indIe ?? "9"))) return false;
+        // recência da última compra
+        if (recencia !== "todos") {
+          const dias = c.ultimaCompra ? (Date.now() - new Date(`${c.ultimaCompra}T12:00:00`).getTime()) / 86_400_000 : Infinity;
+          if (recencia === "nunca" && c.ultimaCompra) return false;
+          if (recencia === "30d" && !(dias <= 30)) return false;
+          if (recencia === "30_60" && !(dias > 30 && dias <= 60)) return false;
+          if (recencia === "60_90" && !(dias > 60 && dias <= 90)) return false;
+          if (recencia === "90mais" && !(dias > 90)) return false;
+        }
+        const tn = Number(totalMin.replace(",", ".")) || 0;
+        const tx = Number(totalMax.replace(",", ".")) || 0;
+        if (totalMin && c.totalComprado < tn) return false;
+        if (totalMax && c.totalComprado > tx) return false;
+        const ln = Number(limiteMin.replace(",", ".")) || 0;
+        const lx = Number(limiteMax.replace(",", ".")) || 0;
+        if (limiteMin && c.limiteCredito < ln) return false;
+        if (limiteMax && c.limiteCredito > lx) return false;
         return true;
       }),
-    [clientes, busca, ufs, condicoes, soComSaldo],
+    [clientes, busca, ufs, condicoes, soComSaldo, tipoPessoa, cidades, creditos, sefaz, contribuinte, recencia, totalMin, totalMax, limiteMin, limiteMax],
   );
   const linhasF = useMemo(
     () =>
       fornecedores.filter((f) => {
-        if (!casaTexto(`${f.nome} ${f.cnpj} ${f.cidade} ${f.email} ${f.telefone}`, busca)) return false;
+        const digitosF = soDigitos(busca);
+        if (!casaTexto(`${f.nome} ${f.cnpj} ${f.cidade} ${f.email} ${f.telefone}`, busca) && !(digitosF.length >= 5 && soDigitos(f.cnpj).includes(digitosF))) return false;
         if (ufs.length && !ufs.includes(f.uf ?? "")) return false;
         return true;
       }),
@@ -226,7 +275,7 @@ export function ClientesView({
       />
 
       <BarraFiltros>
-        <FiltroTexto rotulo="Busca" valor={busca} aoMudar={setBusca} placeholder={aba === "clientes" ? "nome, CPF/CNPJ, cidade" : "razão social, CNPJ, cidade"} largura="w-72" />
+        <FiltroTexto rotulo="Busca" valor={busca} aoMudar={setBusca} placeholder={aba === "clientes" ? "nome, CPF/CNPJ, e-mail, tel., cidade, bairro, CEP" : "razão social, CNPJ, cidade"} largura="w-80" />
         <FiltroMulti
           rotulo="UF"
           opcoes={[...new Set((aba === "clientes" ? clientes.map((c) => c.uf ?? "") : fornecedores.map((f) => f.uf ?? "")).filter(Boolean))].sort().map((u) => ({ valor: u, rotulo: `${u} · ${UFS[u as string] ?? ""}` }))}
@@ -237,13 +286,89 @@ export function ClientesView({
           <FiltroMulti rotulo="Condição" opcoes={CONDICOES.map((c) => ({ valor: c, rotulo: c, contagem: clientes.filter((x) => x.condicaoPadrao === c).length }))} selecionados={condicoes} aoAlternar={(v) => setCondicoes(alternarItem(condicoes, v))} />
         )}
         {aba === "clientes" && (
-          <label className="flex items-center gap-1.5 pb-1.5 text-[12px] font-medium text-ink-500">
-            <input type="checkbox" checked={soComSaldo} onChange={(e) => setSoComSaldo(e.target.checked)} className="size-3.5 accent-way-600" />
-            Só com saldo em aberto
-          </label>
+          <>
+            <label className="flex items-center gap-1.5 pb-1.5 text-[12px] font-medium text-ink-500">
+              <input type="checkbox" checked={soComSaldo} onChange={(e) => setSoComSaldo(e.target.checked)} className="size-3.5 accent-way-600" />
+              Só com saldo em aberto
+            </label>
+            <Campo rotulo="Tipo de pessoa" className="w-32">
+              <Select valor={tipoPessoa} aoMudar={setTipoPessoa} opcoes={[{ valor: "todos", rotulo: "Todos" }, { valor: "pf", rotulo: "Pessoa física" }, { valor: "pj", rotulo: "Pessoa jurídica" }]} />
+            </Campo>
+            <FiltroMulti
+              rotulo="Cidade"
+              opcoes={[...new Set(clientes.map((c) => c.cidade ?? "").filter(Boolean))].sort().map((x) => ({ valor: x, rotulo: x, contagem: clientes.filter((c) => c.cidade === x).length }))}
+              selecionados={cidades}
+              aoAlternar={(v) => setCidades(alternarItem(cidades, v))}
+            />
+            <FiltroMulti
+              rotulo="Crédito"
+              opcoes={[
+                { valor: "em_aberto", rotulo: "com saldo em aberto", contagem: clientes.filter((c) => c.saldoEmAberto > 0).length },
+                { valor: "acima_85", rotulo: "acima de 85% do limite", contagem: clientes.filter((c) => c.limiteCredito > 0 && (c.saldoEmAberto / c.limiteCredito) * 100 > 85).length },
+                { valor: "sem_limite", rotulo: "sem limite", contagem: clientes.filter((c) => c.limiteCredito <= 0).length },
+                { valor: "limite_disponivel", rotulo: "com limite disponível", contagem: clientes.filter((c) => c.limiteCredito > c.saldoEmAberto).length },
+              ]}
+              selecionados={creditos}
+              aoAlternar={(v) => setCreditos(alternarItem(creditos, v))}
+            />
+            <Campo rotulo="Cadastro SEFAZ" className="w-36">
+              <Select valor={sefaz} aoMudar={setSefaz} opcoes={[{ valor: "todos", rotulo: "Todos" }, { valor: "ok", rotulo: "Apto à NF-e" }, { valor: "pendencia", rotulo: "Com pendência" }]} />
+            </Campo>
+            <FiltroMulti
+              rotulo="ICMS"
+              opcoes={[
+                { valor: "1", rotulo: "1 · Contribuinte", contagem: clientes.filter((c) => String(c.indIe) === "1").length },
+                { valor: "2", rotulo: "2 · Isento", contagem: clientes.filter((c) => String(c.indIe) === "2").length },
+                { valor: "9", rotulo: "9 · Não contribuinte", contagem: clientes.filter((c) => String(c.indIe) === "9").length },
+              ]}
+              selecionados={contribuinte}
+              aoAlternar={(v) => setContribuinte(alternarItem(contribuinte, v))}
+            />
+            <Campo rotulo="Última compra" className="w-40">
+              <Select
+                valor={recencia}
+                aoMudar={setRecencia}
+                opcoes={[
+                  { valor: "todos", rotulo: "Todos" },
+                  { valor: "30d", rotulo: "Nos últimos 30 dias" },
+                  { valor: "30_60", rotulo: "Sem comprar 30–60 dias" },
+                  { valor: "60_90", rotulo: "Sem comprar 60–90 dias" },
+                  { valor: "90mais", rotulo: "Sem comprar +90 dias" },
+                  { valor: "nunca", rotulo: "Nunca comprou" },
+                ]}
+              />
+            </Campo>
+            <Campo rotulo="Total comprado de" className="w-28">
+              <Input dinheiro valor={totalMin} aoMudar={setTotalMin} placeholder="0,00" />
+            </Campo>
+            <Campo rotulo="até" className="w-28">
+              <Input dinheiro valor={totalMax} aoMudar={setTotalMax} placeholder="∞" />
+            </Campo>
+            <Campo rotulo="Limite de" className="w-28">
+              <Input dinheiro valor={limiteMin} aoMudar={setLimiteMin} placeholder="0,00" />
+            </Campo>
+            <Campo rotulo="até" className="w-28">
+              <Input dinheiro valor={limiteMax} aoMudar={setLimiteMax} placeholder="∞" />
+            </Campo>
+          </>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <FiltrosSalvos chave={aba === "clientes" ? "clientes" : "fornecedores"} atual={filtro} aoAplicar={(f) => { setBusca(f.busca); setUfs(f.ufs); setCondicoes(f.condicoes ?? []); setSoComSaldo(f.soComSaldo ?? false); }} />
+          <FiltrosSalvos chave={aba === "clientes" ? "clientes" : "fornecedores"} atual={filtro} aoAplicar={(f) => {
+              setBusca(f.busca);
+              setUfs(f.ufs);
+              setCondicoes(f.condicoes ?? []);
+              setSoComSaldo(f.soComSaldo ?? false);
+              setTipoPessoa(f.tipoPessoa ?? "todos");
+              setCidades(f.cidades ?? []);
+              setCreditos(f.creditos ?? []);
+              setSefaz(f.sefaz ?? "todos");
+              setContribuinte(f.contribuinte ?? []);
+              setRecencia(f.recencia ?? "todos");
+              setTotalMin(f.totalMin ?? "");
+              setTotalMax(f.totalMax ?? "");
+              setLimiteMin(f.limiteMin ?? "");
+              setLimiteMax(f.limiteMax ?? "");
+            }} />
         </div>
       </BarraFiltros>
 

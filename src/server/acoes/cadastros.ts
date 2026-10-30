@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { clientes, fornecedores, movimentos, produtos, vendaItens, vendas } from "@/db/schema";
 import { round2, validarGtin } from "@/lib/dominio";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
 import { planoById } from "@/lib/dominio";
 
 export type Resultado = { ok: true; id?: string; aviso?: string } | { ok: false; erro: string };
@@ -39,15 +39,15 @@ export type ProdutoInput = {
 export async function salvarProduto(input: ProdutoInput): Promise<Resultado> {
   try {
     const { empresaId, empresa } = await tenant();
-    const nome = input.nome.trim();
+    const nome = texto(input.nome).trim();
     if (nome.length < 3) return { ok: false, erro: "Nome do produto é obrigatório (mín. 3 caracteres)." };
     if (input.preco < 0 || input.custo < 0) return { ok: false, erro: "Custo e preço não podem ser negativos." };
-    if (!validarGtin(input.gtin.trim())) return { ok: false, erro: "GTIN inválido: o dígito verificador não confere." };
-    if (input.gtin.trim() && input.gtin !== "SEM GTIN") {
+    if (!validarGtin(texto(input.gtin).trim())) return { ok: false, erro: "GTIN inválido: o dígito verificador não confere." };
+    if (texto(input.gtin).trim() && input.gtin !== "SEM GTIN") {
       const [duplicado] = await db
         .select({ id: produtos.id })
         .from(produtos)
-        .where(and(eq(produtos.empresaId, empresaId), eq(produtos.gtin, input.gtin.trim()), input.id ? sql`${produtos.id} <> ${input.id}` : undefined))
+        .where(and(eq(produtos.empresaId, empresaId), eq(produtos.gtin, texto(input.gtin).trim()), input.id ? sql`${produtos.id} <> ${input.id}` : undefined))
         .limit(1);
       if (duplicado) return { ok: false, erro: "Já existe produto com este GTIN." };
     }
@@ -62,19 +62,19 @@ export async function salvarProduto(input: ProdutoInput): Promise<Resultado> {
 
     const valores = {
       nome: nome.toUpperCase(),
-      sku: input.sku.trim(),
-      gtin: input.gtin.trim() || "SEM GTIN",
-      categoria: input.categoria.trim() || "Geral",
-      marca: input.marca.trim(),
+      sku: texto(input.sku).trim(),
+      gtin: texto(input.gtin).trim() || "SEM GTIN",
+      categoria: texto(input.categoria).trim() || "Geral",
+      marca: texto(input.marca).trim(),
       unidade: input.unidade,
       custo: round2(input.custo),
       preco: round2(input.preco),
       estoqueMin: Math.max(0, input.estoqueMin),
       pesavel: input.pesavel,
       ativo: input.ativo,
-      ncm: input.ncm.replace(/\D/g, "").padEnd(8, "0").slice(0, 8),
-      cfop: input.cfop.replace(/\D/g, "").slice(0, 4) || "5102",
-      csosn: input.csosn.trim() || "102",
+      ncm: texto(input.ncm).replace(/\D/g, "").padEnd(8, "0").slice(0, 8),
+      cfop: texto(input.cfop).replace(/\D/g, "").slice(0, 4) || "5102",
+      csosn: texto(input.csosn).trim() || "102",
       icmsAliq: round2(input.icmsAliq),
       atualizadoEm: new Date(),
     };
@@ -171,7 +171,9 @@ export async function aplicarManutencaoPrecos(input: {
 }): Promise<{ ok: true; atualizados: number } | { ok: false; erro: string }> {
   try {
     const { empresaId } = await tenant();
-    if (input.ids.length === 0) return { ok: false, erro: "Selecione ao menos um produto." };
+    input = corpo(input);
+    input.ids = input.ids ?? [];
+    if (!input.ids?.length) return { ok: false, erro: "Selecione ao menos um produto." };
     const linhas = await db
       .select()
       .from(produtos)
@@ -216,18 +218,19 @@ export async function salvarCliente(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
-    if (input.nome.trim().length < 2) return { ok: false, erro: "Informe o nome do cliente." };
+    input = corpo(input);
+    if (texto(input.nome).trim().length < 2) return { ok: false, erro: "Informe o nome do cliente." };
     const valores = {
-      nome: input.nome.trim(),
-      documento: input.documento.trim(),
-      email: input.email.trim(),
-      telefone: input.telefone.trim(),
-      cidade: input.cidade.trim(),
-      uf: input.uf.trim(),
+      nome: texto(input.nome).trim(),
+      documento: texto(input.documento).trim(),
+      email: texto(input.email).trim(),
+      telefone: texto(input.telefone).trim(),
+      cidade: texto(input.cidade).trim(),
+      uf: texto(input.uf).trim(),
       limiteCredito: round2(input.limiteCredito),
       condicaoPadrao: input.condicaoPadrao,
       indIe: input.indIe,
-      observacao: input.observacao.trim(),
+      observacao: texto(input.observacao).trim(),
     };
     if (input.id) {
       await db.update(clientes).set(valores).where(and(eq(clientes.id, input.id), eq(clientes.empresaId, empresaId)));
@@ -271,14 +274,15 @@ export async function salvarFornecedor(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
-    if (input.nome.trim().length < 3) return { ok: false, erro: "Informe a razão social do fornecedor." };
+    input = corpo(input);
+    if (texto(input.nome).trim().length < 3) return { ok: false, erro: "Informe a razão social do fornecedor." };
     const valores = {
-      nome: input.nome.trim().toUpperCase(),
-      cnpj: input.cnpj.trim(),
-      cidade: input.cidade.trim(),
-      uf: input.uf.trim(),
-      telefone: input.telefone.trim(),
-      email: input.email.trim(),
+      nome: texto(input.nome).trim().toUpperCase(),
+      cnpj: texto(input.cnpj).trim(),
+      cidade: texto(input.cidade).trim(),
+      uf: texto(input.uf).trim(),
+      telefone: texto(input.telefone).trim(),
+      email: texto(input.email).trim(),
       prazoPagDias: Math.max(0, Math.round(input.prazoPagDias)),
     };
     if (input.id) {

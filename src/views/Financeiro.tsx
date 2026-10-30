@@ -30,7 +30,15 @@ import type { listarContas } from "@/server/dados";
 type Conta = Awaited<ReturnType<typeof listarContas>>[number];
 const CATEGORIAS = ["Vendas", "Fornecedores", "Custos", "Impostos", "Obrigações", "Pessoal", "Outros"];
 
-export function FinanceiroView({ contas }: { contas: Conta[] }) {
+export function FinanceiroView({
+  contas,
+  clientes,
+  fornecedores,
+}: {
+  contas: Conta[];
+  clientes: { id: string; nome: string }[];
+  fornecedores: { id: string; nome: string }[];
+}) {
   const toast = useToast();
   const [aba, setAba] = useState<"todos" | "receber" | "pagar">("todos");
   const [busca, setBusca] = useState("");
@@ -40,10 +48,20 @@ export function FinanceiroView({ contas }: { contas: Conta[] }) {
   const [periodo, setPeriodo] = useState<Periodo>({ inicio: "", fim: "" });
   const [minimo, setMinimo] = useState("");
   const [maximo, setMaximo] = useState("");
-  const [novo, setNovo] = useState<null | { tipo: "receber" | "pagar"; descricao: string; categoria: string; contraparteNome: string; valor: string; vencimento: string; forma: string }>(null);
+  const [novo, setNovo] = useState<null | {
+    tipo: "receber" | "pagar";
+    descricao: string;
+    categoria: string;
+    contraparteId: string;
+    contraparteNome: string;
+    valor: string;
+    vencimento: string;
+    forma: string;
+  }>(null);
   const [baixando, setBaixando] = useState<Conta | null>(null);
   const [baixa, setBaixa] = useState({ valor: "", forma: "dinheiro", data: hojeISO() });
   const [ocupado, setOcupado] = useState(false);
+  const opcoesContraparte = (novo?.tipo === "pagar" ? fornecedores : clientes).map((x) => ({ valor: x.id, rotulo: x.nome }));
 
   const filtro = { busca, categorias, formas, situacoes, inicio: periodo.inicio, fim: periodo.fim, minimo, maximo };
   const aplicar = (f: typeof filtro) => {
@@ -179,7 +197,7 @@ export function FinanceiroView({ contas }: { contas: Conta[] }) {
         acao={
           <Button
             icone="mais"
-            onClick={() => setNovo({ tipo: aba === "pagar" ? "pagar" : "receber", descricao: "", categoria: "Outros", contraparteNome: "", valor: "", vencimento: hojeISO(), forma: "boleto" })}
+            onClick={() => setNovo({ tipo: aba === "pagar" ? "pagar" : "receber", descricao: "", categoria: "Outros", contraparteId: "", contraparteNome: "", valor: "", vencimento: hojeISO(), forma: "boleto" })}
           >
             Novo título
           </Button>
@@ -332,7 +350,9 @@ export function FinanceiroView({ contas }: { contas: Conta[] }) {
                   tipo: novo.tipo,
                   descricao: novo.descricao,
                   categoria: novo.categoria,
-                  contraparteNome: novo.contraparteNome,
+                  contraparteId: novo.contraparteId || null,
+                  contraparteTipo: novo.contraparteId ? (novo.tipo === "pagar" ? "fornecedor" : "cliente") : null,
+                  contraparteNome: novo.contraparteNome || opcoesContraparte.find((x) => x.valor === novo.contraparteId)?.rotulo || "",
                   valor: Number(novo.valor.replace(",", ".")) || 0,
                   vencimento: novo.vencimento,
                   forma: novo.forma,
@@ -360,7 +380,18 @@ export function FinanceiroView({ contas }: { contas: Conta[] }) {
               <Input valor={novo.descricao} aoMudar={(v) => setNovo({ ...novo, descricao: v })} placeholder="ex.: taxa de maquininha" />
             </Campo>
             <Campo rotulo="Contraparte">
-              <Input valor={novo.contraparteNome} aoMudar={(v) => setNovo({ ...novo, contraparteNome: v })} placeholder="quem paga / recebe" />
+              <div className="grid gap-1.5">
+                <Select
+                  valor={novo.contraparteId}
+                  aoMudar={(v) => setNovo({ ...novo, contraparteId: v })}
+                  opcoes={[{ valor: "", rotulo: novo.tipo === "pagar" ? "Sem fornecedor no cadastro" : "Sem cliente no cadastro" }, ...opcoesContraparte]}
+                />
+                <Input
+                  valor={novo.contraparteNome}
+                  aoMudar={(v) => setNovo({ ...novo, contraparteNome: v })}
+                  placeholder="ou digite um nome avulso"
+                />
+              </div>
             </Campo>
             <Campo rotulo="Valor (R$)" obrigatorio>
               <Input dinheiro valor={novo.valor} aoMudar={(v) => setNovo({ ...novo, valor: v })} />

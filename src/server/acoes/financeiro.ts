@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { contas } from "@/db/schema";
 import { hojeISO, round2 } from "@/lib/dominio";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string } | { ok: false; erro: string };
 
@@ -16,24 +16,31 @@ export async function lancarConta(input: {
   descricao: string;
   categoria: string;
   contraparteNome: string;
+  /** cliente ou fornecedor vinculado (uuid) — mantém o histórico mesmo se o nome mudar */
+  contraparteId?: string | null;
+  contraparteTipo?: "cliente" | "fornecedor" | null;
   valor: number;
   vencimento: string;
   forma: string;
 }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
-    if (input.descricao.trim().length < 3) return { ok: false, erro: "Descreva o título." };
+    input = corpo(input);
+    if (texto(input.descricao).trim().length < 3) return { ok: false, erro: "Descreva o título." };
     if (!(input.valor > 0)) return { ok: false, erro: "O valor deve ser maior que zero." };
     await db.insert(contas).values({
       empresaId,
       tipo: input.tipo,
-      descricao: input.descricao.trim(),
+      descricao: texto(input.descricao).trim(),
       categoria: input.categoria || (input.tipo === "receber" ? "Vendas" : "Custos"),
-      contraparteNome: input.contraparteNome.trim(),
+      contraparteId: input.contraparteId ?? null,
+      contraparteTipo: input.contraparteId ? (input.contraparteTipo ?? "cliente") : null,
+      contraparteNome: texto(input.contraparteNome).trim(),
       valor: round2(input.valor),
       vencimento: input.vencimento || hojeISO(),
       forma: input.forma,
       status: "aberta",
+      origem: "manual",
     });
     revalidar();
     return { ok: true, aviso: `Título de ${input.tipo} lançado.` };
@@ -50,6 +57,7 @@ export async function baixarConta(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
+    input = corpo(input);
     const [c] = await db.select().from(contas).where(and(eq(contas.id, input.contaId), eq(contas.empresaId, empresaId))).limit(1);
     if (!c) return { ok: false, erro: "Título não encontrado." };
     if (c.status === "paga") return { ok: false, erro: "Este título já está baixado." };

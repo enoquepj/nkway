@@ -74,6 +74,11 @@ export const produtos = pgTable(
     ativo: boolean("ativo").notNull().default(true),
     ncm: text("ncm").notNull().default("00000000"),
     cest: text("cest").notNull().default(""),
+    /** ➕ FILTROS.md: lote e validade para perecíveis */
+    lote: text("lote").notNull().default(""),
+    validade: date("validade"),
+    /** ➕ FILTROS.md: corredor/prateleira ou depósito */
+    localizacao: text("localizacao").notNull().default(""),
     cfop: text("cfop").notNull().default("5102"),
     csosn: text("csosn").notNull().default("102"),
     icmsAliq: numeric("icms_aliq", { precision: 6, scale: 2, mode: "number" }).notNull().default(0),
@@ -158,6 +163,12 @@ export const vendas = pgTable(
     validade: date("validade"),
     observacao: text("observacao"),
     operador: text("operador").default("Frente de caixa"),
+    /** ➕ FILTROS.md: terminal físico do PDV */
+    caixa: text("caixa").default(""),
+    /** ➕ FILTROS.md: 1 produção · 2 homologação (separa notas de teste) */
+    ambiente: text("ambiente").default("2"),
+    /** ➕ FILTROS.md: de onde veio o lançamento (pdv, dav, importação) */
+    origem: text("origem").default("pdv"),
     /** DAV que originou esta nota */
     davOrigemId: uuid("dav_origem_id"),
     data: timestamp("data", { withTimezone: true }).defaultNow(),
@@ -199,6 +210,9 @@ export const movimentos = pgTable(
     custoMedioApos: numeric("custo_medio_apos", { precision: 12, scale: 4, mode: "number" }).notNull().default(0),
     documento: text("documento").default(""),
     observacao: text("observacao"),
+    /** ➕ FILTROS.md: quem fez o ajuste, perda ou inventário */
+    usuarioId: uuid("usuario_id"),
+    usuarioNome: text("usuario_nome").default(""),
     data: timestamp("data", { withTimezone: true }).defaultNow(),
   },
   (t) => [
@@ -246,12 +260,20 @@ export const contas = pgTable(
     descricao: text("descricao").notNull(),
     categoria: text("categoria").notNull().default("Vendas"),
     contraparteNome: text("contraparte_nome").default(""),
+    /** cliente ou fornecedor vinculado (uuid) — o nome é só rótulo para o relatório */
+    contraparteId: uuid("contraparte_id"),
+    /** cliente | fornecedor | null (lançamento avulso) */
+    contraparteTipo: text("contraparte_tipo").default(""),
     valor: numeric("valor", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
     valorPago: numeric("valor_pago", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
     vencimento: date("vencimento").notNull(),
     pagoEm: date("pago_em"),
     status: text("status").notNull().default("aberta"),
     forma: text("forma"),
+    /** ➕ FILTROS.md: Venda PDV · Entrada XML · Devolução · Manual */
+    origem: text("origem").default("manual"),
+    /** id do documento de origem (venda, entrada ou devolução) */
+    origemId: uuid("origem_id"),
     /** vínculo com documento emitido / entrada lançada */
     vendaId: uuid("venda_id"),
     entradaId: uuid("entrada_id"),

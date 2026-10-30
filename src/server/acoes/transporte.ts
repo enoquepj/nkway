@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { mdfes, vendas } from "@/db/schema";
 import { gerarChave, round2, UF_NUMERO } from "@/lib/dominio";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string } | { ok: false; erro: string };
 
@@ -23,9 +23,11 @@ export async function emitirMdfe(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId, empresa } = await tenant();
-    if (!/^[A-Z0-9-]{5,10}$/i.test(input.placa.trim())) return { ok: false, erro: "Placa inválida." };
-    if (!input.condutor.trim()) return { ok: false, erro: "Informe o condutor do veículo." };
-    if (input.chaves.length === 0) return { ok: false, erro: "Selecione ao menos uma NF-e/NFC-e para compor o manifesto." };
+    input = corpo(input);
+    if (!/^[A-Z0-9-]{5,10}$/i.test(texto(input.placa).trim())) return { ok: false, erro: "Placa inválida." };
+    if (!texto(input.condutor).trim()) return { ok: false, erro: "Informe o condutor do veículo." };
+    input.chaves = input.chaves ?? [];
+    if (!input.chaves?.length) return { ok: false, erro: "Selecione ao menos uma NF-e/NFC-e para compor o manifesto." };
 
     const docs = await db
       .select({ chave: vendas.chave, total: vendas.total, modelo: vendas.modelo })
@@ -60,10 +62,10 @@ export async function emitirMdfe(input: {
       ufFim: input.ufFim,
       municipioCarregamento: input.municipioCarregamento,
       municipioDescarregamento: input.municipioDescarregamento,
-      placa: input.placa.trim().toUpperCase(),
-      rntrc: input.rntrc.trim(),
-      condutor: input.condutor.trim(),
-      cpfCondutor: input.cpfCondutor.replace(/\D/g, ""),
+      placa: texto(input.placa).trim().toUpperCase(),
+      rntrc: texto(input.rntrc).trim(),
+      condutor: texto(input.condutor).trim(),
+      cpfCondutor: texto(input.cpfCondutor).replace(/\D/g, ""),
       documentos: docs.map((d) => ({ chave: d.chave!, tipo: d.modelo ?? "NF-e", valor: round2(Number(d.total)) })),
       pesoBruto: round2(input.pesoBruto),
       valorCarga,

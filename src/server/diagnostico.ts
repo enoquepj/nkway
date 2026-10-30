@@ -368,6 +368,55 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("cli-3", "Clientes", "UF com 2 letras quando informada", ufRuim.length === 0, ufRuim.length ? lista(ufRuim.map((c) => `${c.nome}: ${c.uf}`)) : "endereço do destinatário ok");
   ok("for-1", "Fornecedores", "CNPJ do fornecedor com DV válido", cnpjFornRuim.length === 0, cnpjFornRuim.length ? lista(cnpjFornRuim.map((f) => `${f.nome} (${f.cnpj})`)) : `${qtd(forns.length, "fornecedor")} válido(s)`, true);
 
+  /* ------------------------------------------------------- vínculo por contraparteId */
+  const comId = cts.filter((c) => c.contraparteId);
+  const semId = cts.filter((c) => !c.contraparteId);
+  const idOrfao = cts.filter((c) => {
+    if (!c.contraparteId) return false;
+    const tipo = c.contraparteTipo;
+    if (tipo === "fornecedor") return !forns.some((f) => f.id === c.contraparteId);
+    if (tipo === "cliente") return !clis.some((x) => x.id === c.contraparteId);
+    return false;
+  });
+  const idTipoInconsistente = cts.filter((c) => c.contraparteId && !["cliente", "fornecedor"].includes(String(c.contraparteTipo ?? "")));
+  const nomesDuplicados = clis.filter((c) => clis.some((o) => o.nome === c.nome && o.id !== c.id));
+  // saldo calculado por id não pode divergir da soma dos títulos daquele id
+  const saldoPorId = new Map<string, number>();
+  for (const c of cts) {
+    if (c.tipo !== "receber" || c.status !== "aberta" || !c.contraparteId) continue;
+    saldoPorId.set(c.contraparteId, round2((saldoPorId.get(c.contraparteId) ?? 0) + Number(c.valor) - Number(c.valorPago)));
+  }
+  const saldoIdDivergente = [...saldoPorId.entries()].filter(([id, valor]) => {
+    const alvo = saldoPorId.get(id);
+    return alvo !== undefined && Math.abs(round2(alvo * 1000) - round2(valor * 1000)) > 1;
+  });
+
+  ok("vin-1", "Vínculos", "Título com contraparte tem id e tipo coerentes", idTipoInconsistente.length === 0, idTipoInconsistente.length ? `${idTipoInconsistente.length} sem tipo` : `${qtd(comId.length, "título")} com vínculo por id · ${semId.length} avulso(s)`, true);
+  ok("vin-2", "Vínculos", "Nenhum título aponta para cadastro inexistente", idOrfao.length === 0, idOrfao.length ? `${idOrfao.length} órfão(ãos)` : "todos os ids existem", true);
+  ok("vin-3", "Vínculos", "Nenhum cliente homônimo (dependência de nome)", nomesDuplicados.length === 0, nomesDuplicados.length ? lista(nomesDuplicados.map((c) => c.nome)) : "nomes únicos no cadastro");
+  /* ------------------------------------------------- campos ➕ do FILTROS.md */
+  const validadeProx = prods.filter(
+    (p) => p.validade && (new Date(`${String(p.validade).slice(0, 10)}T12:00:00`).getTime() - Date.now()) / 86_400_000 < 30,
+  ).length;
+  const semLocal = prods.filter((p) => !p.localizacao).length;
+  const semLote = prods.filter((p) => !p.lote).length;
+
+  const vendaComOperador = vds.filter((v) => !!v.operador).length;
+  const vendaSemAmbiente = vds.filter((v) => !["1", "2"].includes(String(v.ambiente ?? ""))).length;
+  const vendaSemCaixa = vds.filter((v) => !v.caixa).length;
+
+  const movSemUsuario = movs.filter((m) => ["ajuste", "perda", "inventario"].includes(m.tipo) && !m.usuarioNome).length;
+  const origens = new Set(cts.map((c) => c.origem ?? "manual"));
+  const contaSemOrigem = cts.filter((c) => !c.origem).length;
+
+  ok("filda-1", "FILTROS", "Produto tem lote, validade e localização", semLote === 0 && semLocal === 0, `${semLote} sem lote · ${semLocal} sem localização · ${validadeProx} vencendo em 30 dias`);
+  ok("filda-2", "FILTROS", "CEST disponível para o filtro de busca", prods.every((p) => typeof p.cest === "string"), `${prods.filter((p) => p.cest).length} produto(s) com CEST`);
+  ok("filda-3", "FILTROS", "Venda grava operador, caixa e ambiente", vendaSemAmbiente === 0 && vendaSemCaixa === 0, `${vendaComOperador} venda(s) com operador · ambiente 1/2 em ${vds.length - vendaSemAmbiente}`, true);
+  ok("filda-4", "FILTROS", "Ajuste, perda e inventário registram o usuário", movSemUsuario === 0, movSemUsuario ? `${movSemUsuario} sem responsável` : "auditoria completa no kardex");
+  ok("filda-5", "FILTROS", "Título financeiro tem origem identificada", contaSemOrigem === 0, contaSemOrigem ? `${contaSemOrigem} sem origem` : `origens: ${[...origens].join(", ")}`, true);
+
+  ok("vin-4", "Vínculos", "Saldo em aberto soma por id, não por nome", saldoIdDivergente.length === 0, saldoIdDivergente.length ? `${saldoIdDivergente.length} divergente(s)` : `${saldoPorId.size} contraparte(s) com saldo calculado por id`, true);
+
   /* ------------------------------------------------- numeração e eventos fiscais */
   const inutAtivas = inuts.filter((i) => i.status !== "cancelado");
   const inutInvalida = inutAtivas.filter((i) => i.numeroInicial > i.numeroFinal);
@@ -474,7 +523,7 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("amb-4", "Ambiente", "Usuário da sessão pertence à empresa", equipe.some((u) => u.id === usuarioId), `${qtd(equipe.length, "acesso")} nesta empresa`, true);
   ok("amb-5", "Ambiente", "Dados suficientes para operar", prods.length > 0 && vds.length > 0, `${qtd(prods.length, "produto")} · ${qtd(vds.length, "documento")} · ${qtd(movs.length, "movimento")}`);
 
-  const ordem = ["Núcleo", "Entrada XML", "Cadastros", "PDV", "Estoque", "Compras", "Devoluções", "Numeração", "Eventos", "Financeiro", "MDF-e", "Clientes", "Fornecedores", "Fiscal", "Ambiente"];
+  const ordem = ["Núcleo", "Entrada XML", "Cadastros", "PDV", "Estoque", "Compras", "Devoluções", "Numeração", "Eventos", "Vínculos", "FILTROS", "Financeiro", "MDF-e", "Clientes", "Fornecedores", "Fiscal", "Ambiente"];
   const unicos = [...new Set(r.map((t) => t.modulo))].sort((a, b) => ordem.indexOf(a) - ordem.indexOf(b));
   const falhaCritica = r.some((t) => t.critico && !t.passou);
 

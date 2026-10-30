@@ -14,7 +14,7 @@ import {
   somaDias,
   UF_NUMERO,
 } from "@/lib/dominio";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, corpo, numero, tenant, texto } from "@/server/tenant";
 
 export type ItemPdv = { produtoId: string; qtd: number; preco: number };
 export type Pagamento = { forma: string; valor: number };
@@ -60,11 +60,14 @@ async function gravarVenda(
     observacao?: string;
     davOrigemId?: string;
     baixaEstoque: boolean;
+    operador?: string;
+    caixa?: string;
   },
 ): Promise<ResultadoVenda> {
   try {
     const { empresaId, empresa } = await tenant();
-    const itens = input.itens.filter((i) => i.qtd > 0);
+    input = corpo(input);
+    const itens = (input.itens ?? []).filter((i) => i?.qtd > 0);
     if (itens.length === 0) return { ok: false, erro: "A venda está sem itens." };
 
     const produtosRows = await db
@@ -142,6 +145,10 @@ async function gravarVenda(
         autorizadaEm: fiscal ? Date.now() : null,
         validade: !fiscal ? (input.validade || somaDias(hojeISO(), 3)) : null,
         observacao: input.observacao || null,
+        operador: input.operador || "Frente de caixa",
+        caixa: input.caixa || "CAIXA 1",
+        ambiente: String(((empresa.fiscal ?? {}) as Record<string, unknown>).ambiente ?? "2"),
+        origem: input.davOrigemId ? "dav" : "pdv",
         davOrigemId: input.davOrigemId ?? null,
         data: new Date(),
       })
@@ -195,6 +202,8 @@ async function gravarVenda(
         tipo: "receber",
         descricao: `${input.modelo} nº ${numeroNota} — ${input.clienteNome || "CONSUMIDOR"}`,
         categoria: "Vendas",
+        contraparteId: input.clienteId,
+        contraparteTipo: input.clienteId ? "cliente" : null,
         contraparteNome: input.clienteNome || "CONSUMIDOR",
         valor: aPrazo,
         vencimento: somaDias(hojeISO(), dias || 30),
@@ -226,6 +235,7 @@ export async function registrarVenda(input: {
   validade?: string;
   observacao?: string;
 }): Promise<ResultadoVenda> {
+  input = corpo(input);
   return gravarVenda({
     itens: input.itens,
     clienteId: input.clienteId ?? null,
@@ -249,6 +259,7 @@ export async function faturarDav(input: {
 }): Promise<ResultadoVenda> {
   try {
     const { empresaId } = await tenant();
+    input = corpo(input);
     const [dav] = await db.select().from(vendas).where(and(eq(vendas.id, input.davId), eq(vendas.empresaId, empresaId))).limit(1);
     if (!dav) return { ok: false, erro: "DAV não encontrado." };
     if (dav.status !== "aberto") return { ok: false, erro: "Este DAV já foi faturado ou cancelado." };
@@ -274,12 +285,13 @@ export async function faturarDav(input: {
 export async function cancelarVenda(input: { vendaId: string; motivo: string }): Promise<{ ok: true } | { ok: false; erro: string }> {
   try {
     const { empresaId } = await tenant();
-    if (!input.motivo.trim()) return { ok: false, erro: "Descreva o motivo do cancelamento." };
+    input = corpo(input);
+    if (!texto(input.motivo).trim()) return { ok: false, erro: "Descreva o motivo do cancelamento." };
     const [venda] = await db.select().from(vendas).where(and(eq(vendas.id, input.vendaId), eq(vendas.empresaId, empresaId))).limit(1);
     if (!venda) return { ok: false, erro: "Documento não encontrado." };
     if (venda.status === "cancelado") return { ok: false, erro: "Este documento já está cancelado." };
 
-    await db.update(vendas).set({ status: "cancelado", observacao: `${venda.observacao ?? ""} · Cancelado: ${input.motivo.trim()}`.trim() }).where(eq(vendas.id, venda.id));
+    await db.update(vendas).set({ status: "cancelado", observacao: `${venda.observacao ?? ""} · Cancelado: ${texto(input.motivo).trim()}`.trim() }).where(eq(vendas.id, venda.id));
 
     const itens = await db.select().from(vendaItens).where(eq(vendaItens.vendaId, venda.id));
     if (venda.tipo === "fiscal") {
@@ -299,7 +311,7 @@ export async function cancelarVenda(input: { vendaId: string; motivo: string }):
           custoUnit: Number(p.custo),
           custoMedioApos: Number(p.custo),
           documento: venda.numeroNota ? `Cancel. NF ${venda.numeroNota}` : `Cancel. DAV ${venda.numero}`,
-          observacao: input.motivo.trim(),
+          observacao: texto(input.motivo).trim(),
         });
       }
     }
@@ -341,4 +353,3 @@ export async function buscarProdutos(termo: string) {
     .map((p) => ({ ...p, preco: Number(p.preco), estoque: Number(p.estoque) }));
 }
 
-export const FORMAS = FORMAS_PAGAMENTO;

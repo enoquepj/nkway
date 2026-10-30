@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { movimentos, produtos } from "@/db/schema";
 import { round2 } from "@/lib/dominio";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string } | { ok: false; erro: string };
 
@@ -29,10 +29,11 @@ export async function ajustarEstoque(input: {
   modo: "delta" | "inventario";
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId, usuario } = await tenant();
+    input = corpo(input);
     const [p] = await db.select().from(produtos).where(and(eq(produtos.id, input.produtoId), eq(produtos.empresaId, empresaId))).limit(1);
     if (!p) return { ok: false, erro: "Produto não encontrado." };
-    if (!input.motivo.trim()) return { ok: false, erro: "Descreva o motivo do ajuste (auditoria do kardex)." };
+    if (!texto(input.motivo).trim()) return { ok: false, erro: "Descreva o motivo do ajuste (auditoria do kardex)." };
     const atual = Number(p.estoque);
     const novo = input.modo === "inventario" ? round2(Math.max(0, input.qtd)) : round2(atual + input.qtd);
     if (novo < 0) return { ok: false, erro: `O ajuste deixaria o saldo negativo (atual ${atual} ${p.unidade}).` };
@@ -48,7 +49,9 @@ export async function ajustarEstoque(input: {
       custoUnit: Number(p.custo),
       custoMedioApos: Number(p.custo),
       documento: ROTULO[input.tipo],
-      observacao: input.motivo.trim(),
+      observacao: texto(input.motivo).trim(),
+      usuarioId: usuario.id,
+      usuarioNome: usuario.nome,
     });
     revalidar();
     return { ok: true, aviso: `${p.nome}: saldo ${atual} → ${novo} ${p.unidade}.` };

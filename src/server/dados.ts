@@ -43,6 +43,10 @@ export type ProdutoDto = {
   ncm: string;
   cfop: string;
   csosn: string;
+  cest: string;
+  lote: string;
+  validade: string;
+  localizacao: string;
   icmsAliq: number;
   situacao: SituacaoEstoque;
   margem: number;
@@ -76,6 +80,10 @@ export async function listarProdutos(empresaId: string, apenasAtivos = false) {
       ncm: p.ncm,
       cfop: p.cfop,
       csosn: p.csosn,
+      cest: p.cest,
+      lote: p.lote,
+      validade: p.validade ? iso(p.validade) : "",
+      localizacao: p.localizacao,
       icmsAliq: N(p.icmsAliq),
       situacao: situacaoEstoque(N(p.estoque, 3), N(p.estoqueMin, 3)),
       margem: preco > 0 ? round2(((preco - custo) / preco) * 100) : 0,
@@ -101,12 +109,13 @@ export async function listarClientes(empresaId: string) {
       .groupBy(vendas.clienteId),
     db
       .select({
+        contraparteId: contas.contraparteId,
         nome: contas.contraparteNome,
         saldo: sql<string>`coalesce(sum(${contas.valor} - ${contas.valorPago}),0)`,
       })
       .from(contas)
       .where(and(eq(contas.empresaId, empresaId), eq(contas.tipo, "receber"), eq(contas.status, "aberta")))
-      .groupBy(contas.contraparteNome),
+      .groupBy(contas.contraparteId, contas.contraparteNome),
     db
       .select({ clienteId: vendas.clienteId, data: sql<string>`max(${vendas.data})` })
       .from(vendas)
@@ -123,13 +132,20 @@ export async function listarClientes(empresaId: string) {
       telefone: c.telefone ?? "",
       cidade: c.cidade ?? "",
       uf: c.uf ?? "",
+      bairro: c.bairro ?? "",
+      logradouro: c.logradouro ?? "",
+      numero: c.numero ?? "",
+      cep: c.cep ?? "",
       condicaoPadrao: c.condicaoPadrao,
       limiteCredito: N(c.limiteCredito),
       indIe: c.indIe ?? "9",
       observacao: c.observacao ?? "",
       totalComprado: N(hist?.total ?? "0"),
       qtdVendas: Number(hist?.qtd ?? 0),
-      saldoEmAberto: N(saldo.find((s) => s.nome === c.nome)?.saldo ?? "0"),
+      // vínculo por id: renomear o cliente não perde o histórico; nome só cobre títulos antigos sem id
+      saldoEmAberto: N(
+        saldo.find((s) => (s.contraparteId ? s.contraparteId === c.id : s.nome === c.nome))?.saldo ?? "0",
+      ),
       ultimaCompra: iso(ultima.find((u) => u.clienteId === c.id)?.data),
     };
   });
@@ -190,6 +206,9 @@ export type VendaDto = {
   validade: string | null;
   observacao: string | null;
   operador: string | null;
+  caixa: string;
+  ambiente: string;
+  origem: string;
   clienteId: string | null;
   davOrigemId: string | null;
   data: string;
@@ -244,6 +263,9 @@ export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal"
     validade: iso(v.validade),
     observacao: v.observacao,
     operador: v.operador,
+    caixa: v.caixa ?? "",
+    ambiente: v.ambiente ?? "2",
+    origem: v.origem ?? "pdv",
     clienteId: v.clienteId,
     davOrigemId: v.davOrigemId,
     eventos: (eventosPorVenda.get(v.id) ?? [])

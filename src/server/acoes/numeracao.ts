@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { eventosFiscais, inutilizacoes, vendas } from "@/db/schema";
 import { validarChaveAcesso } from "@/lib/dominio";
-import { comoErro, tenant } from "@/server/tenant";
+import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string; protocolo?: string } | { ok: false; erro: string };
 
@@ -44,13 +44,14 @@ export async function inutilizarNumeracao(input: {
 }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
+    input = corpo(input);
     const inicio = Math.floor(input.numeroInicial);
     const fim = Math.floor(input.numeroFinal);
     if (!inicio || !fim) return { ok: false, erro: "Informe o número inicial e o final do intervalo." };
     if (inicio > fim) return { ok: false, erro: "O número inicial deve ser menor ou igual ao final." };
     if (inicio < 1) return { ok: false, erro: "A numeração começa em 1." };
     if (!justificativaOk(input.justificativa))
-      return { ok: false, erro: `A justificativa precisa ter entre 15 e 255 caracteres (atual ${input.justificativa.trim().length}).` };
+      return { ok: false, erro: `A justificativa precisa ter entre 15 e 255 caracteres (atual ${texto(input.justificativa).trim().length}).` };
 
     const ultimo = await ultimoEmitido(empresaId, input.modelo, input.serie);
     if (inicio <= ultimo)
@@ -75,7 +76,7 @@ export async function inutilizarNumeracao(input: {
       serie: input.serie,
       numeroInicial: inicio,
       numeroFinal: fim,
-      justificativa: input.justificativa.trim(),
+      justificativa: texto(input.justificativa).trim(),
       status: "homologado",
       protocolo,
     });
@@ -110,9 +111,10 @@ export async function cancelarInutilizacao(id: string): Promise<Resultado> {
 export async function emitirCartaCorrecao(input: { vendaId: string; correcao: string }): Promise<Resultado> {
   try {
     const { empresaId } = await tenant();
-    const texto = input.correcao.trim();
-    if (texto.length < 15) return { ok: false, erro: `A correção precisa ter no mínimo 15 caracteres (atual ${texto.length}).` };
-    if (texto.length > 1000) return { ok: false, erro: "A correção pode ter no máximo 1000 caracteres." };
+    input = corpo(input);
+    const descricao = texto(input.correcao);
+    if (descricao.length < 15) return { ok: false, erro: `A correção precisa ter no mínimo 15 caracteres (atual ${descricao.length}).` };
+    if (descricao.length > 1000) return { ok: false, erro: "A correção pode ter no máximo 1000 caracteres." };
 
     const [v] = await db
       .select()
@@ -127,7 +129,7 @@ export async function emitirCartaCorrecao(input: { vendaId: string; correcao: st
 
     // carta de correção não pode alterar valores, destinatário, CFOP, NCM nem data
     const proibidos = [/valor/i, /pre[çc]o/i, /total/i, /cpf/i, /cnpj/i, /destinat[áa]rio/i, /cfop/i, /ncm/i, /data/i, /quantidade/i];
-    const achou = proibidos.find((re) => re.test(texto));
+    const achou = proibidos.find((re) => re.test(descricao));
     if (achou) {
       const campo = achou.source.replace(/\\\\/g, "").replace(/[/^$()]/g, "");
       return {
@@ -150,7 +152,7 @@ export async function emitirCartaCorrecao(input: { vendaId: string; correcao: st
       chave: v.chave,
       tipo: "carta_correcao",
       sequencia,
-      descricao: texto,
+      descricao,
       protocolo,
     });
     revalidar();

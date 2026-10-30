@@ -21,7 +21,7 @@ import {
 } from "@/components/ui";
 import { Tabela, type Coluna } from "@/components/Tabela";
 import { alternarItem, casaTexto } from "@/lib/filtros";
-import { ROTULO_SITUACAO, UNIDADES_LISTA, moeda, num, round2, validarGtin } from "@/lib/dominio";
+import { ROTULO_SITUACAO, UNIDADES_LISTA, moeda, num, round2, soDigitos, validarGtin } from "@/lib/dominio";
 import {
   alternarProduto,
   aplicarManutencaoPrecos,
@@ -50,6 +50,17 @@ const VAZIO: ProdutoInput = {
   icmsAliq: 0,
 };
 
+const ROTULO_EXCECAO: Record<string, string> = {
+  sem_gtin: "sem código de barras",
+  gtin_invalido: "GTIN com DV inválido",
+  sem_ncm: "sem NCM",
+  margem_negativa: "margem negativa",
+  custo_zerado: "custo zerado",
+  abaixo_custo: "preço abaixo do custo",
+  sem_localizacao: "sem localização",
+  validade_curta: "validade em 30 dias",
+};
+
 export function ProdutosView({
   produtos,
   categorias,
@@ -68,8 +79,15 @@ export function ProdutosView({
   const [margemMin, setMargemMin] = useState("");
   const [precoMin, setPrecoMin] = useState("");
   const [precoMax, setPrecoMax] = useState("");
+  const [unidades, setUnidades] = useState<string[]>([]);
+  const [tipo, setTipo] = useState("todos");
+  const [excecoes, setExcecoes] = useState<string[]>([]);
+  const [fiscais, setFiscais] = useState<string[]>([]);
+  const [margemMax, setMargemMax] = useState("");
+  const [estoqueMin, setEstoqueMin] = useState("");
+  const [estoqueMax, setEstoqueMax] = useState("");
 
-  const filtroAtual = { busca, cats, marcas, situacoes, status, margemMin, precoMin, precoMax };
+  const filtroAtual = { busca, cats, marcas, situacoes, status, margemMin, precoMin, precoMax, unidades, tipo, excecoes, fiscais, margemMax, estoqueMin, estoqueMax };
   type FiltroCfg = typeof filtroAtual;
   const aplicar = (f: FiltroCfg) => {
     setBusca(f.busca);
@@ -80,12 +98,23 @@ export function ProdutosView({
     setMargemMin(f.margemMin);
     setPrecoMin(f.precoMin);
     setPrecoMax(f.precoMax);
+    setUnidades(f.unidades);
+    setTipo(f.tipo);
+    setExcecoes(f.excecoes);
+    setFiscais(f.fiscais);
+    setMargemMax(f.margemMax);
+    setEstoqueMin(f.estoqueMin);
+    setEstoqueMax(f.estoqueMax);
   };
 
   const linhas = useMemo(
     () =>
       produtos.filter((p) => {
-        if (!casaTexto(`${p.nome} ${p.sku} ${p.gtin} ${p.marca} ${p.categoria}`, busca)) return false;
+        // FILTROS.md: nome · SKU · código de barras (com ou sem máscara) · marca · categoria · NCM · CEST · preço
+        const digitosBusca = soDigitos(busca);
+        const casaDigitos = digitosBusca.length >= 6 && soDigitos(p.gtin).includes(digitosBusca);
+        const precoTexto = p.preco.toFixed(2).replace(".", ",");
+        if (!casaTexto(`${p.nome} ${p.sku} ${p.gtin} ${p.marca} ${p.categoria} ${p.ncm} ${p.cest} ${p.unidade} ${p.localizacao} ${p.lote} ${precoTexto}`, busca) && !casaDigitos) return false;
         if (cats.length && !cats.includes(p.categoria)) return false;
         if (marcas.length && !marcas.includes(p.marca)) return false;
         if (situacoes.length && !situacoes.includes(p.situacao)) return false;
@@ -97,9 +126,32 @@ export function ProdutosView({
         const px = Number(precoMax.replace(",", ".")) || 0;
         if (precoMin && p.preco < pn) return false;
         if (precoMax && p.preco > px) return false;
+        if (unidades.length && !unidades.includes(p.unidade)) return false;
+        if (tipo === "unitario" && p.pesavel) return false;
+        if (tipo === "pesavel" && !p.pesavel) return false;
+        if (fiscais.length && !fiscais.includes(p.csosn)) return false;
+        const mx = Number(margemMax.replace(",", ".")) || 0;
+        if (margemMax && p.margem > mx) return false;
+        const en = Number(estoqueMin.replace(",", ".")) || 0;
+        const ex = Number(estoqueMax.replace(",", ".")) || 0;
+        if (estoqueMin && p.estoque < en) return false;
+        if (estoqueMax && p.estoque > ex) return false;
+        // FILTROS.md · Exceções de cadastro
+        if (excecoes.includes("sem_gtin") && p.gtin && p.gtin !== "SEM GTIN") return false;
+        if (excecoes.includes("gtin_invalido") && validarGtin(p.gtin)) return false;
+        if (excecoes.includes("sem_ncm") && /^\d{8}$/.test(p.ncm) && p.ncm !== "00000000") return false;
+        if (excecoes.includes("margem_negativa") && p.margem >= 0) return false;
+        if (excecoes.includes("custo_zerado") && p.custo > 0) return false;
+        if (excecoes.includes("abaixo_custo") && p.preco >= p.custo) return false;
+        if (excecoes.includes("sem_localizacao") && p.localizacao) return false;
+        if (excecoes.includes("validade_curta")) {
+          if (!p.validade) return false;
+          const dias = (new Date(`${p.validade}T12:00:00`).getTime() - Date.now()) / 86_400_000;
+          if (dias > 30) return false;
+        }
         return true;
       }),
-    [produtos, busca, cats, marcas, situacoes, status, margemMin, precoMin, precoMax],
+    [produtos, busca, cats, marcas, situacoes, status, margemMin, precoMin, precoMax, unidades, tipo, excecoes, fiscais, margemMax, estoqueMin, estoqueMax],
   );
 
   const chips: { r: string; limpar: () => void }[] = [
@@ -109,6 +161,12 @@ export function ProdutosView({
     ...situacoes.map((s) => ({ r: `estoque: ${s}`, limpar: () => setSituacoes(situacoes.filter((x) => x !== s)) })),
     ...(margemMin ? [{ r: `margem ≥ ${margemMin}%`, limpar: () => setMargemMin("") }] : []),
     ...(precoMin || precoMax ? [{ r: `preço ${precoMin || "0"}–${precoMax || "∞"}`, limpar: () => { setPrecoMin(""); setPrecoMax(""); } }] : []),
+    ...unidades.map((u) => ({ r: `unidade: ${u}`, limpar: () => setUnidades(unidades.filter((x) => x !== u)) })),
+    ...(tipo !== "todos" ? [{ r: tipo === "pesavel" ? "pesável" : "unitário", limpar: () => setTipo("todos") }] : []),
+    ...fiscais.map((f) => ({ r: `CSOSN ${f}`, limpar: () => setFiscais(fiscais.filter((x) => x !== f)) })),
+    ...(margemMax ? [{ r: `margem ≤ ${margemMax}%`, limpar: () => setMargemMax("") }] : []),
+    ...(estoqueMin || estoqueMax ? [{ r: `estoque ${estoqueMin || "0"}–${estoqueMax || "∞"}`, limpar: () => { setEstoqueMin(""); setEstoqueMax(""); } }] : []),
+    ...excecoes.map((e) => ({ r: ROTULO_EXCECAO[e] ?? e, limpar: () => setExcecoes(excecoes.filter((x) => x !== e)) })),
   ];
 
   const [editando, setEditando] = useState<(ProdutoInput & { id?: string }) | null>(null);
@@ -265,7 +323,7 @@ export function ProdutosView({
       </div>
 
       <BarraFiltros>
-        <FiltroTexto rotulo="Busca" valor={busca} aoMudar={setBusca} placeholder="nome, SKU, GTIN, marca" largura="w-64" />
+        <FiltroTexto rotulo="Busca" valor={busca} aoMudar={setBusca} placeholder="nome, SKU, GTIN, NCM, CEST, localização, preço" largura="w-72" />
         <FiltroMulti rotulo="Categoria" opcoes={categorias.map((c) => ({ valor: c, rotulo: c, contagem: produtos.filter((p) => p.categoria === c).length }))} selecionados={cats} aoAlternar={(v) => setCats(alternarItem(cats, v))} />
         <FiltroMulti rotulo="Marca" opcoes={marcaLista.map((m) => ({ valor: m, rotulo: m, contagem: produtos.filter((p) => p.marca === m).length }))} selecionados={marcas} aoAlternar={(v) => setMarcas(alternarItem(marcas, v))} />
         <FiltroMulti rotulo="Estoque" opcoes={["saudavel", "baixo", "critico", "zerado"].map((s) => ({ valor: s, rotulo: ROTULO_SITUACAO[s as keyof typeof ROTULO_SITUACAO], contagem: produtos.filter((p) => p.situacao === s).length }))} selecionados={situacoes} aoAlternar={(v) => setSituacoes(alternarItem(situacoes, v))} />
@@ -281,6 +339,45 @@ export function ProdutosView({
         <Campo rotulo="até" className="w-24">
           <Input dinheiro valor={precoMax} aoMudar={setPrecoMax} placeholder="0,00" />
         </Campo>
+        <Campo rotulo="Margem máx. %" className="w-24">
+          <Input dinheiro valor={margemMax} aoMudar={setMargemMax} placeholder="∞" />
+        </Campo>
+        <Campo rotulo="Estoque de" className="w-24">
+          <Input dinheiro valor={estoqueMin} aoMudar={setEstoqueMin} placeholder="0" />
+        </Campo>
+        <Campo rotulo="até" className="w-24">
+          <Input dinheiro valor={estoqueMax} aoMudar={setEstoqueMax} placeholder="∞" />
+        </Campo>
+        <FiltroMulti
+          rotulo="Unidade"
+          opcoes={UNIDADES_LISTA.map((u) => ({ valor: u, rotulo: u, contagem: produtos.filter((p) => p.unidade === u).length }))}
+          selecionados={unidades}
+          aoAlternar={(v) => setUnidades(alternarItem(unidades, v))}
+        />
+        <Campo rotulo="Tipo" className="w-32">
+          <Select valor={tipo} aoMudar={setTipo} opcoes={[{ valor: "todos", rotulo: "Todos" }, { valor: "unitario", rotulo: "Unitário" }, { valor: "pesavel", rotulo: "Pesável" }]} />
+        </Campo>
+        <FiltroMulti
+          rotulo="Situação fiscal"
+          opcoes={[...new Set(produtos.map((p) => p.csosn))].map((c) => ({ valor: c, rotulo: `CSOSN ${c}`, contagem: produtos.filter((p) => p.csosn === c).length }))}
+          selecionados={fiscais}
+          aoAlternar={(v) => setFiscais(alternarItem(fiscais, v))}
+        />
+        <FiltroMulti
+          rotulo="Exceções"
+          opcoes={[
+            { valor: "sem_gtin", rotulo: "sem código de barras", contagem: produtos.filter((p) => !p.gtin || p.gtin === "SEM GTIN").length },
+            { valor: "gtin_invalido", rotulo: "GTIN inválido", contagem: produtos.filter((p) => !validarGtin(p.gtin)).length },
+            { valor: "sem_ncm", rotulo: "sem NCM", contagem: produtos.filter((p) => !p.ncm || p.ncm === "00000000").length },
+            { valor: "margem_negativa", rotulo: "margem negativa", contagem: produtos.filter((p) => p.margem < 0).length },
+            { valor: "custo_zerado", rotulo: "custo zerado", contagem: produtos.filter((p) => p.custo <= 0).length },
+            { valor: "abaixo_custo", rotulo: "preço abaixo do custo", contagem: produtos.filter((p) => p.preco < p.custo).length },
+            { valor: "sem_localizacao", rotulo: "sem localização", contagem: produtos.filter((p) => !p.localizacao).length },
+            { valor: "validade_curta", rotulo: "validade em 30 dias", contagem: produtos.filter((p) => p.validade && new Date(`${p.validade}T12:00:00`).getTime() - Date.now() < 30 * 86_400_000).length },
+          ]}
+          selecionados={excecoes}
+          aoAlternar={(v) => setExcecoes(alternarItem(excecoes, v))}
+        />
       </BarraFiltros>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -289,7 +386,7 @@ export function ProdutosView({
             {c.r}
           </Chip>
         ))}
-        <Button tamanho="sm" variante="fantasma" onClick={() => aplicar({ busca: "", cats: [], marcas: [], situacoes: [], status: "todos", margemMin: "", precoMin: "", precoMax: "" })}>
+        <Button tamanho="sm" variante="fantasma" onClick={() => aplicar({ busca: "", cats: [], marcas: [], situacoes: [], status: "todos", margemMin: "", precoMin: "", precoMax: "", unidades: [], tipo: "todos", excecoes: [], fiscais: [], margemMax: "", estoqueMin: "", estoqueMax: "" })}>
           Limpar filtros
         </Button>
         <div className="ml-auto">

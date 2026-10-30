@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { clientes, empresas, fornecedores, produtos, usuarios } from "@/db/schema";
 import { criarSessao, confereSenha, encerrarSessao, hashSenha, lerSessao } from "@/lib/session";
+import { cadeia, texto } from "@/server/tenant";
 import { gerarGtin } from "@/lib/dominio";
 
 export type Resultado = { ok: true } | { ok: false; erro: string };
@@ -101,11 +102,14 @@ async function semear(empresaId: string, uf: string) {
   ]);
 }
 
-export async function entrar(input: { email: string; senha: string }): Promise<Resultado> {
-  const email = input.email.trim().toLowerCase();
-  if (!email || !input.senha) return { ok: false, erro: "Informe e-mail e senha." };
+export async function entrar(bruto: unknown): Promise<Resultado> {
+  // server action pode receber undefined quando o cliente envia o corpo fora do formato esperado
+  const input = (bruto ?? {}) as { email?: string; senha?: string };
+  const email = String(input.email ?? "").trim().toLowerCase();
+  const senha = String(input.senha ?? "");
+  if (!email || !senha) return { ok: false, erro: "Informe e-mail e senha." };
   const [usuario] = await db.select().from(usuarios).where(eq(usuarios.email, email)).limit(1);
-  if (!usuario || !confereSenha(input.senha, usuario.senhaHash))
+  if (!usuario || !confereSenha(senha, usuario.senhaHash))
     return { ok: false, erro: "E-mail ou senha não conferem." };
   await criarSessao({ empresaId: usuario.empresaId, usuarioId: usuario.id });
   revalidatePath("/", "layout");
@@ -125,12 +129,13 @@ export type CadastroInput = {
   comCatalogo: boolean;
 };
 
-export async function cadastrar(input: CadastroInput): Promise<Resultado> {
-  const e = { ...input, email: input.email.trim().toLowerCase() };
-  if (!e.empresa.trim()) return { ok: false, erro: "Informe o nome da empresa." };
-  if (e.cnpj.replace(/\D/g, "").length !== 14) return { ok: false, erro: "CNPJ deve ter 14 dígitos." };
+export async function cadastrar(bruto: unknown): Promise<Resultado> {
+  const input = (bruto ?? {}) as CadastroInput;
+  const e = { ...input, email: String(input.email ?? "").trim().toLowerCase() };
+  if (!String(e.empresa ?? "").trim()) return { ok: false, erro: "Informe o nome da empresa." };
+  if (texto(e.cnpj).replace(/\D/g, "").length !== 14) return { ok: false, erro: "CNPJ deve ter 14 dígitos." };
   if (!/^\S+@\S+\.\S+$/.test(e.email)) return { ok: false, erro: "E-mail inválido." };
-  if (e.senha.length < 6) return { ok: false, erro: "A senha precisa de pelo menos 6 caracteres." };
+  if (String(e.senha ?? "").length < 6) return { ok: false, erro: "A senha precisa de pelo menos 6 caracteres." };
 
   const [existente] = await db.select().from(usuarios).where(eq(usuarios.email, e.email)).limit(1);
   if (existente) return { ok: false, erro: "Este e-mail já possui acesso. Faça login." };
@@ -141,8 +146,8 @@ export async function cadastrar(input: CadastroInput): Promise<Resultado> {
   const [empresa] = await db
     .insert(empresas)
     .values({
-      nome: e.empresa.trim(),
-      nomeFantasia: e.empresa.trim(),
+      nome: String(e.empresa ?? "").trim(),
+      nomeFantasia: String(e.empresa ?? "").trim(),
       cnpj: e.cnpj,
       uf: e.uf,
       municipio: e.municipio,
@@ -164,7 +169,7 @@ export async function cadastrar(input: CadastroInput): Promise<Resultado> {
 
   await db.insert(usuarios).values({
     empresaId: empresa.id,
-    nome: e.nome.trim() || "Proprietário",
+    nome: String(e.nome ?? "").trim() || "Proprietário",
     email: e.email,
     senhaHash: hashSenha(e.senha),
     papel: "owner",
@@ -181,10 +186,11 @@ export async function sair() {
   redirect("/login");
 }
 
-export async function trocarSenha(nova: string): Promise<Resultado> {
-  if (nova.length < 6) return { ok: false, erro: "A senha precisa de pelo menos 6 caracteres." };
+export async function trocarSenha(nova: unknown): Promise<Resultado> {
+  const senha = cadeia(nova);
+  if (senha.length < 6) return { ok: false, erro: "A senha precisa de pelo menos 6 caracteres." };
   const s = await lerSessao();
   if (!s) return { ok: false, erro: "Sessão expirada." };
-  await db.update(usuarios).set({ senhaHash: hashSenha(nova) }).where(eq(usuarios.id, s.usuarioId));
+  await db.update(usuarios).set({ senhaHash: hashSenha(senha) }).where(eq(usuarios.id, s.usuarioId));
   return { ok: true };
 }
