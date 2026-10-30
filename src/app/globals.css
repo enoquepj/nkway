@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-50: #f5f6f8;
+  --color-ink-100: #e7e9ee;
+  --color-ink-200: #c9cedb;
+  --color-ink-300: #9aa3b8;
+  --color-ink-400: #64708a;
+  --color-ink-500: #414c63;
+  --color-ink-600: #2b3446;
+  --color-ink-700: #1e2532;
+  --color-ink-800: #161b26;
+  --color-ink-900: #10141c;
+  --color-way-50: #eefbf6;
+  --color-way-100: #d3f5e6;
+  --color-way-200: #a7e9cf;
+  --color-way-300: #6fd6b2;
+  --color-way-400: #34bb90;
+  --color-way-500: #14a37a;
+  --color-way-600: #067f60;
+  --color-way-700: #056650;
+  --color-way-800: #075141;
+  --color-way-900: #074237;
+  --color-signal-500: #e8a33d;
+  --color-signal-600: #c9821f;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: #eef0f4;
+  color: var(--color-ink-800);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* números alinhados em tabelas e totais */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.micro {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #c9cedb;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9aa3b8;
+  background-clip: content-box;
+}
+
+@keyframes way-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.anim-in {
+  animation: way-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes way-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(20, 163, 122, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(20, 163, 122, 0);
+  }
+}
+.pulse-way {
+  animation: way-pulse 1.6s ease-out infinite;
+}
+
+@media print {
+  .sem-impressao {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+}
