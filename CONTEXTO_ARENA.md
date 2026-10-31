@@ -1,35 +1,27 @@
 # CONTEXTO NKWAY · retomada na plataforma (Arena / Next.js + PostgreSQL)
 
 > Este arquivo substitui o `CONTEXTO.md` do protótipo Vite **enquanto o projeto estiver nesta plataforma**.
+> Produção e banco: leia primeiro `VERCEL_SUPABASE.md` (infraestrutura pronta; não refazer).
 > Fonte de verdade do produto: https://github.com/enoquepj/nkway (`CONTEXTO.md`, `MEMORANDO.md`, `supabase/DFE_ROTEIRO_CONFIG.md`).
 
 ---
 
-## 0. Cole isto na próxima conversa (bloco único)
+## 0. Próxima conversa
 
-```
-CONTINUAR NKWAY (plataforma Next.js)
-1. Abra SOMENTE /CONTEXTO_ARENA.md e siga o mapa de arquivos — não reescreva a stack.
-2. Rode `bash scripts/smoke.sh` e confirme que typegen/tsc/build passam e todas as rotas devolvem 200.
-3. Estado: 11 módulos portados do protótipo Vite/Supabase para Next.js 16 (App Router) + Drizzle/Postgres, multi-tenant por empresa_id.
-4. Tarefa agora: (escreva aqui — ou deixe vazio para a seção 6 "pendências").
-5. Regras da plataforma: nunca editar package.json (usar a ferramenta de instalar pacotes); validar com typegen + tsc --noEmit + npm run build + build_and_start; não subir next dev/next start manual.
-6. Linguagem simples, UI em português, um caminho por vez.
-```
+Use o arquivo **`CONTINUAR_NKWAY.txt`** inteiro como primeira mensagem. Ele registra a produção pronta, a arquitetura Vercel/Supabase, as proibições de segurança e a ordem mínima de leitura.
 
-Custo médio de uma retomada bem feita: **6 a 10 passos** (ler este arquivo → smoke → editar → smoke → build_and_start).
-
+Custo de retomada: ler `CONTINUAR_NKWAY.txt` + `VERCEL_SUPABASE.md` + seções 1/2/4/6 deste arquivo, rodar baseline e executar uma tarefa. Não revisar o histórico inteiro.
 ---
 
 ## 1. Como rodar / validar (ordem exata)
 
 ```bash
-npx drizzle-kit push --force          # aplica schema.ts no Postgres local
+npx drizzle-kit push --force          # SOMENTE Postgres local descartável; nunca produção sem filtro nk_*
 npm run build                         # ou o tool build_and_start da plataforma
 bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de todas as rotas
 ```
 
-- Env: só `DATABASE_URL` é obrigatório (`.env`).
+- Local: `DATABASE_URL` no `.env`. Produção já funciona no Vercel/Supabase; health oficial `https://nkway.vercel.app/api/health`. Não alterar conexão se estiver `ok:true`.
 - Seed automático: `src/instrumentation.ts` chama `semearAmbiente()` no boot (idempotente).
   - Login demo: **demo@nkway.com.br / nkway123**
   - Desligar: `NKWAY_SEED=off`
@@ -39,6 +31,8 @@ bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de to
 
 | Onde | O que é |
 |---|---|
+| `CONTINUAR_NKWAY.txt` | bloco curto para a próxima conversa |
+| `VERCEL_SUPABASE.md` | produção atual, Vercel/Supabase e segurança |
 | `src/db/schema.ts` | 14 tabelas `nk_*` + campos ➕ do FILTROS.md (lote, validade, localização, caixa, ambiente, origem, usuário do movimento) |
 | `src/db/seed.ts` | ambiente demo: 23 produtos, ~200 vendas em 30 dias, DAVs, entradas (XML/SEFAZ/manual), kardex, financeiro, MDF-e |
 | `src/lib/dominio.ts` | moeda/data, chave SEFAZ 44 dígitos + DV, GTIN, custo médio, situações de estoque, curva ABC, `PLANOS_CFG` |
@@ -72,6 +66,12 @@ bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de to
 - Rótulos de UI em português; prefixo `nkway.` para chaves de navegador.
 
 ## 4. Armadilhas que custaram tempo (não repita)
+
+0. **Infraestrutura está pronta:** `nkway.vercel.app/api/health` está ok. Não criar novo Supabase/Neon, não trocar senha e não refazer tabelas sem erro atual comprovado.
+0.1. Supabase continua sendo o PostgreSQL da versão Next. “Não instalar Supabase” significa não voltar ao SDK/Vite; Drizzle conecta server-side por `DATABASE_URL`.
+0.2. Variáveis `VITE_*` são legado e não interferem no Next. O login Next usa `nk_usuario`, não Supabase Auth.
+0.3. Tabelas antigas sem prefixo e `nk_*` coexistem. Nunca apagar legado, rodar `supabase/schema.sql` de novo ou usar `push --force` sem `--tablesFilter="nk_*"` na produção.
+0.4. Nunca mostrar `DATABASE_URL`, senha, `.env` ou campo Valor em print/chat. O usuário PostgreSQL `nkway_app` não é login do sistema.
 
 1. `numeric` sem `mode:"number"` → insert quebra esperando string.
 2. `Promise.all([...])` já devolve o resultado de cada query — não existe `resultado[0]`.
@@ -116,6 +116,8 @@ bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de to
 | DF-e / certificado A1 (edge function) | telas prontas em Config; integração real pendente |
 
 ## 6. Pendências (ordem recomendada)
+
+0. ✅ **Produção concluída** — Next/Vercel + Supabase existente; tabelas `nk_*`; health 200; login e cadastro funcionando. Não reabrir esta etapa sem falha comprovada.
 
 1. ~~Testes do console do dev~~ **FEITO (2026)** — `src/server/diagnostico.ts` (74 verificações) → `GET /api/diagnostico` + `<PainelDiagnostico />` na aba **Ambiente** das Configurações. 12 módulos: Núcleo, Entrada XML, Cadastros, PDV, Estoque, Compras, Financeiro, MDF-e, Clientes, Fornecedores, Fiscal, Ambiente. O `smoke.sh` também imprime o resumo e lista as falhas. Validadores em `src/lib/dominio.ts`: `validarCpf`, `validarCnpj`, `documentoValido`, `dvChaveAcesso`, `validarChaveAcesso`. Hoje são **14 módulos** (Núcleo, Entrada XML, Cadastros, PDV, Estoque, Compras, Devoluções, Financeiro, MDF-e, Clientes, Fornecedores, Fiscal, Ambiente, QR Code).
 2. ~~Impressão DANFE/DAMDFE com layout 80 mm e QR Code~~ **FEITO (2026)** — `src/components/Impressao.tsx` (DANFE NFC-e 80 mm, DANFE NF-e A4, DAMDFE A4) + `src/components/QrCode.tsx` (SVG) + `src/lib/danfe.ts` (payload do QR, chave em blocos, tributos da Lei 12.741) + `src/lib/qrcode.ts` (gerador próprio). Impressão via CSS `@media print` com `visibility` (esconder por `display` derruba o modal).

@@ -3,22 +3,43 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Atualizado em:** 2026-03-22 (módulo DF-e + roteiro de configuração)
+**Atualizado em:** 2026-10-31 (produção Next.js no Vercel + Supabase funcionando)
 
 ---
 
-## 1. Ordem de leitura (recomendado)
+## 0. Estado atual em uma linha
+
+**Produção pronta:** `https://nkway.vercel.app` · health HTTP 200 `{"ok":true}` · login/cadastro funcionando · Vercel conectado ao PostgreSQL do Supabase existente. **Não refazer infraestrutura.**
+
+## 1. Ordem de leitura (recomendada para próxima conversa)
 
 | Prioridade | Arquivo | Para quê |
 |---|---|---|
-| 1º | **`CONTEXTO.md`** | Memória do projeto: stack, o que já foi feito, preferências do usuário, próxima tarefa, mensagem **CONTINUAR** |
-| 2º | **`MEMORANDO.md`** (este) | Índice de acessos e configurações |
-| 3º | **`supabase/DFE_ROTEIRO_CONFIG.md`** | Passo a passo completo do módulo **DF-e / NF-e de entrada** |
-| 4º | Demais `.md` da raiz | Deploy, GitHub Desktop, filtros, checklist, dev |
+| 1º | **`CONTINUAR_NKWAY.txt`** | bloco pronto para colar na nova conversa |
+| 2º | **`VERCEL_SUPABASE.md`** | estado oficial da produção e regras de segurança |
+| 3º | **`CONTEXTO_ARENA.md`** | mapa do Next e pendências do produto |
+| 4º | **`MEMORANDO.md`** (este) | índice dos documentos e configurações |
+| 5º | **`supabase/DFE_ROTEIRO_CONFIG.md`** | ler apenas quando a tarefa for DF-e/A1 |
+| 6º | `CONTEXTO.md` e demais `.md` | legado/histórico; abrir só se a tarefa exigir |
 
 ---
 
 ## 2. Configurações críticas — onde estão
+
+### 2.0 Produção atual — não refazer
+
+| Item | Estado |
+|---|---|
+| Site | `https://nkway.vercel.app` |
+| Health | `GET /api/health` = HTTP 200 `{"ok":true}` (confirmado 2026-10-31) |
+| App | Next.js 16 + Drizzle no Vercel |
+| Banco | PostgreSQL do Supabase existente, pooler 6543 |
+| Acesso do app | `DATABASE_URL` Secret; usuário PostgreSQL dedicado `nkway_app` |
+| Tabelas | legado sem prefixo preservado + Next `nk_*` em produção |
+| RLS `nk_*` | desativado por enquanto; tenant server-side por `empresa_id` |
+| Guia | `VERCEL_SUPABASE.md` |
+
+Regras: não criar outro Supabase, não recomendar Neon, não redefinir senha, não recriar tabelas e não alterar Vercel/banco se `/api/health` estiver ok. Nunca registrar segredo em documentação ou print.
 
 ### 2.1 Supabase (nuvem / DF-e / opcional ERP cloud)
 | O quê | Onde |

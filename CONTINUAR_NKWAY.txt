@@ -1,0 +1,59 @@
+CONTINUAR NKWAY — PRODUÇÃO NEXT.JS + VERCEL + SUPABASE FUNCIONANDO
+
+Repositório: https://github.com/enoquepj/nkway
+Branch: main
+Produção: https://nkway.vercel.app
+Estado confirmado em 2026-10-31: `GET /api/health` → HTTP 200 `{"ok":true}`; login e cadastro funcionando.
+
+1. Clone fora do projeto: `git clone --depth 1 https://github.com/enoquepj/nkway /tmp/nkway` (nunca clone dentro do projeto da plataforma).
+2. Leia primeiro e somente para retomada rápida: `VERCEL_SUPABASE.md` inteiro, `CONTEXTO_ARENA.md` seções 1, 2, 4, 6 e 7, e `MEMORANDO.md` seções 1 e 2.0. Depois abra outros documentos só se a tarefa exigir.
+3. Não reescreva a stack, não volte para Vite, não instale `@supabase/supabase-js`, não recomende Neon e não crie outro Supabase.
+
+FONTE DE VERDADE DA ARQUITETURA:
+- Next.js 16 App Router no Vercel.
+- Drizzle + node-postgres server-side.
+- Banco PostgreSQL do Supabase EXISTENTE via `DATABASE_URL` secreta/pooler 6543.
+- Usuário PostgreSQL dedicado `nkway_app`; nunca pedir/exibir URL, senha, `.env`, token ou print do campo Valor.
+- Login Next usa `nk_usuario` + cookie próprio, não Supabase Auth.
+- Variáveis `VITE_*` podem permanecer, mas são legado e não interferem.
+- Tabelas legadas sem prefixo e tabelas Next `nk_*` coexistem; não apagar nenhuma.
+- `nk_*` estão sem RLS por enquanto; tenant server-side por `empresa_id`.
+
+NÃO REFAZER INFRAESTRUTURA:
+- Vercel e Supabase já estão conectados e funcionando.
+- Não redefinir senha, não recriar tabelas, não executar `supabase/schema.sql` e não alterar `DATABASE_URL` sem falha comprovada.
+- Nunca rodar `drizzle-kit push --force` sem `--tablesFilter="nk_*"` no Supabase existente.
+- Primeiro diagnóstico de produção é sempre `https://nkway.vercel.app/api/health`; se estiver ok, não mexer na conexão.
+
+ESTADO DO PRODUTO NO GITHUB:
+- FEITO: diagnóstico; DANFE/DAMDFE + QR; devoluções de compra; inutilização + CC-e; vínculo financeiro por id; filtros avançados; blindagem das server actions.
+- PENDENTE principal: DF-e real (A1 + worker mTLS + bucket privado), assinatura com gateway no lugar da simulação, e migração planejada dos dados legados para `nk_*`.
+- Consulte detalhes e ordem exata na seção 6 de `CONTEXTO_ARENA.md`.
+
+ANTES DE EDITAR:
+- Compare a tarefa com o código atual do GitHub; não misture versões/zip de outra sessão.
+- Rode o baseline do projeto conforme `CONTEXTO_ARENA.md`.
+- Uma tarefa por vez; não mexa em infraestrutura se a tarefa for de produto.
+
+VALIDAÇÃO OBRIGATÓRIA APÓS CÓDIGO:
+- `npx next typegen`
+- `npm exec tsc -- --noEmit --pretty false`
+- `npm run build`
+- `build_and_start`
+- `bash scripts/smoke.sh --sem-build`
+- `bash scripts/acoes.sh` quando houver server actions.
+- Não rode dois builds ao mesmo tempo.
+
+PREFERÊNCIAS:
+- Português simples; um caminho por vez.
+- Dizer “prompt de comando”, nunca “terminal”.
+- Não passar comandos Git para a usuária; salvar pelo GitHub Desktop com cliques.
+- Não editar `package.json` à mão.
+- Não pedir confirmação; siga a opção mais segura.
+- Não expor segredos.
+
+AO FINAL:
+- Atualize `CONTEXTO_ARENA.md`, `MEMORANDO.md` e `VERCEL_SUPABASE.md` quando aplicável.
+- Valide tudo.
+- Diga exatamente quais arquivos foram alterados e os 3 cliques do GitHub Desktop.
+- Nunca mandar substituir o projeto inteiro por uma versão divergente; fornecer apenas arquivos compatíveis com o main atual.
