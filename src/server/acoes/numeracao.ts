@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { eventosFiscais, inutilizacoes, vendas } from "@/db/schema";
 import { validarChaveAcesso } from "@/lib/dominio";
-import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
+import { comoErro, exigirPermissao, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string; protocolo?: string } | { ok: false; erro: string };
 
@@ -43,7 +43,7 @@ export async function inutilizarNumeracao(input: {
   justificativa: string;
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("fiscal.eventos");
     input = corpo(input);
     const inicio = Math.floor(input.numeroInicial);
     const fim = Math.floor(input.numeroFinal);
@@ -91,7 +91,7 @@ export async function inutilizarNumeracao(input: {
 /** cancela (desfaz) uma inutilização — volta o intervalo para a numeração disponível */
 export async function cancelarInutilizacao(id: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("fiscal.eventos");
     const [reg] = await db
       .select()
       .from(inutilizacoes)
@@ -110,7 +110,7 @@ export async function cancelarInutilizacao(id: string): Promise<Resultado> {
 /** emite carta de correção para uma nota autorizada (evento 110110) */
 export async function emitirCartaCorrecao(input: { vendaId: string; correcao: string }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("fiscal.eventos");
     input = corpo(input);
     const descricao = texto(input.correcao);
     if (descricao.length < 15) return { ok: false, erro: `A correção precisa ter no mínimo 15 caracteres (atual ${descricao.length}).` };

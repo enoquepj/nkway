@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { contexto } from "@/lib/session";
 import { diasAteTrial, planoById } from "@/lib/dominio";
+import { normalizarPerfil } from "@/lib/permissoes";
 import { Shell, type ItemPainel } from "@/components/shell";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,7 @@ export default async function PainelLayout({ children }: { children: React.React
   const dados: ItemPainel = {
     empresaNome: c.empresa.nomeFantasia || c.empresa.nome,
     usuarioNome: c.usuario.nome,
+    usuarioPapel: normalizarPerfil(c.usuario.papel),
     planoNome: planoById(c.empresa.plano).nome,
     planoId: c.empresa.plano,
     trialDias: c.empresa.trialUntil && Number.isFinite(dias) ? Math.max(0, dias) : null,

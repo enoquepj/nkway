@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import {
   Abas,
@@ -10,14 +11,19 @@ import {
   CardTitulo,
   Icon,
   Input,
+  Modal,
   PageHeader,
   Select,
   cn,
   useToast,
 } from "@/components/ui";
-import { PLANOS_CFG, UFS, dataBR, moeda } from "@/lib/dominio";
-import { alterarPlano, criarOperador, removerOperador, salvarEmpresa, salvarFiscal } from "@/server/acoes/config";
+import { UFS, dataBR, moeda } from "@/lib/dominio";
+import { gerarSqlConsolidadoSupabaseNk } from "@/lib/migracaoLegado";
+import { PERFIS_USUARIO, ROTULO_PERFIL, normalizarPerfil, temPermissao, type PerfilUsuario } from "@/lib/permissoes";
+import { criarOperador, removerOperador, salvarEmpresa, salvarFiscal } from "@/server/acoes/config";
 import { trocarSenha } from "@/server/acoes/auth";
+import type { AssinaturaPainelDto } from "@/server/dados";
+import { PainelAssinatura } from "@/views/Assinatura";
 import { PainelDiagnostico } from "@/views/Diagnostico";
 
 type EmpresaCfg = {
@@ -53,26 +59,53 @@ type FiscalCfg = {
 export function ConfigView({
   empresa,
   fiscal,
-  plano,
   equipe,
   usuarioAtual,
+  usuarioPapel = "administrador",
+  assinatura,
   ambiente,
 }: {
   empresa: EmpresaCfg;
   fiscal: FiscalCfg;
-  plano: { id: string; nome: string; preco: number; limiteProdutos: number; limiteUsuarios: number };
-  equipe: { id: string; nome: string; email: string; papel: string }[];
+  plano?: { id: string; nome: string; preco: number; limiteProdutos: number; limiteUsuarios: number };
+  equipe: { id: string; nome: string; email: string; papel: string; ativo?: boolean }[];
   usuarioAtual: string;
+  usuarioPapel?: PerfilUsuario;
+  assinatura: AssinaturaPainelDto;
   ambiente: { produtos: number; produtosAtivos: number; documentos: number; davs: number; contas: number; entradas: number; entradasPendentes: number; faturamento14d: number };
 }) {
   const toast = useToast();
-  const [aba, setAba] = useState("empresa");
+  const podeConfig = temPermissao(usuarioPapel, "config.gerenciar");
+  const podeUsuarios = temPermissao(usuarioPapel, "usuarios.gerenciar");
+  const [aba, setAba] = useState(podeConfig ? "empresa" : "equipe");
   const [e, setE] = useState(empresa);
   const [f, setF] = useState(fiscal);
-  const [novoOp, setNovoOp] = useState({ nome: "", email: "", senha: "" });
+  const [novoOp, setNovoOp] = useState({ nome: "", email: "", senha: "", papel: "operador" });
   const [senha, setSenha] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
+  const [modalSqlSupabase, setModalSqlSupabase] = useState(false);
+  const sqlConsolidado = gerarSqlConsolidadoSupabaseNk();
+
+  function baixarArquivoSqlConsolidado() {
+    const blob = new Blob([sqlConsolidado], { type: "application/sql;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ATUALIZAR_SUPABASE_AGORA.sql";
+    a.click();
+    URL.revokeObjectURL(url);
+    toast("Arquivo ATUALIZAR_SUPABASE_AGORA.sql baixado.", "ok");
+  }
+
+  async function copiarSqlConsolidado() {
+    try {
+      await navigator.clipboard.writeText(sqlConsolidado);
+      toast("SQL completo copiado! Cole no SQL Editor do Supabase e clique em Run.", "ok");
+    } catch {
+      setModalSqlSupabase(true);
+    }
+  }
 
   return (
     <>
@@ -156,7 +189,7 @@ export function ConfigView({
           </div>
           <div className="mt-4 flex justify-end">
             <Button
-              disabled={ocupado}
+              disabled={ocupado || !podeConfig}
               onClick={async () => {
                 setOcupado(true);
                 const r = await salvarEmpresa(e);
@@ -222,7 +255,7 @@ export function ConfigView({
             </div>
             <div className="mt-3 flex justify-end">
               <Button
-                disabled={ocupado}
+                disabled={ocupado || !podeConfig}
                 onClick={async () => {
                   setOcupado(true);
                   const r = await salvarFiscal(f);
@@ -252,17 +285,22 @@ export function ConfigView({
               <div className="rounded-lg border border-dashed border-ink-200 bg-ink-50/50 p-3">
                 <p className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-700">
                   <Icon name="cadeado" className="size-3.5 text-way-600" />
-                  Upload do .pfx
+                  Upload seguro do .pfx e captura DF-e
                 </p>
                 <p className="mt-1 text-[11.5px] leading-snug text-ink-400">
-                  O arquivo e a senha não são armazenados aqui: no roteiro do repositório eles vão para o bucket privado
-                  <b> certificados-a1</b> e o worker mTLS usa <b>DFE_SECRET</b>. Siga supabase/DFE_ROTEIRO_CONFIG.md (fases 3 a 8).
+                  Envie o arquivo <b>.pfx/.p12</b> e gerencie o worker mTLS, o bucket privado <b>certificados-a1</b> (ou cofre
+                  AES-256-GCM) e as NF-e recebidas no painel dedicado de DF-e.
                 </p>
-                <p className="mt-2">
+                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
                   <Badge tom={f.certificadoValidade && new Date(f.certificadoValidade) < new Date() ? "erro" : "ok"}>
                     {f.certificadoValidade ? `validade registrada: ${dataBR(f.certificadoValidade)}` : "nenhum certificado registrado"}
                   </Badge>
-                </p>
+                  <Link href="/dfe">
+                    <Button tamanho="sm" variante="secundario" icone="cadeado">
+                      Abrir DF-e e Certificado A1 →
+                    </Button>
+                  </Link>
+                </div>
               </div>
             </div>
           </Card>
@@ -270,94 +308,62 @@ export function ConfigView({
       )}
 
       {aba === "plano" && (
-        <div className="space-y-4">
-          <Card>
-            <CardTitulo
-              titulo={`Plano atual: ${plano.nome}`}
-              descricao={`limites em uso — ${ambiente.produtosAtivos}/${plano.limiteProdutos} produtos ativos · ${equipe.length}/${plano.limiteUsuarios} acesso(s)`}
-              icone="raio"
-              acao={<Badge tom={plano.preco > 0 ? "ok" : "neutro"}>{plano.preco > 0 ? `${moeda(plano.preco)}/mês` : "gratuito"}</Badge>}
-            />
-            <div className="grid gap-3 md:grid-cols-3">
-              {PLANOS_CFG.map((p) => {
-                const atual = p.id === plano.id;
-                return (
-                  <div key={p.id} className={cn("rounded-xl border p-3.5 transition", atual ? "border-way-300 bg-way-50/60 ring-1 ring-way-100" : "border-ink-100 bg-white")}>
-                    <p className="text-[13.5px] font-bold text-ink-900">{p.nome}</p>
-                    <p className="tabular mt-0.5 text-[22px] font-black leading-none text-ink-900">
-                      {p.preco === 0 ? "R$ 0" : moeda(p.preco)}
-                      <span className="text-[11px] font-semibold text-ink-400">/mês</span>
-                    </p>
-                    <ul className="mt-2.5 space-y-1 text-[11.5px] text-ink-500">
-                      {p.recursos.map((r) => (
-                        <li key={r} className="flex items-start gap-1.5">
-                          <Icon name="check" className="mt-0.5 size-3 shrink-0 text-way-600" strokeWidth={2.6} />
-                          {r}
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="mt-2 text-[10.5px] text-ink-400">
-                      até {p.limiteProdutos.toLocaleString("pt-BR")} produtos · {p.limiteUsuarios} terminal(is)
-                    </p>
-                    <Button
-                      className="mt-3 w-full"
-                      variante={atual ? "secundario" : "primario"}
-                      disabled={atual || ocupado}
-                      onClick={async () => {
-                        setOcupado(true);
-                        const r = await alterarPlano(p.id);
-                        setOcupado(false);
-                        toast(r.ok ? (r.aviso ?? "Plano atualizado.") : r.erro, r.ok ? "ok" : "erro");
-                      }}
-                    >
-                      {atual ? "Plano ativo" : p.preco === 0 ? "Voltar ao gratuito" : "Assinar"}
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
-            <p className="mt-3 text-[11.5px] leading-snug text-ink-400">
-              A cobrança recorrente é simulada neste ambiente. Para produção, integre o gateway de assinatura (recorrência por CNPJ) e
-              mantenha o bloqueio por limites de produtos/terminais — a estrutura de planos já está no banco (nk_empresa.plano).
-            </p>
-          </Card>
-        </div>
+        <PainelAssinatura dados={assinatura} usuarioPapel={usuarioPapel} mostrarCabecalho={false} />
       )}
 
       {aba === "equipe" && (
         <div className="grid gap-4 lg:grid-cols-2">
           <Card padding={false}>
             <div className="p-4 pb-2">
-              <CardTitulo titulo="Acessos da empresa" descricao="Cada operador entra com e-mail e senha próprios — o caixa fica registrado na nota" icone="pessoas" />
+              <CardTitulo
+                titulo="Acessos da empresa"
+                descricao="Perfis Administrador, Operador e Vendedor com trilha de auditoria"
+                icone="pessoas"
+                acao={
+                  <Link href="/usuarios">
+                    <Button tamanho="sm" variante="secundario">
+                      Usuários e auditoria →
+                    </Button>
+                  </Link>
+                }
+              />
             </div>
             <ul className="divide-y divide-ink-50">
-              {equipe.map((u) => (
+              {equipe.map((u) => {
+                const perfil = normalizarPerfil(u.papel);
+                const info = ROTULO_PERFIL[perfil];
+                const ativo = u.ativo !== false;
+                return (
                 <li key={u.id} className="flex items-center gap-3 px-4 py-2.5">
                   <span className="grid size-8 place-items-center rounded-lg bg-ink-100 text-[12px] font-bold text-ink-600">{u.nome.slice(0, 2).toUpperCase()}</span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[12.5px] font-semibold text-ink-900">{u.nome}</p>
                     <p className="truncate text-[11px] text-ink-400">{u.email}</p>
                   </div>
-                  <Badge tom={u.papel === "owner" ? "ok" : "neutro"}>{u.papel === "owner" ? "proprietário" : "operador"}</Badge>
-                  {u.id !== usuarioAtual && (
+                  <Badge tom={info.tom}>{info.nome}</Badge>
+                  {!ativo && <Badge tom="erro">Inativo</Badge>}
+                  {podeUsuarios && u.id !== usuarioAtual && ativo && (
                     <button
                       type="button"
+                      title="Desativar usuário"
                       onClick={async () => {
                         const r = await removerOperador(u.id);
-                        toast(r.ok ? "Acesso removido." : r.erro, r.ok ? "ok" : "erro");
+                        toast(r.ok ? (r.aviso ?? "Usuário desativado.") : r.erro, r.ok ? "ok" : "erro");
                       }}
                       className="rounded-md p-1 text-ink-300 hover:bg-rose-50 hover:text-rose-600"
                     >
-                      <Icon name="lixo" className="size-4" />
+                      <Icon name="x" className="size-4" />
                     </button>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </Card>
           <Card>
-            <CardTitulo titulo="Novo operador" descricao="Liberar um terminal de caixa" icone="mais" />
+            <CardTitulo titulo="Novo usuário" descricao="Liberar acesso por perfil (Administrador, Operador ou Vendedor)" icone="mais" />
             {erro && <p className="mb-2 rounded-lg bg-rose-50 px-2.5 py-2 text-[12px] font-medium text-rose-700">{erro}</p>}
+            {podeUsuarios ? (
             <div className="space-y-3">
               <Campo rotulo="Nome">
                 <Input valor={novoOp.nome} aoMudar={(v) => setNovoOp({ ...novoOp, nome: v })} placeholder="Caixa 2" />
@@ -365,9 +371,18 @@ export function ConfigView({
               <Campo rotulo="E-mail" obrigatorio>
                 <Input valor={novoOp.email} aoMudar={(v) => setNovoOp({ ...novoOp, email: v })} placeholder="caixa2@loja.com.br" />
               </Campo>
-              <Campo rotulo="Senha inicial" obrigatorio>
-                <Input type="password" valor={novoOp.senha} aoMudar={(v) => setNovoOp({ ...novoOp, senha: v })} />
-              </Campo>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Campo rotulo="Perfil" obrigatorio>
+                  <Select
+                    valor={novoOp.papel}
+                    aoMudar={(v) => setNovoOp({ ...novoOp, papel: v })}
+                    opcoes={PERFIS_USUARIO.map((p) => ({ valor: p, rotulo: ROTULO_PERFIL[p].nome }))}
+                  />
+                </Campo>
+                <Campo rotulo="Senha inicial" obrigatorio>
+                  <Input type="password" valor={novoOp.senha} aoMudar={(v) => setNovoOp({ ...novoOp, senha: v })} />
+                </Campo>
+              </div>
               <Button
                 className="w-full"
                 disabled={ocupado}
@@ -377,13 +392,18 @@ export function ConfigView({
                   const r = await criarOperador(novoOp);
                   setOcupado(false);
                   if (!r.ok) return setErro(r.erro);
-                  toast(r.aviso ?? "Operador criado.");
-                  setNovoOp({ nome: "", email: "", senha: "" });
+                  toast(r.aviso ?? "Usuário criado.");
+                  setNovoOp({ nome: "", email: "", senha: "", papel: "operador" });
                 }}
               >
                 Criar acesso
               </Button>
             </div>
+            ) : (
+              <p className="rounded-lg bg-ink-50 p-3 text-[12px] text-ink-500">
+                Apenas Administradores podem cadastrar novos usuários ou alterar perfis. Você pode alterar sua própria senha abaixo.
+              </p>
+            )}
             <div className="mt-4 border-t border-ink-100 pt-3">
               <Campo rotulo="Sua senha de acesso">
                 <div className="flex gap-2">
@@ -408,6 +428,52 @@ export function ConfigView({
 
       {aba === "ambiente" && (
         <div className="space-y-4">
+          {podeConfig && (
+            <Card>
+              <CardTitulo
+                titulo="Script SQL único para atualizar o Supabase (novas tabelas e colunas nk_*)"
+                descricao="Reúne em 1 só arquivo idempotente: Auditoria, Caixa, XML de Vendas, Assinatura CNPJ e Emissor SEFAZ 4.00"
+                icone="baixar"
+                acao={
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button tamanho="sm" variante="secundario" onClick={() => setModalSqlSupabase(true)}>
+                      Ver SQL
+                    </Button>
+                    <Button tamanho="sm" variante="suave" onClick={() => void copiarSqlConsolidado()}>
+                      Copiar SQL
+                    </Button>
+                    <Button tamanho="sm" icone="baixar" onClick={baixarArquivoSqlConsolidado}>
+                      Baixar .sql único
+                    </Button>
+                  </div>
+                }
+              />
+              <p className="text-[12px] text-ink-500">
+                Também salvo no projeto em <code className="font-mono font-semibold text-ink-700">supabase/ATUALIZAR_SUPABASE_AGORA.sql</code> e{" "}
+                <code className="font-mono font-semibold text-ink-700">supabase/migrations/20261104_consolidado_todas_fases.sql</code>. Usa{" "}
+                <code className="font-mono">IF NOT EXISTS</code> (pode rodar com segurança mesmo se usuários e caixa já tiverem sido criados).
+              </p>
+            </Card>
+          )}
+          {podeConfig && (
+            <Card>
+              <CardTitulo
+                titulo="Migração planejada do legado → nk_*"
+                descricao="Importador somente-leitura das tabelas antigas sem prefixo (Supabase) ou de arquivo .json de backup do protótipo"
+                icone="entrada"
+                acao={
+                  <Link href="/migracao">
+                    <Button tamanho="sm" icone="entrada">
+                      Abrir assistente de migração →
+                    </Button>
+                  </Link>
+                }
+              />
+              <p className="text-[12px] text-ink-500">
+                Simula antes de gravar (Dry-Run), deduplica cadastros por GTIN/SKU/CPF/CNPJ, preserva 100% das tabelas legadas intactas e registra toda execução na trilha de auditoria.
+              </p>
+            </Card>
+          )}
           <PainelDiagnostico />
           <Card>
             <CardTitulo titulo="Estado dos dados" descricao="Contagens por módulo no tenant atual" icone="carteira" />
@@ -432,6 +498,28 @@ export function ConfigView({
               {"\n"}modo: PostgreSQL (multi-tenant por empresa_id) — o localStorage do protótipo virou fila offline no PDV
             </p>
           </Card>
+
+          <Modal
+            aberto={modalSqlSupabase}
+            aoFechar={() => setModalSqlSupabase(false)}
+            titulo="SQL consolidado para o Supabase (todas as fases)"
+            descricao="Cole no Supabase → SQL Editor → New query e clique em Run"
+            largura="max-w-3xl"
+            rodape={
+              <div className="flex justify-end gap-2">
+                <Button variante="secundario" onClick={() => void copiarSqlConsolidado()}>
+                  Copiar tudo
+                </Button>
+                <Button icone="baixar" onClick={baixarArquivoSqlConsolidado}>
+                  Baixar ATUALIZAR_SUPABASE_AGORA.sql
+                </Button>
+              </div>
+            }
+          >
+            <pre className="max-h-96 overflow-auto rounded-xl bg-ink-900 p-3.5 font-mono text-[11px] leading-relaxed text-ink-100">
+              {sqlConsolidado}
+            </pre>
+          </Modal>
         </div>
       )}
     </>

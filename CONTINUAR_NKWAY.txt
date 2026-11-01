@@ -26,8 +26,8 @@ NÃO REFAZER INFRAESTRUTURA:
 - Primeiro diagnóstico de produção é sempre `https://nkway.vercel.app/api/health`; se estiver ok, não mexer na conexão.
 
 ESTADO DO PRODUTO NO GITHUB:
-- FEITO: diagnóstico; DANFE/DAMDFE + QR; devoluções de compra; inutilização + CC-e; vínculo financeiro por id; filtros avançados; blindagem das server actions.
-- PENDENTE principal: DF-e real (A1 + worker mTLS + bucket privado), assinatura com gateway no lugar da simulação, e migração planejada dos dados legados para `nk_*`.
+- FEITO: diagnóstico (145 testes / 25 módulos); DANFE/DAMDFE + QR; devoluções de compra; inutilização + CC-e; vínculo financeiro por id; filtros avançados; blindagem das server actions; módulo DF-e nativo em `/dfe`; usuários/perfis/permissões/auditoria em `/usuarios`; fechamento de caixa por operador em `/caixa` e `/pdv`; exportação auditada de XML real (individual e lote ZIP) em `/documentos`; assinatura com gateway e recorrência por CNPJ em `/assinatura`; assistente de migração planejada do legado em `/migracao`; emissor fiscal de saída NF-e/NFC-e 4.00 com pré-validação SEFAZ, fila de contingência e webhook em `/emissor` e `/api/fiscal/webhook`.
+- PENDENTE operacional (apenas configuração de chaves externas quando iniciar operação fiscal/comercial live): `AUTH_SECRET`, `ASAAS_API_KEY` + `ASAAS_WEBHOOK_TOKEN`, `DFE_MTLS_WORKER_URL` e `EMISSOR_FISCAL_XML_URL`.
 - Consulte detalhes e ordem exata na seção 6 de `CONTEXTO_ARENA.md`.
 
 ANTES DE EDITAR:

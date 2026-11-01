@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import {
   Abas,
@@ -44,6 +45,7 @@ type ProdutoOpcao = { id: string; nome: string; sku: string; gtin: string; estoq
 type FornecedorOpcao = { id: string; nome: string; cnpj: string; prazoPagDias: number };
 
 const ORIGEM: Record<string, { rotulo: string; tom: "ok" | "info" | "neutro" | "roxo" }> = {
+  dfe: { rotulo: "DF-e SEFAZ", tom: "ok" },
   xml: { rotulo: "XML", tom: "roxo" },
   sefaz: { rotulo: "Chave SEFAZ", tom: "info" },
   manual: { rotulo: "Manual", tom: "neutro" },
@@ -320,11 +322,16 @@ export function EntradasView({
     <>
       <PageHeader
         titulo="Entrada de mercadoria"
-        subtitulo="Importe o XML da SEFAZ, consulte pela chave ou digite a nota — custo médio ponderado e financeiro aplicados no lançamento"
+        subtitulo="Importe via DF-e Nacional, arquivo XML, chave SEFAZ ou digitação manual — custo médio ponderado e financeiro no lançamento"
         acao={
           <>
             <Badge tom={pendentes ? "alerta" : "ok"}>{pendentes} aguardando tratamento</Badge>
             <Badge tom="info">{aguardandoLancamento} prontas para lançar</Badge>
+            <Link href="/dfe">
+              <Button tamanho="sm" variante="secundario" icone="cadeado">
+                DF-e / NF-e recebidas
+              </Button>
+            </Link>
           </>
         }
       />
@@ -358,9 +365,10 @@ export function EntradasView({
             <FiltroMulti
               rotulo="Origem"
               opcoes={[
+                { valor: "dfe", rotulo: "Distribuição DF-e", contagem: entradas.filter((e) => e.origem === "dfe").length },
                 { valor: "xml", rotulo: "XML importado", contagem: entradas.filter((e) => e.origem === "xml").length },
                 { valor: "sefaz", rotulo: "Chave SEFAZ", contagem: entradas.filter((e) => e.origem === "sefaz").length },
-                { valor: "manual", rotulo: "Digiteção manual", contagem: entradas.filter((e) => e.origem === "manual").length },
+                { valor: "manual", rotulo: "Digitação manual", contagem: entradas.filter((e) => e.origem === "manual").length },
               ]}
               selecionados={origens}
               aoAlternar={(v) => setOrigens(alternarItem(origens, v))}

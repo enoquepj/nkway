@@ -7,6 +7,11 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  assinaturaFaturas,
+  assinaturas,
+  auditorias,
+  caixaMovimentos,
+  caixaSessoes,
   clientes,
   contas,
   devolucoes,
@@ -22,6 +27,35 @@ import {
   vendaItens,
   vendas,
 } from "@/db/schema";
+import {
+  calcularPrecoAssinatura,
+  gerarLinhaDigitavelBoleto,
+  gerarPayloadPixEmv,
+  validarCartaoLuhn,
+  validarCnpjAssinatura,
+  validarLinhaDigitavelBoleto,
+  validarPayloadPixEmv,
+} from "@/lib/assinatura";
+import { calcularApuracaoCaixa, calcularConferenciaCaixa } from "@/lib/caixa";
+import { normalizarPerfil, temPermissao } from "@/lib/permissoes";
+import { confereSenha, hashSenha } from "@/lib/session";
+import { extrairEntradasZip, gerarZipBuffer } from "@/lib/zip";
+import {
+  diagnosticarPreValidacaoFiscal,
+  montarPayloadEmissaoFiscal,
+  verificarPrazoLegalCancelamento,
+  type InsumoPreValidacaoFiscal,
+} from "@/lib/emissorFiscal";
+import { ehUuidValido, gerarSqlPermissaoLeituraLegado } from "@/lib/migracaoLegado";
+import { verificarAutenticacaoWebhookAssinatura } from "@/server/assinaturaGateway";
+import { verificarAutenticacaoWebhookFiscal } from "@/server/emissorFiscalCore";
+import { obterXmlRealDaVenda, xmlFiscalArmazenadoValido } from "@/server/exportacaoXmlCore";
+import {
+  extrairPacoteDeObjetoJson,
+  inspecionarFontesLegadas,
+  processarMigracaoLegado,
+  uuidDeterministico,
+} from "@/server/migracaoLegadoCore";
 import {
   PLANOS_CFG,
   classeAcumulado,
@@ -40,9 +74,17 @@ import {
   valorAPrazo,
 } from "@/lib/dominio";
 import { emPeriodo, periodoRelativo } from "@/lib/filtros";
+import { buildSoapConsChNFe, buildSoapDistNsu, padNsu } from "@/lib/dfe";
 import { notaPorChaveDemo, parseNfeXml } from "@/lib/xmlNfe";
 import { qrBits } from "@/lib/qrcode";
 import { proximoNumeroFiscal } from "@/server/dados";
+import {
+  cifrarSegredo,
+  decifrarSegredo,
+  extrairRetornoDist,
+  gerarSoapDemoDist,
+  lerDocumentosDfeFiscal,
+} from "@/server/dfeCore";
 
 export type TesteResultado = {
   id: string;
@@ -247,7 +289,7 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
     db.select().from(devolucoes).where(eq(devolucoes.empresaId, empresaId)),
     db.select().from(inutilizacoes).where(eq(inutilizacoes.empresaId, empresaId)),
     db.select().from(eventosFiscais).where(eq(eventosFiscais.empresaId, empresaId)),
-    db.select({ id: usuarios.id }).from(usuarios).where(eq(usuarios.empresaId, empresaId)),
+    db.select({ id: usuarios.id, papel: usuarios.papel, ativo: usuarios.ativo, senhaHash: usuarios.senhaHash }).from(usuarios).where(eq(usuarios.empresaId, empresaId)),
   ]);
 
   const vendaPorId = new Map(vds.map((v) => [v.id, v]));
@@ -511,6 +553,453 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("fis-7", "Fiscal", "Sem número de nota repetido na mesma série", !notaDuplicada, notaDuplicada ? "duplicidade detectada" : `${notasPorSerie.size} combinação(ões) série/número`);
   ok("fis-8", "Fiscal", "CSC do NFC-e presente quando há cupom emitido", fiscais.filter((v) => v.modelo === "65").length === 0 || !!fiscal.cscId, fiscal.cscId ? `CSC id ${fiscal.cscId}` : "sem NFC-e emitida");
 
+  /* ---------------------------------------- DF-e / Certificado A1 / SEFAZ */
+  const soapTeste = buildSoapDistNsu(empresa?.cnpj ?? "23567891000174", "42", 2);
+  const soapChaveTeste = buildSoapConsChNFe(empresa?.cnpj ?? "23567891000174", "11260304583620000151550010000041011123456780", 2);
+  const soapValido =
+    soapTeste.includes("<cUFAutor>91</cUFAutor>") &&
+    soapTeste.includes("<ultNSU>000000000000042</ultNSU>") &&
+    soapChaveTeste.includes("<consChNFe><chNFe>");
+
+  const retornoDemo = extrairRetornoDist(
+    gerarSoapDemoDist({
+      cnpjDest: empresa?.cnpj ?? "23567891000174",
+      nomeDest: empresa?.nome ?? "EMPRESA TESTE",
+      ufDest: empresa?.uf ?? "RO",
+      ultNsu: "000000000000009",
+      ambiente: 2,
+    }),
+  );
+  const docZipOk =
+    retornoDemo.cStat === "138" &&
+    retornoDemo.ultNSU === "000000000000010" &&
+    retornoDemo.docs.length === 1 &&
+    validarChaveAcesso(retornoDemo.docs[0].chave);
+
+  let cofreOk = false;
+  try {
+    const amostra = "senha-a1-teste-nkway#2026";
+    const cif = cifrarSegredo(amostra);
+    const dec = decifrarSegredo(cif);
+    let adulteradoFalhou = false;
+    try {
+      decifrarSegredo(`${cif.slice(0, -3)}XYZ`);
+    } catch {
+      adulteradoFalhou = true;
+    }
+    cofreOk = dec === amostra && cif !== amostra && adulteradoFalhou;
+  } catch {
+    cofreOk = false;
+  }
+
+  const ultNsuEmp = padNsu(String(fiscal.dfeUltimoNsu ?? "0"));
+  const maxNsuEmp = padNsu(String(fiscal.dfeMaxNsu ?? ultNsuEmp));
+  const nsuOk = /^\d{15}$/.test(ultNsuEmp) && /^\d{15}$/.test(maxNsuEmp) && Number(ultNsuEmp) <= Number(maxNsuEmp);
+
+  const docsDfe = lerDocumentosDfeFiscal(fiscal, false);
+  const chavesDfeRuins = docsDfe.filter((d) => !validarChaveAcesso(d.chave)).length;
+  const entradasIds = new Set(ents.map((e) => e.id));
+  const dfeOrfaos = docsDfe.filter((d) => d.entradaId && !entradasIds.has(d.entradaId)).length;
+  const senhaVazada = Boolean(fiscal.dfeSenhaPlain || fiscal.certificadoSenhaTexto);
+
+  ok("dfe-1", "DF-e", "Envelope SOAP NfeDistDFeInteresse v1.01 (distNSU e consChNFe)", soapValido, "cUFAutor=91 · NSU 15 dígitos", true);
+  ok("dfe-2", "DF-e", "Descompactação docZip (GZIP+Base64) e leitura retDistDFeInt", docZipOk, `cStat ${retornoDemo.cStat} · NSU ${retornoDemo.ultNSU}`, true);
+  ok("dfe-3", "DF-e", "Cofre AES-256-GCM cifra segredo do A1 e rejeita adulteração", cofreOk && !senhaVazada, cofreOk ? "autenticação GCM íntegra" : "falha no cofre", true);
+  ok("dfe-4", "DF-e", "Ponteiro NSU com 15 dígitos e ultNSU ≤ maxNSU", nsuOk, `${ultNsuEmp} / ${maxNsuEmp}`, true);
+  ok("dfe-5", "DF-e", "Documentos DF-e possuem chave de 44 dígitos com DV válido", chavesDfeRuins === 0, chavesDfeRuins ? `${chavesDfeRuins} chave(s) inválida(s)` : `${qtd(docsDfe.length, "documento")} na caixa DF-e`, true);
+  ok("dfe-6", "DF-e", "Documentos DF-e importados apontam para Entrada existente", dfeOrfaos === 0, dfeOrfaos ? `${dfeOrfaos} vínculo(s) órfão(ãos)` : "reconciliação DF-e × Entradas íntegra", true);
+
+  /* ----------------------------------- Fase 1: usuários, perfis e auditoria */
+  const perfisOk =
+    normalizarPerfil("owner") === "administrador" &&
+    normalizarPerfil("administrador") === "administrador" &&
+    normalizarPerfil("operador") === "operador" &&
+    normalizarPerfil("vendedor") === "vendedor";
+
+  const matrizOk =
+    temPermissao("administrador", "usuarios.gerenciar") &&
+    temPermissao("administrador", "caixa.reabrir") &&
+    temPermissao("operador", "pdv.vender") &&
+    temPermissao("operador", "caixa.fechar") &&
+    !temPermissao("operador", "usuarios.gerenciar") &&
+    !temPermissao("operador", "caixa.reabrir") &&
+    temPermissao("vendedor", "dav.criar") &&
+    !temPermissao("vendedor", "pdv.vender") &&
+    !temPermissao("vendedor", "caixa.abrir") &&
+    !temPermissao("vendedor", "documentos.exportar_xml");
+
+  const hashProbe = hashSenha("nkway-probe-2026");
+  const senhasIntegras =
+    confereSenha("nkway-probe-2026", hashProbe) &&
+    !confereSenha("errada", hashProbe) &&
+    equipe.every((u) => /^v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/.test(u.senhaHash));
+
+  const adminsAtivos = equipe.filter((u) => u.ativo !== false && normalizarPerfil(u.papel) === "administrador").length;
+  const auds = await db.select().from(auditorias).where(eq(auditorias.empresaId, empresaId)).limit(200);
+  const audSemVazamento = auds.every(
+    (a) => a.empresaId === empresaId && !JSON.stringify(a.alteracoes ?? {}).includes("senhaHash"),
+  );
+
+  ok("usr-1", "Usuários e Auditoria", "Perfis Administrador, Operador e Vendedor normalizados", perfisOk, "owner compatível com administrador", true);
+  ok("usr-2", "Usuários e Auditoria", "Matriz de permissões separa privilégios por perfil", matrizOk, "admin > operador > vendedor", true);
+  ok("usr-3", "Usuários e Auditoria", "Senhas armazenadas exclusivamente com hash criptográfico salgado", senhasIntegras, `${qtd(equipe.length, "usuário")} com hash v1 íntegro`, true);
+  ok("usr-4", "Usuários e Auditoria", "Empresa mantém ao menos um Administrador ativo", adminsAtivos >= 1, `${qtd(adminsAtivos, "administrador")} ativo(s)`, true);
+  ok("usr-5", "Usuários e Auditoria", "Trilha de auditoria multi-tenant ativa e sanitizada", audSemVazamento, `${qtd(auds.length, "evento")} registrado(s) em nk_auditoria`, true);
+
+  /* ---------------------------------- Fase 2: fechamento de caixa operador */
+  const apuracaoProbe = calcularApuracaoCaixa({
+    saldoInicial: 100,
+    vendas: [
+      { id: "v1", status: "faturado", total: 35, formaPagamento: "dinheiro", pagamentos: [{ forma: "dinheiro", valor: 50 }] }, // troco 15 -> líq 35
+      { id: "v2", status: "faturado", total: 80, formaPagamento: "pix", pagamentos: [{ forma: "pix", valor: 50 }, { forma: "credito", valor: 30 }] },
+      { id: "v3", status: "cancelado", total: 20, formaPagamento: "dinheiro", pagamentos: [{ forma: "dinheiro", valor: 20 }] },
+    ],
+    movimentos: [
+      { id: "m1", tipo: "suprimento", forma: "dinheiro", valor: 25, motivo: "Troco", usuarioNome: "Op", criadoEm: "" },
+      { id: "m2", tipo: "sangria", forma: "dinheiro", valor: 40, motivo: "Cofre", usuarioNome: "Op", criadoEm: "" },
+      { id: "m3", tipo: "estorno", forma: "dinheiro", valor: 20, motivo: "Cancel v3", vendaId: "v3", usuarioNome: "Op", criadoEm: "" },
+    ],
+  });
+  // dinheiro esperado = 100 (ini) + (35 + 20) (vendas brutas) + 25 (supr) - 40 (sangria) - 20 (estorno v3 sem duplicar) = 120
+  const calculoCaixaOk =
+    round2(apuracaoProbe.esperadosMap.dinheiro) === 120 &&
+    round2(apuracaoProbe.esperadosMap.pix) === 50 &&
+    round2(apuracaoProbe.esperadosMap.credito) === 30 &&
+    round2(apuracaoProbe.totalEsperado) === 200;
+
+  const confExata = calcularConferenciaCaixa(apuracaoProbe.esperadosMap, { dinheiro: 120, pix: 50, credito: 30 });
+  const confDivergente = calcularConferenciaCaixa(apuracaoProbe.esperadosMap, { dinheiro: 115, pix: 50, credito: 30 });
+  const conferenciaCaixaOk =
+    !confExata.temDivergencia &&
+    round2(confExata.diferencaTotal) === 0 &&
+    confDivergente.temDivergencia &&
+    round2(confDivergente.diferencaTotal) === -5 &&
+    round2(confDivergente.diferencas.dinheiro) === -5;
+
+  const acessoCaixaOk =
+    !temPermissao("vendedor", "caixa.abrir") &&
+    !temPermissao("vendedor", "caixa.movimentar") &&
+    !temPermissao("vendedor", "caixa.fechar") &&
+    temPermissao("operador", "caixa.abrir") &&
+    temPermissao("operador", "caixa.fechar") &&
+    !temPermissao("operador", "caixa.reabrir") &&
+    !temPermissao("operador", "caixa.ajustar") &&
+    temPermissao("administrador", "caixa.reabrir") &&
+    temPermissao("administrador", "caixa.ajustar");
+
+  const [sessoesCx, movsCx, idxUnicoCx] = await Promise.all([
+    db.select().from(caixaSessoes).where(eq(caixaSessoes.empresaId, empresaId)),
+    db.select().from(caixaMovimentos).where(eq(caixaMovimentos.empresaId, empresaId)),
+    db.execute<{ n: number }>(
+      sql`select count(*)::int as n from pg_indexes where indexname = 'nk_caixa_sessao_operador_aberto_uidx'`,
+    ),
+  ]);
+
+  const abertosPorOp = new Map<string, number>();
+  for (const s of sessoesCx) {
+    if (s.status === "aberto") abertosPorOp.set(s.operadorId, (abertosPorOp.get(s.operadorId) ?? 0) + 1);
+  }
+  const semDuplicidadeAberta = [...abertosPorOp.values()].every((n) => n <= 1) && Number(idxUnicoCx.rows[0]?.n ?? 0) === 1;
+  const fechadosIntegros = sessoesCx
+    .filter((s) => s.status === "fechado")
+    .every(
+      (s) =>
+        Boolean(s.fechadoEm) &&
+        (Math.abs(Number(s.diferencaTotal)) < 0.01 || String(s.justificativaFechamento ?? "").trim().length >= 10),
+    );
+  const sessaoIdsSet = new Set(sessoesCx.map((s) => s.id));
+  const movsCxIntegros = movsCx.every((m) => sessaoIdsSet.has(m.sessaoId) && Number(m.valor) >= 0);
+
+  ok("cx-1", "Caixa por Operador", "Apuração calcula inicial, vendas líquidas de troco, suprimentos, sangrias e estornos", calculoCaixaOk, `esperado R$ ${apuracaoProbe.totalEsperado.toFixed(2)} (dinheiro R$ 120,00)`, true);
+  ok("cx-2", "Caixa por Operador", "Conferência apura diferenças por forma e sinaliza divergência", conferenciaCaixaOk, "batido R$ 0,00 vs falta -R$ 5,00", true);
+  ok("cx-3", "Caixa por Operador", "Permissões do caixa restringem reabertura e ajuste ao Administrador", acessoCaixaOk, "reabrir/ajustar bloqueados p/ operador e vendedor", true);
+  ok("cx-4", "Caixa por Operador", "Índice único impede dois caixas abertos por operador e valida fechamentos", semDuplicidadeAberta && fechadosIntegros, `${qtd(sessoesCx.length, "sessão")} · índice parcial ativo`, true);
+  ok("cx-5", "Caixa por Operador", "Movimentações de caixa vinculadas a sessões válidas do tenant", movsCxIntegros, `${qtd(movsCx.length, "movimentação")} auditável(is)`, true);
+
+  /* ------------------------------------- Fase 3: exportação de XML vendas */
+  const permXmlOk =
+    temPermissao("administrador", "documentos.exportar_xml") &&
+    temPermissao("operador", "documentos.exportar_xml") &&
+    !temPermissao("vendedor", "documentos.exportar_xml");
+
+  const semXmlFicticioFiscal = await obterXmlRealDaVenda({
+    id: "00000000-0000-0000-0000-000000000001",
+    empresaId,
+    tipo: "fiscal",
+    chave: null,
+    xmlFiscal: null,
+  });
+  const semXmlDav = await obterXmlRealDaVenda({
+    id: "00000000-0000-0000-0000-000000000002",
+    empresaId,
+    tipo: "dav",
+    chave: null,
+    xmlFiscal: XML_TESTE,
+  });
+  const comXmlArmazenado = await obterXmlRealDaVenda({
+    id: "00000000-0000-0000-0000-000000000003",
+    empresaId,
+    tipo: "fiscal",
+    chave: "11220404583620000151550010000104111010411100",
+    xmlFiscal: XML_TESTE,
+  });
+  const regraSemFicticioOk = semXmlFicticioFiscal === null && semXmlDav === null && comXmlArmazenado === XML_TESTE.trim();
+
+  const zipLote = gerarZipBuffer([
+    { nome: "NFe-001.xml", conteudo: XML_TESTE },
+    { nome: "NFCe-002.xml", conteudo: `<nfeProc versao="4.00"><NFe><infNFe Id="NFe002"/></NFe></nfeProc>` },
+  ]);
+  const extraidosZip = extrairEntradasZip(zipLote);
+  const zipIntegro =
+    zipLote.readUInt32LE(0) === 0x04034b50 &&
+    extraidosZip.length === 2 &&
+    extraidosZip.every((e) => e.crcOk) &&
+    extraidosZip[0].nome === "NFe-001.xml" &&
+    extraidosZip[0].texto.includes("DISTRIBUIDORA NORTE SUL LTDA");
+
+  const vendasComXml = vds.filter((v) => v.xmlFiscal != null && String(v.xmlFiscal).trim() !== "");
+  const xmlBancoIntegro = vendasComXml.every((v) => v.tipo === "fiscal" && xmlFiscalArmazenadoValido(v.xmlFiscal));
+
+  ok("xmlv-1", "Exportação XML", "Permissão documentos.exportar_xml liberada p/ Admin e Operador e negada p/ Vendedor", permXmlOk, "validação backend + UI", true);
+  ok("xmlv-2", "Exportação XML", "Exportador jamais gera XML fictício quando documento não possui XML armazenado", regraSemFicticioOk, "retorna null p/ DAV e nota s/ xml_fiscal", true);
+  ok("xmlv-3", "Exportação XML", "Lote de múltiplos XMLs gera pacote ZIP com Deflate e CRC-32 íntegros", zipIntegro, `${extraidosZip.length} arquivos verificados no ZIP (${zipLote.length} bytes)`, true);
+  ok("xmlv-4", "Exportação XML", "Coluna xml_fiscal íntegra em nk_venda (nenhum DAV ou XML malformado)", xmlBancoIntegro, `${qtd(vendasComXml.length, "venda")} com XML real armazenado`, true);
+
+  /* ------------------------------ Item 6: assinatura recorrente por CNPJ */
+  const cnpjAssValido = validarCnpjAssinatura(empresa?.cnpj ?? "23.567.891/0001-74").ok;
+  const cnpjAssInvalido = !validarCnpjAssinatura("11.111.111/1111-11").ok;
+  const calcMensal = calcularPrecoAssinatura("me", "mensal");
+  const calcAnual = calcularPrecoAssinatura("me", "anual");
+  const calculoAssOk =
+    cnpjAssValido &&
+    cnpjAssInvalido &&
+    round2(calcMensal.valorCiclo) === 49.9 &&
+    round2(calcAnual.mensalEquivalente) === 39.92 &&
+    round2(calcAnual.valorCiclo) === round2(39.92 * 12) &&
+    calcAnual.economiaAnual > 0;
+
+  const pixEmvProbe = gerarPayloadPixEmv({
+    valor: 49.9,
+    cidade: "JI PARANA",
+    txid: "NKWAYTESTE01",
+  });
+  let pixQrCompativel = false;
+  try {
+    pixQrCompativel = pixEmvProbe.length <= 134 && qrBits(pixEmvProbe, "L").length >= 21;
+  } catch {
+    pixQrCompativel = false;
+  }
+  const pixAssOk = validarPayloadPixEmv(pixEmvProbe) && !validarPayloadPixEmv(`${pixEmvProbe.slice(0, -1)}0`) && pixQrCompativel;
+
+  const boletoProbe = gerarLinhaDigitavelBoleto({
+    valor: 99.9,
+    vencimentoIso: "2026-11-15",
+    nossoNumero: 12345,
+  });
+  const boletoAssOk =
+    validarLinhaDigitavelBoleto(boletoProbe) &&
+    !validarLinhaDigitavelBoleto(`${boletoProbe.slice(0, 6)}9${boletoProbe.slice(7)}`);
+
+  const [assContratos, assFaturas] = await Promise.all([
+    db.select().from(assinaturas).where(eq(assinaturas.empresaId, empresaId)),
+    db.select().from(assinaturaFaturas).where(eq(assinaturaFaturas.empresaId, empresaId)),
+  ]);
+  const semPanSalvo = assContratos.every((a) => String(a.cartaoUltimos4 ?? "").length <= 4 && validarCnpj(a.cnpj));
+  const luhnOk = validarCartaoLuhn("4532015112830366") && !validarCartaoLuhn("4532015112830367") && semPanSalvo;
+
+  const assAtivasCount = assContratos.filter((a) => a.status !== "cancelada").length;
+  const faturasIntegras = assFaturas.every((f) => Number(f.valor) >= 0 && validarCnpj(f.cnpj));
+
+  const webhookSemCredencial = verificarAutenticacaoWebhookAssinatura({
+    corpoBruto: '{"event":"PAYMENT_CONFIRMED"}',
+    asaasTokenHeader: "",
+    assinaturaHmacHeader: "",
+    authorizationHeader: "",
+  });
+
+  ok("ass-1", "Assinatura CNPJ", "Recorrência exige CNPJ com DV real e calcula ciclo anual com -20%", calculoAssOk, `mensal R$ ${calcMensal.valorCiclo.toFixed(2)} · anual R$ ${calcAnual.valorCiclo.toFixed(2)}`, true);
+  ok("ass-2", "Assinatura CNPJ", "Payload PIX EMV gera CRC-16/CCITT válido e cabe no QR Code SVG", pixAssOk, `${pixEmvProbe.length} bytes · CRC ${pixEmvProbe.slice(-4)}`, true);
+  ok("ass-3", "Assinatura CNPJ", "Boleto registrado gera linha digitável FEBRABAN de 47 dígitos válida", boletoAssOk, `${soDigitos(boletoProbe).length} dígitos (Mod-10 e Mod-11)`, true);
+  ok("ass-4", "Assinatura CNPJ", "Validação Luhn de cartão ativa e nenhum PAN/CVV armazenado no banco", luhnOk, "somente bandeira e 4 últimos dígitos", true);
+  ok("ass-5", "Assinatura CNPJ", "Tabelas nk_assinatura e nk_assinatura_fatura íntegras por tenant", assAtivasCount <= 1 && faturasIntegras, `${qtd(assContratos.length, "contrato")} · ${qtd(assFaturas.length, "fatura")}`, true);
+  ok("ass-6", "Assinatura CNPJ", "Webhook de faturamento rejeita chamadas sem assinatura HMAC ou token", !webhookSemCredencial, "POST /api/assinatura/webhook protegido (401)", true);
+
+  /* ----------------------- Migração planejada do legado → nk_* (dry-run) */
+  const uDet1 = uuidDeterministico(empresaId, "produto", "p-leg-01");
+  const uDet2 = uuidDeterministico(empresaId, "produto", "p-leg-01");
+  const uDetOutroTenant = uuidDeterministico("00000000-0000-0000-0000-000000000099", "produto", "p-leg-01");
+  const uuidDetOk = ehUuidValido(uDet1) && uDet1 === uDet2 && uDet1 !== uDetOutroTenant;
+
+  const sqlLegado = gerarSqlPermissaoLeituraLegado().toLowerCase();
+  const sqlSomenteLeituraOk =
+    sqlLegado.includes("grant select") &&
+    !sqlLegado.includes("drop ") &&
+    !sqlLegado.includes("delete ") &&
+    !sqlLegado.includes("truncate ");
+
+  const inspecaoLeg = await inspecionarFontesLegadas(empresaId);
+  const inspecaoLegOk = inspecaoLeg.tabelas.length === 10 && inspecaoLeg.tabelasAcessiveis <= inspecaoLeg.tabelasPresentes;
+
+  const prodExistente = prods[0];
+  const pacoteProbe = extrairPacoteDeObjetoJson(
+    {
+      produtos: [
+        // 1 existente (deve ser detectado como já existente e ignorado)
+        ...(prodExistente
+          ? [{ id: "old-exist", nome: prodExistente.nome, sku: prodExistente.sku, custo: Number(prodExistente.custo), preco: Number(prodExistente.preco), estoque: 5 }]
+          : []),
+        // 1 novo com GTIN inválido e preço abaixo do custo (deve ser contado como novo + saneado)
+        { id: "old-novo-probe", nome: "PRODUTO SONDA MIGRACAO LEGADO 991", sku: "LEG-SONDA-991", gtin: "12345", custo: 20, preco: 15, estoque: 3 },
+      ],
+      clientes: [{ id: "cli-sonda-1", nome: "CLIENTE SONDA LEGADO 991", documento: "111.111.111-11" }],
+      lancamentos: [{ id: "l-sonda-1", descricao: "TITULO SONDA LEGADO", valor: 89.5, tipo: "receber", vencimento: "2026-12-10", pago: false }],
+    },
+    { nome: empresa?.nome ?? "EMPRESA", cnpj: empresa?.cnpj ?? "" },
+  );
+
+  const qtProdsAntes = prods.length;
+  const simProbe = await processarMigracaoLegado({
+    empresaId,
+    fonte: "json",
+    pacote: pacoteProbe,
+    aplicar: false,
+    silenciarAuditoria: true,
+    usuario: { id: usuarioId, nome: "Diagnóstico", papel: "administrador" },
+  });
+  const [qtProdsDepoisRow] = await db
+    .select({ n: sql<string>`count(*)` })
+    .from(produtos)
+    .where(eq(produtos.empresaId, empresaId));
+  const dryRunSemEscrita = Number(qtProdsDepoisRow?.n ?? 0) === qtProdsAntes;
+  const modProdSim = simProbe.plano.modulos.find((m) => m.modulo === "produtos");
+  const deduplicacaoSaneamentoOk =
+    Boolean(modProdSim) &&
+    modProdSim!.novos === 1 &&
+    (prodExistente ? modProdSim!.ignoradosExistentes === 1 : true) &&
+    modProdSim!.saneados >= 2;
+
+  ok("mig-1", "Migração Legado", "Mapeador gera UUID v5 determinístico isolado por empresa_id", uuidDetOk, `${uDet1.slice(0, 18)}…`, true);
+  ok("mig-2", "Migração Legado", "SQL auxiliar concede exclusivamente GRANT SELECT sem comandos destrutivos", sqlSomenteLeituraOk, "zero DROP/DELETE/TRUNCATE", true);
+  ok("mig-3", "Migração Legado", "Inspetor verifica as 10 tabelas legadas sem alterar o schema antigo", inspecaoLegOk, `${inspecaoLeg.tabelasPresentes}/10 presentes · ${inspecaoLeg.tabelasAcessiveis} legíveis`, true);
+  ok("mig-4", "Migração Legado", "Simulação (Dry-Run) deduplica existentes e saneia GTIN/preço/CPF inválidos", deduplicacaoSaneamentoOk, `${simProbe.plano.totalNovos} novo(s) · ${simProbe.plano.totalIgnorados} existente(s) · ${simProbe.plano.totalAvisos} saneado(s)`, true);
+  ok("mig-5", "Migração Legado", "Modo Dry-Run garante zero escrita nas tabelas nk_*", dryRunSemEscrita, `nk_produto permaneceu com ${qtProdsAntes} itens`, true);
+
+  /* -------------------------- Emissor SEFAZ 4.00, Pré-Validação e Webhook */
+  const insumoBaseProbe: InsumoPreValidacaoFiscal = {
+    ambiente: 2,
+    modelo: "NFC-e",
+    serie: "1",
+    numeroNota: 101,
+    chave: null,
+    emitente: {
+      nome: empresa?.nome ?? "COMERCIAL SAO JORGE LTDA",
+      fantasia: empresa?.nomeFantasia ?? "Mercado Sao Jorge",
+      cnpj: empresa?.cnpj ?? "23.567.891/0001-74",
+      ie: "0000000000",
+      uf: "RO",
+      municipio: "Ji-Paraná",
+      codMunicipio: "1100866",
+      endereco: "Av. Transcontinental",
+      numero: "2450",
+      bairro: "Centro",
+      cep: "76900004",
+      crt: 1,
+      cscId: "000001",
+      cscToken: "TOKEN-CSC",
+      certificadoValidade: "2028-12-31",
+    },
+    destinatario: {
+      identificado: false,
+      nome: "CONSUMIDOR",
+      documento: "",
+      uf: "RO",
+      cidade: "Ji-Paraná",
+      cep: "",
+      logradouro: "",
+      numero: "",
+      bairro: "",
+      indIe: "9",
+    },
+    itens: [
+      {
+        numeroItem: 1,
+        sku: "NK0001",
+        nome: "ARROZ TIPO 1 5KG",
+        ncm: "00000000",
+        cfop: "5102",
+        csosn: "102",
+        gtin: "SEM GTIN",
+        unidade: "PC",
+        qtd: 2,
+        precoUnit: 30,
+        total: 60,
+        icmsAliq: 0,
+        pisAliq: 0,
+        cofinsAliq: 0,
+        ibsAliq: 0.1,
+        cbsAliq: 0.9,
+      },
+    ],
+    totais: { subtotal: 60, desconto: 0, frete: 0, total: 60 },
+    pagamentos: [{ forma: "dinheiro", valor: 100 }],
+  };
+
+  // Regras de destinatário: NF-e 55 sem documento (cStat 208) e NFC-e >= 10.000 sem documento (cStat 750)
+  const valNfeSemDest = diagnosticarPreValidacaoFiscal({ ...insumoBaseProbe, modelo: "NF-e" });
+  const valNfce10kSemDest = diagnosticarPreValidacaoFiscal({
+    ...insumoBaseProbe,
+    itens: [{ ...insumoBaseProbe.itens[0], qtd: 1, precoUnit: 10500, total: 10500 }],
+    totais: { subtotal: 10500, desconto: 0, frete: 0, total: 10500 },
+    pagamentos: [{ forma: "pix", valor: 10500 }],
+  });
+  const regrasDestOk =
+    !valNfeSemDest.aprovada &&
+    valNfeSemDest.bloqueios.some((b) => b.codigoSefaz === "208") &&
+    !valNfce10kSemDest.aprovada &&
+    valNfce10kSemDest.bloqueios.some((b) => b.codigoSefaz === "750");
+
+  // NCM 00000000: alerta em Homologação (amb 2), bloqueio em Produção (amb 1)
+  const valHomologNcm = diagnosticarPreValidacaoFiscal(insumoBaseProbe);
+  const valProdNcm = diagnosticarPreValidacaoFiscal({ ...insumoBaseProbe, ambiente: 1 });
+  const regrasNcmAmbOk =
+    valHomologNcm.aprovada &&
+    valHomologNcm.alertas.some((a) => a.codigoSefaz === "778") &&
+    !valProdNcm.aprovada &&
+    valProdNcm.bloqueios.some((b) => b.codigoSefaz === "778");
+
+  // Payload 4.00 com Reforma Tributária (IBS 0.1% / CBS 0.9%), tPag 01 e troco R$ 40,00
+  const payload400 = montarPayloadEmissaoFiscal(insumoBaseProbe, "ref-probe-101");
+  const payload400Ok =
+    payload400.versaoLayout === "4.00" &&
+    payload400.pagamentos[0]?.meioPagamentoSefaz === "01" &&
+    round2(payload400.totais.valorTroco) === 40 &&
+    round2(payload400.itens[0]?.impostos.reformaTributaria2026.valorIbsEstimado ?? -1) === 0.06 &&
+    round2(payload400.itens[0]?.impostos.reformaTributaria2026.valorCbsEstimado ?? -1) === 0.54;
+
+  // Janela legal de cancelamento: 30 min NFC-e vs 24 h NF-e
+  const baseMs = 1_700_000_000_000;
+  const cancNfce45m = verificarPrazoLegalCancelamento({ modelo: "NFC-e", autorizadaEm: baseMs, agoraMs: baseMs + 45 * 60_000 });
+  const cancNfe45m = verificarPrazoLegalCancelamento({ modelo: "NF-e", autorizadaEm: baseMs, agoraMs: baseMs + 45 * 60_000 });
+  const cancNfe25h = verificarPrazoLegalCancelamento({ modelo: "NF-e", autorizadaEm: baseMs, agoraMs: baseMs + 25 * 60 * 60_000 });
+  const prazoCancOk = !cancNfce45m.dentroDoPrazo && cancNfe45m.dentroDoPrazo && !cancNfe25h.dentroDoPrazo;
+
+  const whFiscalNegado = verificarAutenticacaoWebhookFiscal({
+    corpoBruto: '{"status":"autorizado"}',
+    tokenHeader: "",
+    assinaturaHmacHeader: "",
+    authorizationHeader: "",
+  });
+
+  const statusSefazPermitidos = new Set(["simulado", "pendente_envio", "contingencia", "autorizada", "rejeitada", "cancelada_sefaz"]);
+  const statusFiscaisOk = fiscais.every((v) => !v.statusSefaz || statusSefazPermitidos.has(v.statusSefaz));
+
+  ok("emi-1", "Emissor SEFAZ 4.00", "Pré-validador barra NF-e sem destinatário (208) e NFC-e ≥ R$ 10 mil sem CPF/CNPJ (750)", regrasDestOk, "cStat 208 e 750 validados", true);
+  ok("emi-2", "Emissor SEFAZ 4.00", "NCM 00000000 gera alerta em Homologação e bloqueio cStat 778 em Produção", regrasNcmAmbOk, "separação estrita amb 1 vs amb 2", true);
+  ok("emi-3", "Emissor SEFAZ 4.00", "Payload 4.00 calcula tPag SEFAZ, troco e IBS/CBS da Reforma Tributária", payload400Ok, `tPag 01 · troco R$ 40,00 · IBS+CBS R$ 0,60`, true);
+  ok("emi-4", "Emissor SEFAZ 4.00", "Prazo legal de cancelamento distingue 30 min (NFC-e 65) e 24 h (NF-e 55)", prazoCancOk, "evento 110111 dentro do prazo SEFAZ", true);
+  ok("emi-5", "Emissor SEFAZ 4.00", "Webhook de retorno fiscal rejeita chamadas sem HMAC ou token", !whFiscalNegado, "POST /api/fiscal/webhook protegido (401)", true);
+  ok("emi-6", "Emissor SEFAZ 4.00", "Rastreamento status_sefaz e cstat_sefaz íntegro em nk_venda", statusFiscaisOk, `${qtd(fiscais.length, "documento fiscal")} monitorado(s)`, true);
+
   /* ------------------------------------------------------------- ambiente */
   const tabelas = await db.execute<{ n: number }>(sql`select count(*)::int as n from information_schema.tables where table_name like 'nk_%'`);
   const qtTabelas = Number(tabelas.rows[0]?.n ?? 0);
@@ -523,7 +1012,7 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("amb-4", "Ambiente", "Usuário da sessão pertence à empresa", equipe.some((u) => u.id === usuarioId), `${qtd(equipe.length, "acesso")} nesta empresa`, true);
   ok("amb-5", "Ambiente", "Dados suficientes para operar", prods.length > 0 && vds.length > 0, `${qtd(prods.length, "produto")} · ${qtd(vds.length, "documento")} · ${qtd(movs.length, "movimento")}`);
 
-  const ordem = ["Núcleo", "Entrada XML", "Cadastros", "PDV", "Estoque", "Compras", "Devoluções", "Numeração", "Eventos", "Vínculos", "FILTROS", "Financeiro", "MDF-e", "Clientes", "Fornecedores", "Fiscal", "Ambiente"];
+  const ordem = ["Núcleo", "Usuários e Auditoria", "Caixa por Operador", "Exportação XML", "Emissor SEFAZ 4.00", "Assinatura CNPJ", "Migração Legado", "Entrada XML", "DF-e", "Cadastros", "PDV", "Estoque", "Compras", "Devoluções", "Numeração", "Eventos", "Vínculos", "FILTROS", "Financeiro", "MDF-e", "Clientes", "Fornecedores", "Fiscal", "Ambiente"];
   const unicos = [...new Set(r.map((t) => t.modulo))].sort((a, b) => ordem.indexOf(a) - ordem.indexOf(b));
   const falhaCritica = r.some((t) => t.critico && !t.passou);
 

@@ -40,7 +40,7 @@ Navegador
 
 ### Next/Drizzle em produção
 
-Definidas em `src/db/schema.ts`: `nk_empresa`, `nk_usuario`, `nk_produto`, `nk_cliente`, `nk_fornecedor`, `nk_venda`, `nk_venda_item`, `nk_movimento`, `nk_entrada`, `nk_conta`, `nk_mdfe`, `nk_devolucao`, `nk_inutilizacao`, `nk_evento_fiscal`.
+Definidas em `src/db/schema.ts`: `nk_empresa`, `nk_usuario`, `nk_produto`, `nk_cliente`, `nk_fornecedor`, `nk_venda`, `nk_venda_item`, `nk_movimento`, `nk_entrada`, `nk_conta`, `nk_mdfe`, `nk_devolucao`, `nk_inutilizacao`, `nk_evento_fiscal`, `nk_auditoria`, `nk_caixa_sessao`, `nk_caixa_movimento`, `nk_assinatura`, `nk_assinatura_fatura` (migrações SQL aditivas em `supabase/migrations/2026110*.sql` e auto-aplicação idempotente em `src/db/migracao.ts`).
 
 Regras:
 
@@ -48,7 +48,7 @@ Regras:
 2. Não executar `supabase/schema.sql` novamente para a versão Next.
 3. Não rodar `drizzle-kit push --force` sem o filtro `--tablesFilter="nk_*"` no Supabase existente.
 4. Alterações futuras de schema exigem backup, revisão e preservação do legado.
-5. Migração dos dados legados para `nk_*` é tarefa separada e ainda pendente.
+5. Migração planejada dos dados legados para `nk_*` disponível em `/migracao` (somente leitura `SELECT` nas tabelas antigas + simulação Dry-Run + importação idempotente auditada, preservando 100% do legado).
 
 ## 4. Vercel
 
@@ -80,6 +80,8 @@ Login demo (enquanto seed estiver ativo): `demo@nkway.com.br` / `nkway123`.
 
 ## 6. Próximos trabalhos
 
-- Produto: seguir pendências em `CONTEXTO_ARENA.md`, seção 6.
-- Infraestrutura: criar/confirmar `AUTH_SECRET` forte e planejar migração do legado para `nk_*`.
-- DF-e real: usar `supabase/DFE_ROTEIRO_CONFIG.md` (A1, worker mTLS e secrets) sem alterar a conexão normal do ERP.
+- Produto: todas as pendências funcionais da seção 6 de `CONTEXTO_ARENA.md` estão concluídas (incluindo DF-e em `/dfe` e Assinatura com Gateway por CNPJ em `/assinatura`).
+- Infraestrutura: criar/confirmar `AUTH_SECRET` forte; para migrar dados do protótipo antigo, usar o assistente `/migracao` (lê tabelas legadas por CNPJ/e-mail ou arquivo `.json` de backup com simulação Dry-Run antes de gravar).
+- Variáveis opcionais de Assinatura (servidor Vercel, quando ativar cobrança `live`): `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`, `ASAAS_AMBIENTE` (`producao` ou `sandbox`) ou `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` / `BILLING_WEBHOOK_SECRET` (webhook em `/api/assinatura/webhook`; sem elas opera em Sandbox Homologação seguro).
+- Variáveis opcionais do Emissor Fiscal de Saída (`/emissor`, servidor Vercel quando ativar SEFAZ `live`): `EMISSOR_FISCAL_PROVIDER` (`focusnfe` | `nuvemfiscal` | `webhook_custom`), `EMISSOR_FISCAL_URL`, `EMISSOR_FISCAL_TOKEN`, `EMISSOR_WEBHOOK_SECRET` (webhook em `/api/fiscal/webhook`) e opcionalmente `EMISSOR_FISCAL_XML_URL`.
+- Variáveis opcionais do módulo `/dfe` (servidor Vercel, quando ativar SEFAZ `live`): `DFE_SECRET`, `DFE_SEFAZ_MODE` (`demo` ou `live`), `DFE_MTLS_WORKER_URL`, `DFE_MTLS_WORKER_SECRET`, `DFE_CRON_SECRET` (para `/api/dfe/dist`), e opcionalmente `DFE_STORAGE_URL` + `DFE_STORAGE_SERVICE_KEY` (bucket privado `certificados-a1`; sem eles o `.pfx` usa o cofre AES-256-GCM integrado). Nenhuma altera `DATABASE_URL`.

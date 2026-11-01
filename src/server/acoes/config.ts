@@ -4,9 +4,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { empresas, usuarios } from "@/db/schema";
-import { hashSenha } from "@/lib/session";
-import { hojeISO, mascaraDocumento, planoById } from "@/lib/dominio";
-import { comoErro, corpo, numero, tenant, texto } from "@/server/tenant";
+import { mascaraDocumento } from "@/lib/dominio";
+import { normalizarPerfil } from "@/lib/permissoes";
+import { cancelarAssinaturaCnpj, contratarAssinaturaCnpj } from "@/server/acoes/assinatura";
+import { criarUsuario, alternarStatusUsuario } from "@/server/acoes/usuarios";
+import { registrarAuditoria } from "@/server/auditoria";
+import { comoErro, corpo, exigirPermissao, texto } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string } | { ok: false, erro: string };
 
@@ -28,7 +31,7 @@ export async function salvarEmpresa(input: {
   cep: string;
 }): Promise<Resultado> {
   try {
-    const { empresa } = await tenant();
+    const { empresa, usuario } = await exigirPermissao("config.gerenciar");
     input = corpo(input);
     if (texto(input.nome).trim().length < 2) return { ok: false, erro: "Informe a razão social." };
     if (texto(input.cnpj).replace(/\D/g, "").length !== 14) return { ok: false, erro: "CNPJ deve ter 14 dígitos." };
@@ -52,6 +55,15 @@ export async function salvarEmpresa(input: {
         cep: texto(input.cep).replace(/\D/g, ""),
       })
       .where(eq(empresas.id, empresa.id));
+    await registrarAuditoria({
+      empresaId: empresa.id,
+      usuario,
+      acao: "config.empresa",
+      entidade: "empresa",
+      registroId: empresa.id,
+      resumo: `Dados cadastrais da empresa atualizados (${texto(input.nome).trim()})`,
+      alteracoes: { cnpj: mascaraDocumento(texto(input.cnpj).replace(/\D/g, "")), uf: input.uf, regime: input.regime },
+    });
     revalidatePath("/config");
     revalidatePath("/", "layout");
     return { ok: true, aviso: "Dados da empresa atualizados." };
@@ -74,7 +86,7 @@ export async function salvarFiscal(input: {
   certificadoSerial: string;
 }): Promise<Resultado> {
   try {
-    const { empresa } = await tenant();
+    const { empresa, usuario } = await exigirPermissao("config.gerenciar");
     input = corpo(input);
     const anterior = (empresa.fiscal ?? {}) as Record<string, unknown>;
     await db
@@ -96,6 +108,15 @@ export async function salvarFiscal(input: {
         },
       })
       .where(eq(empresas.id, empresa.id));
+    await registrarAuditoria({
+      empresaId: empresa.id,
+      usuario,
+      acao: "config.fiscal",
+      entidade: "empresa",
+      registroId: empresa.id,
+      resumo: `Configuração fiscal atualizada (ambiente ${input.ambiente === 1 ? "Produção" : "Homologação"})`,
+      alteracoes: { ambiente: input.ambiente, serieNfce: input.serieNfce, serieNfe: input.serieNfe },
+    });
     revalidatePath("/config");
     return { ok: true, aviso: "Configuração fiscal salva. O CSC é gravado mascarado no banco." };
   } catch (e) {
@@ -104,51 +125,32 @@ export async function salvarFiscal(input: {
 }
 
 export async function alterarPlano(planoId: string): Promise<Resultado> {
-  try {
-    const { empresa } = await tenant();
-    await db
-      .update(empresas)
-      .set({ plano: planoId, assinaturaPagoEm: planoId === "start" ? null : hojeISO(), trialUntil: planoId === "start" ? empresa.trialUntil : null })
-      .where(eq(empresas.id, empresa.id));
-    revalidatePath("/", "layout");
-    return { ok: true, aviso: "Plano alterado. Cobrança recorrente simulada — integre o gateway em produção." };
-  } catch (e) {
-    return comoErro(e);
+  const pid = texto(planoId);
+  if (!pid) return { ok: false, erro: "Informe o plano desejado." };
+  if (pid === "start") {
+    return cancelarAssinaturaCnpj({
+      motivo: "Retorno ao plano gratuito MEI Start pela tela de configurações",
+      imediato: true,
+    });
   }
+  return contratarAssinaturaCnpj({
+    planoId: pid,
+    ciclo: "mensal",
+    formaPagamento: "pix",
+  });
 }
 
-export async function criarOperador(input: { nome: string; email: string; senha: string }): Promise<Resultado> {
-  try {
-    const { empresaId, empresa } = await tenant();
-    input = corpo(input);
-    const email = texto(input.email).toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(email)) return { ok: false, erro: "E-mail inválido." };
-    if (texto(input.senha).length < 6) return { ok: false, erro: "Senha com no mínimo 6 caracteres." };
-    const [existe] = await db.select({ id: usuarios.id }).from(usuarios).where(eq(usuarios.email, email)).limit(1);
-    if (existe) return { ok: false, erro: "Este e-mail já tem acesso ao NKWAY." };
-    const [qtd] = await db
-      .select({ n: sql<string>`count(*)` })
-      .from(usuarios)
-      .where(eq(usuarios.empresaId, empresaId));
-    const limite = planoById(empresa.plano).limiteUsuarios;
-    if (Number(qtd?.n ?? 0) >= limite)
-      return { ok: false, erro: `O plano ${planoById(empresa.plano).nome} permite ${limite} acesso(s). Faça upgrade para liberar mais terminais.` };
-    await db.insert(usuarios).values({ empresaId, nome: texto(input.nome) || "Operador", email, senhaHash: hashSenha(texto(input.senha)), papel: "operador" });
-    revalidatePath("/config");
-    return { ok: true, aviso: `${texto(input.nome) || "Operador"} pode operar o PDV com este login.` };
-  } catch (e) {
-    return comoErro(e);
-  }
+export async function criarOperador(input: { nome: string; email: string; senha: string; papel?: string }): Promise<Resultado> {
+  const b = corpo<{ nome?: string; email?: string; senha?: string; papel?: string }>(input);
+  return criarUsuario({
+    nome: texto(b.nome) || "Operador",
+    email: texto(b.email),
+    senha: String(b.senha ?? ""),
+    papel: normalizarPerfil(b.papel || "operador"),
+    ativo: true,
+  });
 }
 
 export async function removerOperador(id: string): Promise<Resultado> {
-  try {
-    const { empresaId, usuario } = await tenant();
-    if (usuario.id === id) return { ok: false, erro: "Você não pode remover o próprio acesso." };
-    await db.delete(usuarios).where(and(eq(usuarios.id, id), eq(usuarios.empresaId, empresaId)));
-    revalidatePath("/config");
-    return { ok: true };
-  } catch (e) {
-    return comoErro(e);
-  }
+  return alternarStatusUsuario({ id, ativo: false });
 }

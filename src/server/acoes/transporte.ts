@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { mdfes, vendas } from "@/db/schema";
 import { gerarChave, round2, UF_NUMERO } from "@/lib/dominio";
-import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
+import { comoErro, exigirPermissao, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string } | { ok: false; erro: string };
 
@@ -22,7 +22,7 @@ export async function emitirMdfe(input: {
   chaves: string[];
 }): Promise<Resultado> {
   try {
-    const { empresaId, empresa } = await tenant();
+    const { empresaId, empresa } = await exigirPermissao("fiscal.eventos");
     input = corpo(input);
     if (!/^[A-Z0-9-]{5,10}$/i.test(texto(input.placa).trim())) return { ok: false, erro: "Placa inválida." };
     if (!texto(input.condutor).trim()) return { ok: false, erro: "Informe o condutor do veículo." };
@@ -82,7 +82,7 @@ export async function emitirMdfe(input: {
 
 export async function encerrarMdfe(id: string, kmPercorrido?: number): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("fiscal.eventos");
     const [m] = await db.select({ id: mdfes.id, status: mdfes.status }).from(mdfes).where(and(eq(mdfes.id, id), eq(mdfes.empresaId, empresaId))).limit(1);
     if (!m) return { ok: false, erro: "MDF-e não encontrada." };
     if (m.status !== "autorizado") return { ok: false, erro: "Só é possível encerrar um manifesto em viagem." };
@@ -96,7 +96,8 @@ export async function encerrarMdfe(id: string, kmPercorrido?: number): Promise<R
 
 export async function cancelarMdfe(id: string, motivo: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("fiscal.eventos");
+    motivo = texto(motivo);
     if (!motivo.trim()) return { ok: false, erro: "Descreva o motivo do cancelamento." };
     const [m] = await db.select({ id: mdfes.id, status: mdfes.status }).from(mdfes).where(and(eq(mdfes.id, id), eq(mdfes.empresaId, empresaId))).limit(1);
     if (!m) return { ok: false, erro: "MDF-e não encontrada." };

@@ -1,9 +1,15 @@
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  assinaturaFaturas,
+  assinaturas,
+  auditorias,
+  caixaMovimentos,
+  caixaSessoes,
   clientes,
   contas,
   devolucoes,
+  empresas,
   entradas,
   eventosFiscais,
   fornecedores,
@@ -11,11 +17,20 @@ import {
   mdfes,
   movimentos,
   produtos,
+  usuarios,
   vendaItens,
   vendas,
   type EntradaRow,
 } from "@/db/schema";
-import { round2, situacaoEstoque, type SituacaoEstoque } from "@/lib/dominio";
+import type { CicloAssinatura, FormaAssinatura, StatusAssinatura, StatusFaturaAssinatura } from "@/lib/assinatura";
+import { calcularApuracaoCaixa, type ApuracaoCaixa, type MovimentoCaixaInput } from "@/lib/caixa";
+import { padNsu, type DfePainelDados } from "@/lib/dfe";
+import { diasAteTrial, planoById, round2, situacaoEstoque, soDigitos, validarCnpj, type SituacaoEstoque } from "@/lib/dominio";
+import type { ProvedorEmissorFiscal, StatusSefazVenda } from "@/lib/emissorFiscal";
+import { normalizarPerfil, temPermissao, type PerfilUsuario } from "@/lib/permissoes";
+import { diagnosticoGatewayServidor, type ProvedorGateway } from "@/server/assinaturaGateway";
+import { ambienteDfeServidor, lerDocumentosDfeFiscal } from "@/server/dfeCore";
+import { diagnosticoEmissorServidor } from "@/server/emissorFiscalCore";
 
 const N = (v: unknown, dec = 2) => {
   const f = 10 ** dec;
@@ -211,6 +226,11 @@ export type VendaDto = {
   origem: string;
   clienteId: string | null;
   davOrigemId: string | null;
+  temXml: boolean;
+  statusSefaz: StatusSefazVenda;
+  cstatSefaz: string;
+  motivoSefaz: string;
+  emissorProvedor: ProvedorEmissorFiscal;
   data: string;
   itens: { nome: string; qtd: number; precoUnit: number; total: number; unidade: string | null }[];
   eventos: { id: string; tipo: string; sequencia: number; descricao: string; protocolo: string; em: string }[];
@@ -268,6 +288,13 @@ export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal"
     origem: v.origem ?? "pdv",
     clienteId: v.clienteId,
     davOrigemId: v.davOrigemId,
+    temXml: Boolean(v.xmlFiscal && /<\s*(?:nfeProc|NFe|infNFe|CFe)\b/i.test(v.xmlFiscal)),
+    statusSefaz: (v.status === "cancelado"
+      ? "cancelada_sefaz"
+      : (v.statusSefaz as StatusSefazVenda) || "simulado") as StatusSefazVenda,
+    cstatSefaz: v.cstatSefaz || (v.status === "cancelado" ? "135" : "100"),
+    motivoSefaz: v.motivoSefaz || "",
+    emissorProvedor: ((v.emissorProvedor as ProvedorEmissorFiscal) || "local") as ProvedorEmissorFiscal,
     eventos: (eventosPorVenda.get(v.id) ?? [])
       .sort((a, b) => a.sequencia - b.sequencia)
       .map((e) => ({
@@ -755,4 +782,607 @@ export async function proximoNumeroFiscal(empresaId: string, modelo: string, ser
 
 export async function listarProximoNumero(empresaId: string, modelo = "NFC-e", serie = "1") {
   return proximoNumeroFiscal(empresaId, modelo, serie);
+}
+
+/* ------------------------------------------- DF-e / Certificado A1 (SEFAZ) */
+
+export async function obterPainelDfe(empresaId: string): Promise<DfePainelDados> {
+  const [[emp], ents] = await Promise.all([
+    db.select().from(empresas).where(eq(empresas.id, empresaId)).limit(1),
+    db
+      .select({ id: entradas.id, chave: entradas.chave })
+      .from(entradas)
+      .where(eq(entradas.empresaId, empresaId)),
+  ]);
+
+  const fiscal = (emp?.fiscal ?? {}) as Record<string, unknown>;
+  const env = ambienteDfeServidor();
+  const certPath = String(fiscal.dfeCertPath ?? "");
+  const temSenha = Boolean(fiscal.dfeSenhaCifrada);
+  const temPfxCofre = Boolean(fiscal.dfePfxCifrado);
+  const temCertificado = Boolean(temSenha && (certPath || temPfxCofre));
+
+  const armazenamentoCert: "bucket" | "cofre" | "nenhum" = !temCertificado
+    ? "nenhum"
+    : certPath.startsWith("bucket://")
+      ? "bucket"
+      : "cofre";
+
+  const modoEfetivo: "live" | "demo" =
+    env.modoLiveSolicitado && temCertificado && (env.workerConfigurado || env.modoEnv === "direct")
+      ? "live"
+      : "demo";
+
+  const porChave = new Map<string, string>();
+  for (const e of ents) {
+    if (e.chave) porChave.set(e.chave, e.id);
+  }
+
+  const docs = lerDocumentosDfeFiscal(fiscal, true).map((d) => {
+    const entradaExistente = d.chave ? porChave.get(d.chave) : undefined;
+    return {
+      ...d,
+      xmlZip: undefined,
+      importadoErp: Boolean(d.importadoErp || entradaExistente),
+      entradaId: entradaExistente ?? d.entradaId ?? null,
+    };
+  });
+
+  const ultimoNsu = padNsu(String(fiscal.dfeUltimoNsu ?? "0"));
+  const maxNsu = padNsu(String(fiscal.dfeMaxNsu ?? ultimoNsu));
+
+  return {
+    empresaCnpj: emp?.cnpj ?? "",
+    empresaNome: emp?.nome ?? "",
+    empresaUf: emp?.uf ?? "RO",
+    ambiente: (Number(fiscal.ambiente ?? 2) === 1 ? 1 : 2) as 1 | 2,
+    ativo: fiscal.dfeAtivo !== false,
+    modoEfetivo,
+    workerConfigurado: env.workerConfigurado,
+    bucketConfigurado: env.bucketConfigurado,
+    cronSecretConfigurado: env.cronSecretConfigurado,
+    temCertificado,
+    armazenamentoCert,
+    certificadoPath: certPath,
+    certificadoNome: String(fiscal.certificadoNome ?? ""),
+    certificadoValidade: String(fiscal.certificadoValidade ?? ""),
+    certificadoSerial: String(fiscal.certificadoSerial ?? ""),
+    certificadoCnpj: String(fiscal.dfeCertCnpj ?? ""),
+    ultimoNsu,
+    maxNsu,
+    ultimaConsultaEm: fiscal.dfeUltimaConsultaEm ? String(fiscal.dfeUltimaConsultaEm) : null,
+    ultimoCstat: String(fiscal.dfeUltimoCstat ?? ""),
+    ultimoXmotivo: String(fiscal.dfeUltimoXmotivo ?? ""),
+    documentos: docs,
+  };
+}
+
+/* ------------------------------------------- usuários, perfis e auditoria */
+
+export type UsuarioDto = {
+  id: string;
+  nome: string;
+  email: string;
+  papel: PerfilUsuario;
+  papelOriginal: string;
+  ativo: boolean;
+  criadoEm: string;
+  atualizadoEm: string;
+};
+
+export type AuditoriaDto = {
+  id: string;
+  usuarioId: string | null;
+  usuarioNome: string;
+  usuarioPapel: string;
+  acao: string;
+  entidade: string;
+  registroId: string;
+  resumo: string;
+  alteracoes: Record<string, unknown>;
+  criadoEm: string;
+};
+
+export async function listarUsuarios(empresaId: string): Promise<UsuarioDto[]> {
+  const linhas = await db
+    .select({
+      id: usuarios.id,
+      nome: usuarios.nome,
+      email: usuarios.email,
+      papel: usuarios.papel,
+      ativo: usuarios.ativo,
+      createdAt: usuarios.createdAt,
+      atualizadoEm: usuarios.atualizadoEm,
+    })
+    .from(usuarios)
+    .where(eq(usuarios.empresaId, empresaId))
+    .orderBy(asc(usuarios.nome));
+
+  return linhas.map((u) => ({
+    id: u.id,
+    nome: u.nome,
+    email: u.email,
+    papel: normalizarPerfil(u.papel),
+    papelOriginal: u.papel,
+    ativo: u.ativo !== false,
+    criadoEm: u.createdAt ? new Date(u.createdAt).toISOString() : "",
+    atualizadoEm: u.atualizadoEm ? new Date(u.atualizadoEm).toISOString() : "",
+  }));
+}
+
+export async function listarAuditorias(empresaId: string, limite = 300): Promise<AuditoriaDto[]> {
+  const linhas = await db
+    .select()
+    .from(auditorias)
+    .where(eq(auditorias.empresaId, empresaId))
+    .orderBy(desc(auditorias.createdAt))
+    .limit(limite);
+
+  return linhas.map((a) => ({
+    id: a.id,
+    usuarioId: a.usuarioId,
+    usuarioNome: a.usuarioNome,
+    usuarioPapel: a.usuarioPapel,
+    acao: a.acao,
+    entidade: a.entidade,
+    registroId: a.registroId,
+    resumo: a.resumo,
+    alteracoes: (a.alteracoes ?? {}) as Record<string, unknown>,
+    criadoEm: a.createdAt ? new Date(a.createdAt).toISOString() : "",
+  }));
+}
+
+/* ------------------------------------------- sessões e fechamento de caixa */
+
+export type CaixaSessaoDto = {
+  id: string;
+  numero: number;
+  terminal: string;
+  operadorId: string;
+  operadorNome: string;
+  status: "aberto" | "fechado";
+  saldoInicial: number;
+  apuracao: ApuracaoCaixa;
+  movimentos: MovimentoCaixaInput[];
+  valoresEsperados: Record<string, number>;
+  valoresInformados: Record<string, number>;
+  diferencas: Record<string, number>;
+  totalEsperado: number;
+  totalInformado: number;
+  diferencaTotal: number;
+  observacaoAbertura: string;
+  justificativaFechamento: string;
+  abertoEm: string;
+  fechadoEm: string;
+  fechadoPorNome: string;
+  reabertoEm: string;
+  reabertoPorNome: string;
+  justificativaReabertura: string;
+};
+
+export async function listarSessoesCaixa(
+  empresaId: string,
+  usuarioId: string,
+  papel: string,
+): Promise<CaixaSessaoDto[]> {
+  const verTodos = temPermissao(papel, "caixa.relatorio_todos");
+  const condicoes = [eq(caixaSessoes.empresaId, empresaId)];
+  if (!verTodos) condicoes.push(eq(caixaSessoes.operadorId, usuarioId));
+
+  const sessoes = await db
+    .select()
+    .from(caixaSessoes)
+    .where(and(...condicoes))
+    .orderBy(desc(caixaSessoes.abertoEm))
+    .limit(250);
+
+  if (sessoes.length === 0) return [];
+
+  const ids = sessoes.map((s) => s.id);
+  const [vds, movs] = await Promise.all([
+    db
+      .select({
+        id: vendas.id,
+        caixaSessaoId: vendas.caixaSessaoId,
+        status: vendas.status,
+        total: vendas.total,
+        formaPagamento: vendas.formaPagamento,
+        pagamentos: vendas.pagamentos,
+      })
+      .from(vendas)
+      .where(and(eq(vendas.empresaId, empresaId), inArray(vendas.caixaSessaoId, ids), eq(vendas.tipo, "fiscal"))),
+    db
+      .select()
+      .from(caixaMovimentos)
+      .where(and(eq(caixaMovimentos.empresaId, empresaId), inArray(caixaMovimentos.sessaoId, ids)))
+      .orderBy(desc(caixaMovimentos.createdAt)),
+  ]);
+
+  return sessoes.map((s) => {
+    const vendasSessao = vds
+      .filter((v) => v.caixaSessaoId === s.id)
+      .map((v) => ({
+        id: v.id,
+        status: v.status,
+        total: N(v.total),
+        formaPagamento: v.formaPagamento,
+        pagamentos: (v.pagamentos ?? []) as { forma: string; valor: number }[],
+      }));
+
+    const movsSessao: MovimentoCaixaInput[] = movs
+      .filter((m) => m.sessaoId === s.id)
+      .map((m) => ({
+        id: m.id,
+        tipo: m.tipo as MovimentoCaixaInput["tipo"],
+        forma: m.forma,
+        valor: N(m.valor),
+        motivo: m.motivo,
+        vendaId: m.vendaId,
+        usuarioNome: m.usuarioNome,
+        criadoEm: m.createdAt ? new Date(m.createdAt).toISOString() : "",
+      }));
+
+    const apuracao = calcularApuracaoCaixa({
+      saldoInicial: N(s.saldoInicial),
+      vendas: vendasSessao,
+      movimentos: movsSessao,
+    });
+
+    const fechado = s.status === "fechado";
+    const esperados = fechado && Object.keys(s.valoresEsperados ?? {}).length > 0
+      ? (s.valoresEsperados as Record<string, number>)
+      : apuracao.esperadosMap;
+
+    return {
+      id: s.id,
+      numero: s.numero,
+      terminal: s.terminal,
+      operadorId: s.operadorId,
+      operadorNome: s.operadorNome,
+      status: (s.status === "fechado" ? "fechado" : "aberto") as "aberto" | "fechado",
+      saldoInicial: N(s.saldoInicial),
+      apuracao,
+      movimentos: movsSessao,
+      valoresEsperados: esperados,
+      valoresInformados: (s.valoresInformados ?? {}) as Record<string, number>,
+      diferencas: (s.diferencas ?? {}) as Record<string, number>,
+      totalEsperado: fechado ? N(s.totalEsperado) : apuracao.totalEsperado,
+      totalInformado: N(s.totalInformado),
+      diferencaTotal: N(s.diferencaTotal),
+      observacaoAbertura: s.observacaoAbertura ?? "",
+      justificativaFechamento: s.justificativaFechamento ?? "",
+      abertoEm: s.abertoEm ? new Date(s.abertoEm).toISOString() : "",
+      fechadoEm: s.fechadoEm ? new Date(s.fechadoEm).toISOString() : "",
+      fechadoPorNome: s.fechadoPorNome ?? "",
+      reabertoEm: s.reabertoEm ? new Date(s.reabertoEm).toISOString() : "",
+      reabertoPorNome: s.reabertoPorNome ?? "",
+      justificativaReabertura: s.justificativaReabertura ?? "",
+    };
+  });
+}
+
+export async function obterSessaoCaixaOperador(
+  empresaId: string,
+  usuarioId: string,
+  papel: string,
+): Promise<CaixaSessaoDto | null> {
+  const todas = await listarSessoesCaixa(empresaId, usuarioId, papel);
+  return todas.find((s) => s.operadorId === usuarioId && s.status === "aberto") ?? null;
+}
+
+/* ------------------------------------ assinatura recorrente por CNPJ */
+
+export type AssinaturaContratoDto = {
+  id: string;
+  cnpj: string;
+  razaoSocial: string;
+  emailCobranca: string;
+  planoId: string;
+  planoNome: string;
+  ciclo: CicloAssinatura;
+  formaPagamento: FormaAssinatura;
+  valorCiclo: number;
+  status: StatusAssinatura;
+  gateway: ProvedorGateway;
+  gatewayCustomerId: string;
+  gatewaySubscriptionId: string;
+  cartaoBandeira: string;
+  cartaoUltimos4: string;
+  proximoVencimento: string;
+  cancelarAoFimDoCiclo: boolean;
+  canceladaEm: string;
+  motivoCancelamento: string;
+  criadoEm: string;
+};
+
+export type AssinaturaFaturaDto = {
+  id: string;
+  assinaturaId: string;
+  numero: number;
+  cnpj: string;
+  planoId: string;
+  planoNome: string;
+  ciclo: CicloAssinatura;
+  competencia: string;
+  valor: number;
+  formaPagamento: FormaAssinatura;
+  status: StatusFaturaAssinatura;
+  vencimento: string;
+  pagoEm: string;
+  gateway: ProvedorGateway;
+  gatewayPaymentId: string;
+  checkoutUrl: string;
+  pixPayload: string;
+  linhaDigitavel: string;
+  nsuAutorizacao: string;
+  criadoEm: string;
+};
+
+export type AssinaturaPainelDto = {
+  empresaNome: string;
+  empresaCnpj: string;
+  empresaEmail: string;
+  planoAtual: {
+    id: string;
+    nome: string;
+    preco: number;
+    limiteProdutos: number;
+    limiteUsuarios: number;
+  };
+  trialDias: number | null;
+  assinaturaPagoEm: string;
+  uso: {
+    produtosAtivos: number;
+    usuariosAtivos: number;
+  };
+  gateway: {
+    provedor: ProvedorGateway;
+    modoLive: boolean;
+    webhookProtegido: boolean;
+    asaasAmbiente: "producao" | "sandbox";
+  };
+  contratoAtivo: AssinaturaContratoDto | null;
+  contratos: AssinaturaContratoDto[];
+  faturas: AssinaturaFaturaDto[];
+};
+
+export async function obterPainelAssinatura(empresaId: string): Promise<AssinaturaPainelDto> {
+  const [[emp], contratosRows, faturasRows, [qtdProds], [qtdUsers]] = await Promise.all([
+    db.select().from(empresas).where(eq(empresas.id, empresaId)).limit(1),
+    db
+      .select()
+      .from(assinaturas)
+      .where(eq(assinaturas.empresaId, empresaId))
+      .orderBy(desc(assinaturas.createdAt))
+      .limit(30),
+    db
+      .select()
+      .from(assinaturaFaturas)
+      .where(eq(assinaturaFaturas.empresaId, empresaId))
+      .orderBy(desc(assinaturaFaturas.createdAt))
+      .limit(100),
+    db
+      .select({ n: sql<string>`count(*)` })
+      .from(produtos)
+      .where(and(eq(produtos.empresaId, empresaId), eq(produtos.ativo, true))),
+    db
+      .select({ n: sql<string>`count(*)` })
+      .from(usuarios)
+      .where(and(eq(usuarios.empresaId, empresaId), eq(usuarios.ativo, true))),
+  ]);
+
+  const cfgPlano = planoById(emp?.plano);
+  const dias = diasAteTrial(emp?.trialUntil);
+  const trialDias = emp?.trialUntil && Number.isFinite(dias) ? Math.max(0, dias) : null;
+  const diag = diagnosticoGatewayServidor();
+
+  const contratos: AssinaturaContratoDto[] = contratosRows.map((c) => ({
+    id: c.id,
+    cnpj: c.cnpj,
+    razaoSocial: c.razaoSocial,
+    emailCobranca: c.emailCobranca,
+    planoId: c.planoId,
+    planoNome: planoById(c.planoId).nome,
+    ciclo: (c.ciclo === "anual" ? "anual" : "mensal") as CicloAssinatura,
+    formaPagamento: (c.formaPagamento === "boleto" || c.formaPagamento === "cartao" ? c.formaPagamento : "pix") as FormaAssinatura,
+    valorCiclo: N(c.valorCiclo),
+    status: (c.status as StatusAssinatura) || "aguardando_pagamento",
+    gateway: (c.gateway as ProvedorGateway) || "sandbox",
+    gatewayCustomerId: c.gatewayCustomerId ?? "",
+    gatewaySubscriptionId: c.gatewaySubscriptionId ?? "",
+    cartaoBandeira: c.cartaoBandeira ?? "",
+    cartaoUltimos4: c.cartaoUltimos4 ?? "",
+    proximoVencimento: iso(c.proximoVencimento),
+    cancelarAoFimDoCiclo: c.cancelarAoFimDoCiclo,
+    canceladaEm: c.canceladaEm ? new Date(c.canceladaEm).toISOString() : "",
+    motivoCancelamento: c.motivoCancelamento ?? "",
+    criadoEm: c.createdAt ? new Date(c.createdAt).toISOString() : "",
+  }));
+
+  const faturas: AssinaturaFaturaDto[] = faturasRows.map((f) => ({
+    id: f.id,
+    assinaturaId: f.assinaturaId,
+    numero: f.numero,
+    cnpj: f.cnpj,
+    planoId: f.planoId,
+    planoNome: planoById(f.planoId).nome,
+    ciclo: (f.ciclo === "anual" ? "anual" : "mensal") as CicloAssinatura,
+    competencia: f.competencia,
+    valor: N(f.valor),
+    formaPagamento: (f.formaPagamento === "boleto" || f.formaPagamento === "cartao" ? f.formaPagamento : "pix") as FormaAssinatura,
+    status: (f.status as StatusFaturaAssinatura) || "pendente",
+    vencimento: iso(f.vencimento),
+    pagoEm: f.pagoEm ? new Date(f.pagoEm).toISOString() : "",
+    gateway: (f.gateway as ProvedorGateway) || "sandbox",
+    gatewayPaymentId: f.gatewayPaymentId ?? "",
+    checkoutUrl: f.checkoutUrl ?? "",
+    pixPayload: f.pixPayload ?? "",
+    linhaDigitavel: f.linhaDigitavel ?? "",
+    nsuAutorizacao: f.nsuAutorizacao ?? "",
+    criadoEm: f.createdAt ? new Date(f.createdAt).toISOString() : "",
+  }));
+
+  const contratoAtivo = contratos.find((c) => c.status !== "cancelada") ?? null;
+
+  return {
+    empresaNome: emp?.nome ?? "",
+    empresaCnpj: emp?.cnpj ?? "",
+    empresaEmail: emp?.email ?? "",
+    planoAtual: {
+      id: cfgPlano.id,
+      nome: cfgPlano.nome,
+      preco: cfgPlano.preco,
+      limiteProdutos: cfgPlano.limiteProdutos,
+      limiteUsuarios: cfgPlano.limiteUsuarios,
+    },
+    trialDias,
+    assinaturaPagoEm: iso(emp?.assinaturaPagoEm),
+    uso: {
+      produtosAtivos: Number(qtdProds?.n ?? 0),
+      usuariosAtivos: Number(qtdUsers?.n ?? 0),
+    },
+    gateway: diag,
+    contratoAtivo,
+    contratos,
+    faturas,
+  };
+}
+
+/* ------------------------------ emissor fiscal de saída e contingência */
+
+export type ItemProntidaoFiscal = {
+  id: string;
+  rotulo: string;
+  ok: boolean;
+  detalhe: string;
+  criticoProducao: boolean;
+};
+
+export type PainelEmissorFiscalDto = {
+  empresaNome: string;
+  empresaCnpj: string;
+  empresaUf: string;
+  ambiente: 1 | 2;
+  emissor: {
+    provedor: ProvedorEmissorFiscal;
+    modoLive: boolean;
+    urlConfigurada: boolean;
+    tokenConfigurado: boolean;
+    webhookProtegido: boolean;
+  };
+  prontidaoProducao: {
+    prontoParaProducao: boolean;
+    itens: ItemProntidaoFiscal[];
+    produtosSemNcmReal: number;
+    totalProdutosAtivos: number;
+  };
+  resumo: {
+    totalFiscais: number;
+    autorizadasSefaz: number;
+    homologacaoLocal: number;
+    emContingenciaOuPendente: number;
+    rejeitadas: number;
+    comXmlReal: number;
+  };
+  documentos: VendaDto[];
+};
+
+export async function obterPainelEmissorFiscal(empresaId: string): Promise<PainelEmissorFiscalDto> {
+  const [[emp], prodsAtivos, docsFiscais] = await Promise.all([
+    db.select().from(empresas).where(eq(empresas.id, empresaId)).limit(1),
+    db
+      .select({ id: produtos.id, ncm: produtos.ncm })
+      .from(produtos)
+      .where(and(eq(produtos.empresaId, empresaId), eq(produtos.ativo, true))),
+    listarVendas(empresaId, { tipo: "fiscal" }),
+  ]);
+
+  const fiscal = (emp?.fiscal ?? {}) as Record<string, unknown>;
+  const ambiente = (Number(fiscal.ambiente ?? 2) === 1 ? 1 : 2) as 1 | 2;
+  const diag = diagnosticoEmissorServidor();
+
+  const cnpjOk = validarCnpj(emp?.cnpj ?? "");
+  const ibgeOk = /^\d{7}$/.test(soDigitos(emp?.codMunicipio ?? ""));
+  const cscOk = Boolean(String(fiscal.cscId ?? "").trim() && String(fiscal.cscToken ?? "").trim());
+  const certVal = String(fiscal.certificadoValidade ?? "");
+  const temA1 = Boolean(fiscal.dfeSenhaCifrada || fiscal.certificadoNome);
+  const a1Valido = Boolean(temA1 && (!certVal || new Date(`${certVal.slice(0, 10)}T23:59:59`) >= new Date()));
+  const produtosSemNcmReal = prodsAtivos.filter((p) => soDigitos(p.ncm) === "00000000" || soDigitos(p.ncm).length !== 8).length;
+
+  const itensProntidao: ItemProntidaoFiscal[] = [
+    {
+      id: "cnpj",
+      rotulo: "CNPJ do emitente válido",
+      ok: cnpjOk,
+      detalhe: emp?.cnpj || "Não informado",
+      criticoProducao: true,
+    },
+    {
+      id: "ibge",
+      rotulo: "Código IBGE do município (7 dígitos)",
+      ok: ibgeOk,
+      detalhe: ibgeOk ? String(emp?.codMunicipio) : "Configure em Configurações → Empresa",
+      criticoProducao: true,
+    },
+    {
+      id: "csc",
+      rotulo: "CSC ID e Token da NFC-e",
+      ok: cscOk,
+      detalhe: cscOk ? `CSC ID ${String(fiscal.cscId)}` : "Configure em Configurações → Fiscal",
+      criticoProducao: true,
+    },
+    {
+      id: "a1",
+      rotulo: "Certificado Digital A1 válido",
+      ok: a1Valido,
+      detalhe: certVal ? `Validade ${certVal}` : "Envie o .pfx em DF-e e Certificado A1",
+      criticoProducao: true,
+    },
+    {
+      id: "ncm",
+      rotulo: "Catálogo ativo com NCM TIPI real (≠ 00000000)",
+      ok: produtosSemNcmReal === 0,
+      detalhe:
+        produtosSemNcmReal === 0
+          ? `${prodsAtivos.length} produto(s) com NCM completo`
+          : `${produtosSemNcmReal} de ${prodsAtivos.length} produto(s) com NCM 00000000`,
+      criticoProducao: true,
+    },
+    {
+      id: "provedor",
+      rotulo: "Provedor Emissor Fiscal REST conectado",
+      ok: diag.modoLive,
+      detalhe: diag.modoLive
+        ? `Conectado (${diag.provedor})`
+        : "Em Homologação Local (defina EMISSOR_FISCAL_URL + EMISSOR_FISCAL_TOKEN p/ produção)",
+      criticoProducao: true,
+    },
+  ];
+
+  const prontoParaProducao = itensProntidao.every((i) => !i.criticoProducao || i.ok);
+
+  return {
+    empresaNome: emp?.nome ?? "",
+    empresaCnpj: emp?.cnpj ?? "",
+    empresaUf: emp?.uf ?? "RO",
+    ambiente,
+    emissor: diag,
+    prontidaoProducao: {
+      prontoParaProducao,
+      itens: itensProntidao,
+      produtosSemNcmReal,
+      totalProdutosAtivos: prodsAtivos.length,
+    },
+    resumo: {
+      totalFiscais: docsFiscais.length,
+      autorizadasSefaz: docsFiscais.filter((d) => d.statusSefaz === "autorizada").length,
+      homologacaoLocal: docsFiscais.filter((d) => d.statusSefaz === "simulado").length,
+      emContingenciaOuPendente: docsFiscais.filter(
+        (d) => d.status !== "cancelado" && (d.statusSefaz === "contingencia" || d.statusSefaz === "pendente_envio"),
+      ).length,
+      rejeitadas: docsFiscais.filter((d) => d.status !== "cancelado" && d.statusSefaz === "rejeitada").length,
+      comXmlReal: docsFiscais.filter((d) => d.temXml).length,
+    },
+    documentos: docsFiscais,
+  };
 }

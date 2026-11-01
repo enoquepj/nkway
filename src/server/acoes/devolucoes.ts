@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { contas, devolucoes, entradas, movimentos, produtos } from "@/db/schema";
 import { cfopDevolucao, gerarChave, round2, UF_NUMERO, soDigitos, validarChaveAcesso } from "@/lib/dominio";
-import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
+import { comoErro, exigirPermissao, tenant, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string; id?: string } | { ok: false; erro: string };
 
@@ -57,7 +57,7 @@ export async function emitirDevolucao(input: {
   gerarFinanceiro: boolean;
 }): Promise<Resultado> {
   try {
-    const { empresaId, empresa } = await tenant();
+    const { empresaId, empresa } = await exigirPermissao("estoque.ajustar");
     input = corpo(input);
     const [ent] = await db
       .select()
@@ -189,7 +189,8 @@ export async function emitirDevolucao(input: {
 /** cancela a devolução: volta o estoque e marca o documento */
 export async function cancelarDevolucao(devolucaoId: string, motivo: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
+    motivo = texto(motivo);
     const [d] = await db
       .select()
       .from(devolucoes)

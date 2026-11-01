@@ -49,10 +49,13 @@ export const usuarios = pgTable(
     nome: text("nome").notNull(),
     email: text("email").notNull(),
     senhaHash: text("senha_hash").notNull(),
+    /** administrador (ou owner legado) | operador | vendedor */
     papel: text("papel").notNull().default("operador"),
+    ativo: boolean("ativo").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).defaultNow(),
   },
-  (t) => [index("nk_usuario_email_idx").on(t.email)],
+  (t) => [index("nk_usuario_email_idx").on(t.email), index("nk_usuario_empresa_idx").on(t.empresaId)],
 );
 
 export const produtos = pgTable(
@@ -159,10 +162,20 @@ export const vendas = pgTable(
     numeroNota: integer("numero_nota"),
     chave: text("chave"),
     protocolo: text("protocolo"),
+    /** XML fiscal autorizado efetivamente armazenado ou retornado pela integração (nunca fictício) */
+    xmlFiscal: text("xml_fiscal"),
+    /** simulado | pendente_envio | contingencia | autorizada | rejeitada | cancelada_sefaz */
+    statusSefaz: text("status_sefaz").default("simulado"),
+    cstatSefaz: text("cstat_sefaz").default("100"),
+    motivoSefaz: text("motivo_sefaz").default(""),
+    emissorProvedor: text("emissor_provedor").default("local"),
     autorizadaEm: bigint("autorizada_em", { mode: "number" }),
     validade: date("validade"),
     observacao: text("observacao"),
     operador: text("operador").default("Frente de caixa"),
+    operadorId: uuid("operador_id"),
+    /** Sessão de caixa do operador vinculada à venda fiscal (Fase 2) */
+    caixaSessaoId: uuid("caixa_sessao_id"),
     /** ➕ FILTROS.md: terminal físico do PDV */
     caixa: text("caixa").default(""),
     /** ➕ FILTROS.md: 1 produção · 2 homologação (separa notas de teste) */
@@ -173,7 +186,11 @@ export const vendas = pgTable(
     davOrigemId: uuid("dav_origem_id"),
     data: timestamp("data", { withTimezone: true }).defaultNow(),
   },
-  (t) => [index("nk_venda_empresa_idx").on(t.empresaId), index("nk_venda_data_idx").on(t.data)],
+  (t) => [
+    index("nk_venda_empresa_idx").on(t.empresaId),
+    index("nk_venda_data_idx").on(t.data),
+    index("nk_venda_caixa_sessao_idx").on(t.caixaSessaoId),
+  ],
 );
 
 export const vendaItens = pgTable(
@@ -388,6 +405,86 @@ export const eventosFiscais = pgTable(
   ],
 );
 
+/** Trilha de auditoria multi-tenant (Fase 1) — usuário, data, ação, registro e alterações */
+export const auditorias = pgTable(
+  "nk_auditoria",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    usuarioId: uuid("usuario_id"),
+    usuarioNome: text("usuario_nome").notNull().default(""),
+    usuarioPapel: text("usuario_papel").notNull().default(""),
+    acao: text("acao").notNull(),
+    entidade: text("entidade").notNull(),
+    registroId: text("registro_id").notNull().default(""),
+    resumo: text("resumo").notNull().default(""),
+    alteracoes: jsonb("alteracoes").$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_auditoria_empresa_data_idx").on(t.empresaId, t.createdAt),
+    index("nk_auditoria_empresa_acao_idx").on(t.empresaId, t.acao),
+  ],
+);
+
+/** Sessão de caixa por operador (Fase 2) — abertura, apuração por forma e fechamento */
+export const caixaSessoes = pgTable(
+  "nk_caixa_sessao",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    numero: integer("numero").notNull(),
+    terminal: text("terminal").notNull().default("CAIXA 1"),
+    operadorId: uuid("operador_id").notNull().references(() => usuarios.id),
+    operadorNome: text("operador_nome").notNull(),
+    /** aberto | fechado */
+    status: text("status").notNull().default("aberto"),
+    saldoInicial: numeric("saldo_inicial", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    valoresEsperados: jsonb("valores_esperados").$type<Record<string, number>>().default({}),
+    valoresInformados: jsonb("valores_informados").$type<Record<string, number>>().default({}),
+    diferencas: jsonb("diferencas").$type<Record<string, number>>().default({}),
+    totalEsperado: numeric("total_esperado", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    totalInformado: numeric("total_informado", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    diferencaTotal: numeric("diferenca_total", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    observacaoAbertura: text("observacao_abertura").default(""),
+    justificativaFechamento: text("justificativa_fechamento").default(""),
+    abertoEm: timestamp("aberto_em", { withTimezone: true }).defaultNow(),
+    fechadoEm: timestamp("fechado_em", { withTimezone: true }),
+    fechadoPorId: uuid("fechado_por_id"),
+    fechadoPorNome: text("fechado_por_nome").default(""),
+    reabertoEm: timestamp("reaberto_em", { withTimezone: true }),
+    reabertoPorNome: text("reaberto_por_nome").default(""),
+    justificativaReabertura: text("justificativa_reabertura").default(""),
+  },
+  (t) => [
+    index("nk_caixa_sessao_empresa_idx").on(t.empresaId, t.abertoEm),
+    index("nk_caixa_sessao_operador_idx").on(t.empresaId, t.operadorId, t.status),
+  ],
+);
+
+/** Movimentações financeiras de caixa (Fase 2) — suprimento, sangria, estorno e ajuste */
+export const caixaMovimentos = pgTable(
+  "nk_caixa_movimento",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    sessaoId: uuid("sessao_id").notNull().references(() => caixaSessoes.id, { onDelete: "cascade" }),
+    /** suprimento | sangria | estorno | ajuste */
+    tipo: text("tipo").notNull(),
+    forma: text("forma").notNull().default("dinheiro"),
+    valor: numeric("valor", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    motivo: text("motivo").notNull().default(""),
+    vendaId: uuid("venda_id"),
+    usuarioId: uuid("usuario_id"),
+    usuarioNome: text("usuario_nome").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_caixa_mov_sessao_idx").on(t.sessaoId),
+    index("nk_caixa_mov_empresa_idx").on(t.empresaId),
+  ],
+);
+
 export type DevolucaoItem = {
   produtoId: string | null;
   nome: string;
@@ -428,3 +525,82 @@ export type InutilizacaoRow = typeof inutilizacoes.$inferSelect;
 export type EventoFiscalRow = typeof eventosFiscais.$inferSelect;
 export type ContaRow = typeof contas.$inferSelect;
 export type MdfeRow = typeof mdfes.$inferSelect;
+export type UsuarioRow = typeof usuarios.$inferSelect;
+export type AuditoriaRow = typeof auditorias.$inferSelect;
+/** Assinatura comercial recorrente por CNPJ com gateway (Asaas / Stripe / Sandbox) */
+export const assinaturas = pgTable(
+  "nk_assinatura",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    /** CNPJ de 14 dígitos (sem máscara) titular da assinatura recorrente */
+    cnpj: text("cnpj").notNull(),
+    razaoSocial: text("razao_social").notNull().default(""),
+    emailCobranca: text("email_cobranca").notNull().default(""),
+    /** me | loja_mais */
+    planoId: text("plano_id").notNull(),
+    /** mensal | anual */
+    ciclo: text("ciclo").notNull().default("mensal"),
+    /** pix | boleto | cartao */
+    formaPagamento: text("forma_pagamento").notNull().default("pix"),
+    valorCiclo: numeric("valor_ciclo", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    /** ativa | aguardando_pagamento | inadimplente | cancelada */
+    status: text("status").notNull().default("aguardando_pagamento"),
+    /** asaas | stripe | sandbox */
+    gateway: text("gateway").notNull().default("sandbox"),
+    gatewayCustomerId: text("gateway_customer_id").default(""),
+    gatewaySubscriptionId: text("gateway_subscription_id").default(""),
+    /** somente metadados não sensíveis (nunca armazenar número completo nem CVV) */
+    cartaoBandeira: text("cartao_bandeira").default(""),
+    cartaoUltimos4: text("cartao_ultimos4").default(""),
+    proximoVencimento: date("proximo_vencimento").notNull(),
+    cancelarAoFimDoCiclo: boolean("cancelar_ao_fim_do_ciclo").notNull().default(false),
+    canceladaEm: timestamp("cancelada_em", { withTimezone: true }),
+    motivoCancelamento: text("motivo_cancelamento").default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_assinatura_empresa_idx").on(t.empresaId),
+    index("nk_assinatura_cnpj_idx").on(t.cnpj),
+    index("nk_assinatura_gateway_sub_idx").on(t.gatewaySubscriptionId),
+  ],
+);
+
+/** Faturas geradas pela recorrência da assinatura (PIX, Boleto ou Cartão) */
+export const assinaturaFaturas = pgTable(
+  "nk_assinatura_fatura",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    assinaturaId: uuid("assinatura_id").notNull().references(() => assinaturas.id, { onDelete: "cascade" }),
+    numero: integer("numero").notNull(),
+    cnpj: text("cnpj").notNull(),
+    planoId: text("plano_id").notNull(),
+    ciclo: text("ciclo").notNull().default("mensal"),
+    competencia: text("competencia").notNull().default(""),
+    valor: numeric("valor", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    formaPagamento: text("forma_pagamento").notNull().default("pix"),
+    /** pendente | paga | vencida | cancelada | estornada */
+    status: text("status").notNull().default("pendente"),
+    vencimento: date("vencimento").notNull(),
+    pagoEm: timestamp("pago_em", { withTimezone: true }),
+    gateway: text("gateway").notNull().default("sandbox"),
+    gatewayPaymentId: text("gateway_payment_id").default(""),
+    checkoutUrl: text("checkout_url").default(""),
+    pixPayload: text("pix_payload").default(""),
+    linhaDigitavel: text("linha_digitavel").default(""),
+    nsuAutorizacao: text("nsu_autorizacao").default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_ass_fatura_empresa_idx").on(t.empresaId, t.createdAt),
+    index("nk_ass_fatura_ass_idx").on(t.assinaturaId),
+    index("nk_ass_fatura_gw_pay_idx").on(t.gatewayPaymentId),
+  ],
+);
+
+export type CaixaSessaoRow = typeof caixaSessoes.$inferSelect;
+export type CaixaMovimentoRow = typeof caixaMovimentos.$inferSelect;
+export type AssinaturaRow = typeof assinaturas.$inferSelect;
+export type AssinaturaFaturaRow = typeof assinaturaFaturas.$inferSelect;

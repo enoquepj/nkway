@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { contas } from "@/db/schema";
 import { hojeISO, round2 } from "@/lib/dominio";
-import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
+import { comoErro, exigirPermissao, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string } | { ok: false; erro: string };
 
@@ -24,7 +24,7 @@ export async function lancarConta(input: {
   forma: string;
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("financeiro.gerenciar");
     input = corpo(input);
     if (texto(input.descricao).trim().length < 3) return { ok: false, erro: "Descreva o título." };
     if (!(input.valor > 0)) return { ok: false, erro: "O valor deve ser maior que zero." };
@@ -56,7 +56,7 @@ export async function baixarConta(input: {
   data: string;
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("financeiro.gerenciar");
     input = corpo(input);
     const [c] = await db.select().from(contas).where(and(eq(contas.id, input.contaId), eq(contas.empresaId, empresaId))).limit(1);
     if (!c) return { ok: false, erro: "Título não encontrado." };
@@ -81,7 +81,7 @@ export async function baixarConta(input: {
 
 export async function reabrirConta(contaId: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("financeiro.gerenciar");
     await db.update(contas).set({ status: "aberta", valorPago: 0, pagoEm: null }).where(and(eq(contas.id, contaId), eq(contas.empresaId, empresaId)));
     revalidar();
     return { ok: true, aviso: "Título reaberto." };
@@ -92,7 +92,7 @@ export async function reabrirConta(contaId: string): Promise<Resultado> {
 
 export async function excluirConta(contaId: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("financeiro.gerenciar");
     await db.delete(contas).where(and(eq(contas.id, contaId), eq(contas.empresaId, empresaId)));
     revalidar();
     return { ok: true };
@@ -104,7 +104,8 @@ export async function excluirConta(contaId: string): Promise<Resultado> {
 /** ajuste de data em lote (antecipação / renegociação de vencimento) */
 export async function moverVencimentos(contaIds: string[], dias: number): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("financeiro.gerenciar");
+    if (!Array.isArray(contaIds)) contaIds = [];
     let n = 0;
     for (const id of contaIds) {
       const [c] = await db.select().from(contas).where(and(eq(contas.id, id), eq(contas.empresaId, empresaId))).limit(1);

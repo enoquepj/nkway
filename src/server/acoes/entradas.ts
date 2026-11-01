@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { contas, entradas, fornecedores, movimentos, produtos, type EntradaItem } from "@/db/schema";
 import { hojeISO, round2, somaDias } from "@/lib/dominio";
 import { notaPorChaveDemo, parseNfeXml, type NfeXml } from "@/lib/xmlNfe";
-import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
+import { comoErro, exigirPermissao, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; id?: string; aviso?: string } | { ok: false; erro: string };
 
@@ -109,7 +109,7 @@ async function criarDeNota(
 
 export async function importarXml(input: { xml: string; gerarFinanceiro: boolean; fornecedorId?: string | null }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
     input = corpo(input);
     if (!texto(input.xml).trim()) return { ok: false, erro: "Cole ou arraste o conteúdo do XML da NF-e." };
     const nota = parseNfeXml(input.xml);
@@ -121,7 +121,7 @@ export async function importarXml(input: { xml: string; gerarFinanceiro: boolean
 
 export async function importarPorChave(input: { chave: string; gerarFinanceiro: boolean; fornecedorId?: string | null }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
     input = corpo(input);
     const nota = notaPorChaveDemo(input.chave);
     return await criarDeNota(empresaId, nota, "sefaz", input.gerarFinanceiro, input.fornecedorId ?? null);
@@ -142,7 +142,7 @@ export async function registrarEntradaManual(input: {
   itens: { produtoId: string | null; nome: string; qtd: number; custo: number; preco: number; unidade: string; sku: string; ncm?: string; cfop?: string; gtin?: string }[];
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
     input = corpo(input);
     if (!texto(input.fornecedor).trim()) return { ok: false, erro: "Informe o fornecedor da nota." };
     const itensValidos = input.itens.filter((i) => i.qtd > 0 && i.custo > 0);
@@ -197,7 +197,7 @@ export async function salvarTratamento(input: {
   itens: EntradaItem[];
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
     input = corpo(input);
     const [e] = await db.select({ id: entradas.id, status: entradas.status }).from(entradas).where(and(eq(entradas.id, input.entradaId), eq(entradas.empresaId, empresaId))).limit(1);
     if (!e) return { ok: false, erro: "Entrada não encontrada." };
@@ -223,7 +223,7 @@ export async function salvarTratamento(input: {
 /** lançar a entrada: custo médio ponderado, kardex, estoque e conta a pagar */
 export async function lancarEntrada(entradaId: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
     const [entrada] = await db.select().from(entradas).where(and(eq(entradas.id, entradaId), eq(entradas.empresaId, empresaId))).limit(1);
     if (!entrada) return { ok: false, erro: "Entrada não encontrada." };
     if (entrada.status === "lancada") return { ok: false, erro: "Esta entrada já foi lançada no estoque." };
@@ -327,7 +327,7 @@ export async function lancarEntrada(entradaId: string): Promise<Resultado> {
 
 export async function excluirEntrada(entradaId: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
     const [e] = await db.select({ status: entradas.status, chave: entradas.chave }).from(entradas).where(and(eq(entradas.id, entradaId), eq(entradas.empresaId, empresaId))).limit(1);
     if (!e) return { ok: false, erro: "Entrada não encontrada." };
     if (e.status === "lancada") return { ok: false, erro: "Entrada lançada no estoque não pode ser apagada." };
@@ -360,7 +360,7 @@ export async function simularChave(chave: string): Promise<{ ok: true; nota: Nfe
 /** concilia fornecedor da nota com o cadastro (cria se preciso) */
 export async function garantirFornecedor(nome: string, cnpj: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.clientes");
     const doc = cnpj.replace(/\D/g, "");
     if (!nome.trim()) return { ok: false, erro: "Informe o nome do fornecedor." };
     if (doc) {

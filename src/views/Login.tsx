@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Badge, Button, Campo, Icon, Input, Select, cn } from "@/components/ui";
 import { cadastrar, entrar } from "@/server/acoes/auth";
 import { UFS, PLANOS_CFG, mascaraDocumento, soDigitos } from "@/lib/dominio";
+import { gerarSqlConsolidadoSupabaseNk } from "@/lib/migracaoLegado";
 
 type Aba = "entrar" | "criar";
 
@@ -233,19 +234,41 @@ export function LoginView({ temDemo }: { temDemo: boolean }) {
             </Button>
 
             {aba === "entrar" && temDemo && (
-              <p className="mt-3 text-center text-[11.5px] text-ink-400">
-                Ambiente de demonstração já populado ·{" "}
-                <button
-                  type="button"
-                  className="font-semibold text-way-700 underline decoration-way-200 hover:decoration-way-600"
-                  onClick={() => {
-                    set("email", DEMO.email);
-                    set("senha", DEMO.senha);
-                  }}
-                >
-                  usar {DEMO.email}
-                </button>
-              </p>
+              <div className="mt-3 space-y-2 border-t border-ink-100 pt-3 text-center text-[11.5px] text-ink-400">
+                <p>
+                  Demo: <b className="font-mono text-ink-700">{DEMO.email}</b> · senha:{" "}
+                  <b className="font-mono text-ink-700">{DEMO.senha}</b>{" "}
+                  <button
+                    type="button"
+                    className="ml-1 font-semibold text-way-700 underline decoration-way-200 hover:decoration-way-600"
+                    onClick={() => {
+                      set("email", DEMO.email);
+                      set("senha", DEMO.senha);
+                    }}
+                  >
+                    (preencher)
+                  </button>
+                </p>
+                <p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sql = gerarSqlConsolidadoSupabaseNk();
+                      const blob = new Blob([sql], { type: "application/sql;charset=utf-8" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = "ATUALIZAR_SUPABASE_AGORA.sql";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md bg-ink-50 px-2.5 py-1 text-[11px] font-semibold text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-100"
+                  >
+                    <Icon name="baixar" className="size-3.5 text-way-600" />
+                    Baixar SQL único do Supabase (.sql)
+                  </button>
+                </p>
+              </div>
             )}
           </div>
 

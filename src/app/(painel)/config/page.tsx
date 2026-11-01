@@ -4,21 +4,23 @@ import { db } from "@/db";
 import { usuarios } from "@/db/schema";
 import { contexto } from "@/lib/session";
 import { planoById } from "@/lib/dominio";
+import { normalizarPerfil } from "@/lib/permissoes";
 import { ConfigView } from "@/views/Config";
-import { listarContas, listarEntradas, listarProdutos, listarVendas, painel } from "@/server/dados";
+import { listarContas, listarEntradas, listarProdutos, listarVendas, obterPainelAssinatura, painel } from "@/server/dados";
 
 export const dynamic = "force-dynamic";
 
 export default async function ConfigPage() {
   const c = await contexto();
   if (!c) redirect("/login");
-  const [equipe, produtos, vendas, contas, entradas, resumo] = await Promise.all([
-    db.select({ id: usuarios.id, nome: usuarios.nome, email: usuarios.email, papel: usuarios.papel }).from(usuarios).where(eq(usuarios.empresaId, c.empresaId)),
+  const [equipe, produtos, vendas, contas, entradas, resumo, assinatura] = await Promise.all([
+    db.select({ id: usuarios.id, nome: usuarios.nome, email: usuarios.email, papel: usuarios.papel, ativo: usuarios.ativo }).from(usuarios).where(eq(usuarios.empresaId, c.empresaId)),
     listarProdutos(c.empresaId),
     listarVendas(c.empresaId),
     listarContas(c.empresaId),
     listarEntradas(c.empresaId),
     painel(c.empresaId),
+    obterPainelAssinatura(c.empresaId),
   ]);
   const fiscal = (c.empresa.fiscal ?? {}) as Record<string, unknown>;
   return (
@@ -53,8 +55,10 @@ export default async function ConfigPage() {
         certificadoSerial: String(fiscal.certificadoSerial ?? ""),
       }}
       plano={{ id: c.empresa.plano, nome: planoById(c.empresa.plano).nome, preco: planoById(c.empresa.plano).preco, limiteProdutos: planoById(c.empresa.plano).limiteProdutos, limiteUsuarios: planoById(c.empresa.plano).limiteUsuarios }}
-      equipe={equipe}
+      equipe={equipe.map((u) => ({ ...u, papel: normalizarPerfil(u.papel), ativo: u.ativo !== false }))}
       usuarioAtual={c.usuario.id}
+      usuarioPapel={normalizarPerfil(c.usuario.papel)}
+      assinatura={assinatura}
       ambiente={{
         produtos: produtos.length,
         produtosAtivos: produtos.filter((p) => p.ativo).length,

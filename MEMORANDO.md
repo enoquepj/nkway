@@ -35,7 +35,7 @@
 | App | Next.js 16 + Drizzle no Vercel |
 | Banco | PostgreSQL do Supabase existente, pooler 6543 |
 | Acesso do app | `DATABASE_URL` Secret; usuário PostgreSQL dedicado `nkway_app` |
-| Tabelas | legado sem prefixo preservado + Next `nk_*` em produção |
+| Tabelas | legado sem prefixo preservado + Next `nk_*` em produção (assistente somente-leitura em `/migracao`) |
 | RLS `nk_*` | desativado por enquanto; tenant server-side por `empresa_id` |
 | Guia | `VERCEL_SUPABASE.md` |
 
@@ -52,7 +52,7 @@ Regras: não criar outro Supabase, não recomendar Neon, não redefinir senha, n
 | Edge Function captura SEFAZ | `supabase/functions/dfe-dist/index.ts` |
 | Worker mTLS (A1 real) | `supabase/functions/dfe-dist/sefaz-mtls-worker.mjs` |
 | Secrets da function | Dashboard Supabase → Edge Functions → Secrets: `DFE_CRON_SECRET`, `DFE_SECRET`, `DFE_SEFAZ_MODE`, `DFE_MTLS_WORKER_URL`, `DFE_MTLS_WORKER_SECRET` |
-| Telas no app | Menu **Compras → Certificado A1 (DF-e)** e **DF-e / NF-e recebidas** · código em `src/erp/dfe/` |
+| Telas no app (Next.js em produção) | Menu **Compras e estoque → DF-e e Certificado A1** (`/dfe`) + cron `/api/dfe/dist` · código em `src/views/Dfe.tsx`, `src/server/dfeCore.ts`, `src/server/acoes/dfe.ts` (legado Vite preservado em `src/erp/dfe/`) |
 
 **Front (Vite) — só estas no `.env`:**
 ```env

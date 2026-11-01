@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { clientes, empresas, fornecedores, produtos, usuarios } from "@/db/schema";
 import { criarSessao, confereSenha, encerrarSessao, hashSenha, lerSessao } from "@/lib/session";
+import { registrarAuditoria } from "@/server/auditoria";
 import { cadeia, texto } from "@/server/tenant";
 import { gerarGtin } from "@/lib/dominio";
 
@@ -111,7 +112,17 @@ export async function entrar(bruto: unknown): Promise<Resultado> {
   const [usuario] = await db.select().from(usuarios).where(eq(usuarios.email, email)).limit(1);
   if (!usuario || !confereSenha(senha, usuario.senhaHash))
     return { ok: false, erro: "E-mail ou senha não conferem." };
+  if (usuario.ativo === false)
+    return { ok: false, erro: "Este usuário está desativado. Solicite a reativação ao administrador da empresa." };
   await criarSessao({ empresaId: usuario.empresaId, usuarioId: usuario.id });
+  await registrarAuditoria({
+    empresaId: usuario.empresaId,
+    usuario,
+    acao: "auth.login",
+    entidade: "usuario",
+    registroId: usuario.id,
+    resumo: `Login realizado por ${usuario.nome} (${usuario.email})`,
+  }).catch(() => undefined);
   revalidatePath("/", "layout");
   return { ok: true };
 }
@@ -167,15 +178,28 @@ export async function cadastrar(bruto: unknown): Promise<Resultado> {
     })
     .returning({ id: empresas.id });
 
-  await db.insert(usuarios).values({
-    empresaId: empresa.id,
-    nome: String(e.nome ?? "").trim() || "Proprietário",
-    email: e.email,
-    senhaHash: hashSenha(e.senha),
-    papel: "owner",
-  });
+  const [novoAdmin] = await db
+    .insert(usuarios)
+    .values({
+      empresaId: empresa.id,
+      nome: String(e.nome ?? "").trim() || "Administrador",
+      email: e.email,
+      senhaHash: hashSenha(e.senha),
+      papel: "administrador",
+      ativo: true,
+    })
+    .returning();
   await semear(empresa.id, e.uf);
-  await criarSessao({ empresaId: empresa.id, usuarioId: (await db.select().from(usuarios).where(eq(usuarios.email, e.email)).limit(1))[0].id });
+  await registrarAuditoria({
+    empresaId: empresa.id,
+    usuario: novoAdmin,
+    acao: "empresa.cadastrar",
+    entidade: "empresa",
+    registroId: empresa.id,
+    resumo: `Empresa cadastrada com administrador inicial ${novoAdmin.nome}`,
+    alteracoes: { email: novoAdmin.email, perfil: "administrador", uf: e.uf },
+  }).catch(() => undefined);
+  await criarSessao({ empresaId: empresa.id, usuarioId: novoAdmin.id });
   revalidatePath("/", "layout");
   return { ok: true };
 }
@@ -191,6 +215,16 @@ export async function trocarSenha(nova: unknown): Promise<Resultado> {
   if (senha.length < 6) return { ok: false, erro: "A senha precisa de pelo menos 6 caracteres." };
   const s = await lerSessao();
   if (!s) return { ok: false, erro: "Sessão expirada." };
-  await db.update(usuarios).set({ senhaHash: hashSenha(senha) }).where(eq(usuarios.id, s.usuarioId));
+  const [u] = await db.select().from(usuarios).where(eq(usuarios.id, s.usuarioId)).limit(1);
+  if (!u || u.ativo === false || u.empresaId !== s.empresaId) return { ok: false, erro: "Sessão inválida ou usuário inativo." };
+  await db.update(usuarios).set({ senhaHash: hashSenha(senha), atualizadoEm: new Date() }).where(eq(usuarios.id, u.id));
+  await registrarAuditoria({
+    empresaId: u.empresaId,
+    usuario: u,
+    acao: "usuario.trocar_senha",
+    entidade: "usuario",
+    registroId: u.id,
+    resumo: `${u.nome} alterou a própria senha de acesso`,
+  }).catch(() => undefined);
   return { ok: true };
 }

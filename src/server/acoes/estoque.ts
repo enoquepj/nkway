@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { movimentos, produtos } from "@/db/schema";
 import { round2 } from "@/lib/dominio";
-import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
+import { comoErro, exigirPermissao, texto, corpo } from "@/server/tenant";
 
 export type Resultado = { ok: true; aviso?: string } | { ok: false; erro: string };
 
@@ -29,7 +29,7 @@ export async function ajustarEstoque(input: {
   modo: "delta" | "inventario";
 }): Promise<Resultado> {
   try {
-    const { empresaId, usuario } = await tenant();
+    const { empresaId, usuario } = await exigirPermissao("estoque.ajustar");
     input = corpo(input);
     const [p] = await db.select().from(produtos).where(and(eq(produtos.id, input.produtoId), eq(produtos.empresaId, empresaId))).limit(1);
     if (!p) return { ok: false, erro: "Produto não encontrado." };
@@ -63,7 +63,8 @@ export async function ajustarEstoque(input: {
 /** inventário em lote: grava só as linhas com diferença */
 export async function lancarInventario(linhas: { produtoId: string; quantidade: number; observacao: string }[]): Promise<{ ok: true; ajustados: number } | { ok: false; erro: string }> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("estoque.ajustar");
+    if (!Array.isArray(linhas)) linhas = [];
     let ajustados = 0;
     for (const l of linhas) {
       const [p] = await db.select().from(produtos).where(and(eq(produtos.id, l.produtoId), eq(produtos.empresaId, empresaId))).limit(1);

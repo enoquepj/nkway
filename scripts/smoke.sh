@@ -66,10 +66,22 @@ console.log("nkway.sessao="+p+"."+s);await c.end();})();' 2>/dev/null)
 if [[ -z "$COOKIE" ]]; then
   echo "  aviso: sem usuário no banco — rode build_and_start (ou npm run build + start) para o seed criar a empresa demo"
 else
-  for p in / /pdv /documentos /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /config; do
+  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /config; do
     code=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" "$BASE$p")
     [[ "$code" == "200" ]]; marca $? "GET $p = $code"
   done
+
+  CRON_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/dfe/dist")
+  [[ "$CRON_CODE" == "401" ]]; marca $? "GET /api/dfe/dist sem segredo = $CRON_CODE"
+
+  XML_ANON=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/documentos/xml" -H "Content-Type: application/json" --data '{"ids":[]}')
+  [[ "$XML_ANON" == "401" ]]; marca $? "POST /api/documentos/xml sem sessão = $XML_ANON"
+
+  WH_ANON=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/assinatura/webhook" -H "Content-Type: application/json" --data '{"event":"PAYMENT_CONFIRMED"}')
+  [[ "$WH_ANON" == "401" ]]; marca $? "POST /api/assinatura/webhook sem token = $WH_ANON"
+
+  FIS_ANON=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/fiscal/webhook" -H "Content-Type: application/json" --data '{"status":"autorizado"}')
+  [[ "$FIS_ANON" == "401" ]]; marca $? "POST /api/fiscal/webhook sem token = $FIS_ANON"
 
   echo "→ console do dev (/api/diagnostico)"
   DIAG=$(curl -s -H "Cookie: $COOKIE" "$BASE/api/diagnostico" 2>/dev/null)

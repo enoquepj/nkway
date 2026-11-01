@@ -1,9 +1,19 @@
+import { rotuloPerfil, temPermissao, type PermissaoAcao } from "@/lib/permissoes";
 import { contexto } from "@/lib/session";
 
 /** todo action de escrita resolve o tenant pela sessão — nunca pelo cliente */
 export async function tenant() {
   const c = await contexto();
-  if (!c) throw new Error("Sessão expirada. Entre novamente.");
+  if (!c) throw new Error("Sessão expirada ou usuário inativo. Entre novamente.");
+  return c;
+}
+
+/** Valida no backend se o usuário autenticado possui a permissão exigida pela ação */
+export async function exigirPermissao(acao: PermissaoAcao) {
+  const c = await tenant();
+  if (!temPermissao(c.usuario.papel, acao)) {
+    throw new Error(`Acesso negado: o perfil ${rotuloPerfil(c.usuario.papel)} não possui permissão para esta ação (${acao}).`);
+  }
   return c;
 }
 

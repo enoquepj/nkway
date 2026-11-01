@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -19,7 +19,9 @@ import {
   type EntradaItem,
 } from "@/db/schema";
 import { hashSenha } from "@/lib/session";
+import type { DfeDocumento } from "@/lib/dfe";
 import { gerarChave, round2, UF_NUMERO } from "@/lib/dominio";
+import { montarXmlNfeDemo, montarXmlResumoDemo, zipDocZip } from "@/server/dfeCore";
 
 /** PRNG determinístico para ambiente de demonstração estável */
 function aleatorio(semente = 20260322) {
@@ -111,13 +113,68 @@ export async function semearAmbiente() {
 
   const rnd = aleatorio();
   const agora = new Date();
+  const cnpjEmpresaDemo = cnpjFmt("235678910001");
+  const ontemIso = iso(new Date(agora.getTime() - 86_400_000));
+  const anteontemIso = iso(new Date(agora.getTime() - 2 * 86_400_000));
+
+  const nfeDfeDemo = montarXmlNfeDemo({
+    ufDest: "RO",
+    cnpjDest: cnpjEmpresaDemo,
+    nomeDest: "COMERCIAL SÃO JORGE LTDA",
+    indice: 1,
+    dataIso: ontemIso,
+  });
+  const resDfeDemo = montarXmlResumoDemo({
+    ufDest: "RO",
+    indice: 2,
+    dataIso: anteontemIso,
+  });
+  const docsDfeIniciais: DfeDocumento[] = [
+    {
+      id: randomUUID(),
+      nsu: "000000000000002",
+      chave: nfeDfeDemo.chave,
+      numero: String(nfeDfeDemo.numeroNota),
+      serie: "1",
+      schema: "procNFe_v4.00.xsd",
+      emitenteNome: nfeDfeDemo.fornecedor,
+      emitenteCnpj: nfeDfeDemo.cnpjFornecedor,
+      valorTotal: nfeDfeDemo.total,
+      dataEmissao: ontemIso,
+      statusManifesto: "ciencia",
+      protocoloManifesto: "191260000041001",
+      temXmlCompleto: true,
+      xmlZip: zipDocZip(nfeDfeDemo.xml),
+      importadoErp: false,
+      entradaId: null,
+      capturadoEm: new Date(agora.getTime() - 30 * 60_000).toISOString(),
+    },
+    {
+      id: randomUUID(),
+      nsu: "000000000000001",
+      chave: resDfeDemo.chave,
+      numero: String(Number(resDfeDemo.chave.slice(25, 34))),
+      serie: "1",
+      schema: "resNFe_v1.01.xsd",
+      emitenteNome: resDfeDemo.fornecedor,
+      emitenteCnpj: resDfeDemo.cnpjFornecedor,
+      valorTotal: resDfeDemo.total,
+      dataEmissao: anteontemIso,
+      statusManifesto: "resumo",
+      temXmlCompleto: false,
+      xmlZip: zipDocZip(resDfeDemo.xml),
+      importadoErp: false,
+      entradaId: null,
+      capturadoEm: new Date(agora.getTime() - 120 * 60_000).toISOString(),
+    },
+  ];
 
   const [empresa] = await db
     .insert(empresas)
     .values({
       nome: "COMERCIAL SÃO JORGE LTDA",
       nomeFantasia: "Mercado São Jorge",
-      cnpj: cnpjFmt("235678910001"),
+      cnpj: cnpjEmpresaDemo,
       uf: "RO",
       municipio: "Ji-Paraná",
       codMunicipio: "1100866",
@@ -144,6 +201,13 @@ export async function semearAmbiente() {
         certificadoNome: "A1 demo (não usar em produção)",
         certificadoValidade: iso(new Date(agora.getTime() + 200 * 86_400_000)),
         certificadoSerial: "00:11:22:33:44:55:66:77",
+        dfeAtivo: true,
+        dfeUltimoNsu: "000000000000002",
+        dfeMaxNsu: "000000000000002",
+        dfeUltimaConsultaEm: new Date(agora.getTime() - 15 * 60_000).toISOString(),
+        dfeUltimoCstat: "138",
+        dfeUltimoXmotivo: "Documento(s) localizado(s) no Ambiente Nacional (DEMO)",
+        dfeDocumentos: docsDfeIniciais,
       },
     })
     .returning({ id: empresas.id });

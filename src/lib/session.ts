@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { empresas, usuarios } from "@/db/schema";
@@ -22,13 +22,18 @@ export type Sessao = { empresaId: string; usuarioId: string };
 export async function criarSessao(sessao: Sessao) {
   const payload = b64u(Buffer.from(JSON.stringify({ ...sessao, iat: Date.now() })));
   const token = `${payload}.${assinar(payload)}`;
+  const hdrs = await headers();
+  const proto = hdrs.get("x-forwarded-proto") || "";
+  const origin = hdrs.get("origin") || "";
+  const ehHttps = proto.includes("https") || origin.startsWith("https://");
   const jar = await cookies();
   jar.set(COOKIE, token, {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: ehHttps ? "none" : "lax",
     path: "/",
     maxAge: MAX_AGE,
-    secure: process.env.NODE_ENV === "production",
+    secure: ehHttps,
+    ...(ehHttps ? { partitioned: true } : {}),
   });
 }
 
@@ -71,7 +76,7 @@ export async function contexto() {
     .from(usuarios)
     .where(and(eq(usuarios.id, sessao.usuarioId), eq(usuarios.empresaId, sessao.empresaId)))
     .limit(1);
-  if (!usuario) return null;
+  if (!usuario || usuario.ativo === false) return null;
   return { empresa, usuario, empresaId: empresa.id };
 }
 

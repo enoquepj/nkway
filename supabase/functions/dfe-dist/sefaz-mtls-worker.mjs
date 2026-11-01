@@ -1,18 +1,18 @@
 /**
  * Worker Node.js — mTLS com certificado A1 para SEFAZ.
- * Hospede em Fly.io / Render / VPS (Node 20+).
+ * Hospede em Fly.io / Render / Railway / VPS (Node 20+).
+ * Para certificados ICP-Brasil antigos (RC2), inicie com:
+ *   NODE_OPTIONS=--openssl-legacy-provider node sefaz-mtls-worker.mjs
  *
  * ENV:
  *   PORT=8787
  *   DFE_MTLS_WORKER_SECRET=string-secreta
  *
+ * GET  /health      → { ok: true, servico: "nkway-dfe-mtls-worker" }
  * POST /sefaz-soap
- * body: { url, soapXml, certPem, keyPem, soapAction }
- * resp: { xml } | { erro }
- *
- * Também expõe POST /nfe/por-chave  { chave, certPem, keyPem, cnpj, ultNsu?, ambiente? }
- * para o contrato VITE_NFE_BRIDGE_URL do NKWAY (download pontual por chave via distNSU
- * é feito pela Edge; este endpoint opcional monta distNSU a partir do NSU 0 se necessário).
+ *   body (opção Next.js): { url, soapXml, pfxBase64, passphrase, soapAction }
+ *   body (opção PEM):     { url, soapXml, certPem, keyPem, soapAction }
+ *   resp: { xml } | { erro }
  */
 import http from "node:http";
 import https from "node:https";
@@ -42,14 +42,18 @@ function send(res, status, obj) {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "content-type, x-dfe-worker-secret",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   });
   res.end(body);
 }
 
-function httpsSoapMtls({ url, soapXml, certPem, keyPem, soapAction }) {
+function httpsSoapMtls({ url, soapXml, certPem, keyPem, pfxBase64, passphrase, soapAction }) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
+    const tlsOpts = pfxBase64
+      ? { pfx: Buffer.from(pfxBase64, "base64"), passphrase: String(passphrase ?? "") }
+      : { cert: certPem, key: keyPem };
+
     const req = https.request(
       {
         protocol: u.protocol,
@@ -57,8 +61,7 @@ function httpsSoapMtls({ url, soapXml, certPem, keyPem, soapAction }) {
         port: u.port || 443,
         path: u.pathname + u.search,
         method: "POST",
-        cert: certPem,
-        key: keyPem,
+        ...tlsOpts,
         headers: {
           "Content-Type": "application/soap+xml; charset=utf-8",
           SOAPAction: soapAction || "",
@@ -92,6 +95,10 @@ const server = http.createServer(async (req, res) => {
     send(res, 204, {});
     return;
   }
+  if (req.method === "GET" && (req.url === "/health" || req.url?.startsWith("/health"))) {
+    send(res, 200, { ok: true, servico: "nkway-dfe-mtls-worker" });
+    return;
+  }
   if (req.method !== "POST") {
     send(res, 405, { erro: "Use POST" });
     return;
@@ -106,22 +113,21 @@ const server = http.createServer(async (req, res) => {
   try {
     const body = await readBody(req);
     if (req.url === "/sefaz-soap" || req.url?.startsWith("/sefaz-soap")) {
-      const { url, soapXml, certPem, keyPem, soapAction } = body;
-      if (!url || !soapXml || !certPem || !keyPem) {
-        send(res, 400, { erro: "url, soapXml, certPem e keyPem são obrigatórios" });
+      const { url, soapXml, certPem, keyPem, pfxBase64, passphrase, soapAction } = body;
+      const temCredencial = Boolean(pfxBase64 || (certPem && keyPem));
+      if (!url || !soapXml || !temCredencial) {
+        send(res, 400, { erro: "url, soapXml e credencial A1 (pfxBase64 ou certPem+keyPem) são obrigatórios" });
         return;
       }
-      const xml = await httpsSoapMtls({ url, soapXml, certPem, keyPem, soapAction });
+      const xml = await httpsSoapMtls({ url, soapXml, certPem, keyPem, pfxBase64, passphrase, soapAction });
       send(res, 200, { xml });
       return;
     }
 
-    // Contrato do front NKWAY (VITE_NFE_BRIDGE_URL)
     if (req.url === "/nfe/por-chave" || req.url?.startsWith("/nfe/por-chave")) {
       send(res, 501, {
         erro:
-          "Use a Edge Function dfe-dist + worker /sefaz-soap para distribuição DF-e. " +
-          "Por-chave pontual: dispare a captura e leia nfe_entrada no Postgres, ou envie o XML via importação de arquivo.",
+          "Use o módulo DF-e do NKWAY (/dfe) + worker /sefaz-soap para distribuição DF-e (distNSU e consChNFe).",
       });
       return;
     }

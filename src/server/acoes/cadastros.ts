@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { clientes, fornecedores, movimentos, produtos, vendaItens, vendas } from "@/db/schema";
 import { round2, validarGtin } from "@/lib/dominio";
-import { comoErro, numero, tenant, texto, corpo } from "@/server/tenant";
+import { comoErro, exigirPermissao, tenant, texto, corpo } from "@/server/tenant";
 import { planoById } from "@/lib/dominio";
 
 export type Resultado = { ok: true; id?: string; aviso?: string } | { ok: false; erro: string };
@@ -38,7 +38,8 @@ export type ProdutoInput = {
 
 export async function salvarProduto(input: ProdutoInput): Promise<Resultado> {
   try {
-    const { empresaId, empresa } = await tenant();
+    const { empresaId, empresa } = await exigirPermissao("cadastros.produtos");
+    input = corpo(input);
     const nome = texto(input.nome).trim();
     if (nome.length < 3) return { ok: false, erro: "Nome do produto é obrigatório (mín. 3 caracteres)." };
     if (input.preco < 0 || input.custo < 0) return { ok: false, erro: "Custo e preço não podem ser negativos." };
@@ -130,7 +131,7 @@ export async function salvarProduto(input: ProdutoInput): Promise<Resultado> {
 
 export async function alternarProduto(id: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.produtos");
     const [p] = await db.select({ ativo: produtos.ativo }).from(produtos).where(and(eq(produtos.id, id), eq(produtos.empresaId, empresaId))).limit(1);
     if (!p) return { ok: false, erro: "Produto não encontrado." };
     await db.update(produtos).set({ ativo: !p.ativo }).where(eq(produtos.id, id));
@@ -143,7 +144,7 @@ export async function alternarProduto(id: string): Promise<Resultado> {
 
 export async function excluirProduto(id: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.produtos");
     const [uso] = await db
       .select({ n: sql<string>`count(*)` })
       .from(vendaItens)
@@ -170,7 +171,7 @@ export async function aplicarManutencaoPrecos(input: {
   arredondar: "nenhum" | "para_cima" | "x90" | "inteiro";
 }): Promise<{ ok: true; atualizados: number } | { ok: false; erro: string }> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.produtos");
     input = corpo(input);
     input.ids = input.ids ?? [];
     if (!input.ids?.length) return { ok: false, erro: "Selecione ao menos um produto." };
@@ -217,7 +218,7 @@ export async function salvarCliente(input: {
   observacao: string;
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.clientes");
     input = corpo(input);
     if (texto(input.nome).trim().length < 2) return { ok: false, erro: "Informe o nome do cliente." };
     const valores = {
@@ -247,7 +248,7 @@ export async function salvarCliente(input: {
 
 export async function excluirCliente(id: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.clientes");
     const [uso] = await db
       .select({ n: sql<string>`count(*)` })
       .from(vendas)
@@ -273,7 +274,7 @@ export async function salvarFornecedor(input: {
   prazoPagDias: number;
 }): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.clientes");
     input = corpo(input);
     if (texto(input.nome).trim().length < 3) return { ok: false, erro: "Informe a razão social do fornecedor." };
     const valores = {
@@ -300,7 +301,7 @@ export async function salvarFornecedor(input: {
 
 export async function excluirFornecedor(id: string): Promise<Resultado> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("cadastros.clientes");
     await db.delete(fornecedores).where(and(eq(fornecedores.id, id), eq(fornecedores.empresaId, empresaId)));
     revalidatePath("/clientes");
     return { ok: true };

@@ -3,9 +3,9 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { clientes, contas, movimentos, produtos, vendaItens, vendas } from "@/db/schema";
+import { caixaMovimentos, caixaSessoes, clientes, contas, eventosFiscais, movimentos, produtos, vendaItens, vendas } from "@/db/schema";
+import { ratearPagamentosLiquidos } from "@/lib/caixa";
 import {
-  FORMAS_PAGAMENTO,
   MODELO_NUMERO,
   round2,
   valorAPrazo,
@@ -14,12 +14,15 @@ import {
   somaDias,
   UF_NUMERO,
 } from "@/lib/dominio";
-import { comoErro, corpo, numero, tenant, texto } from "@/server/tenant";
+import { verificarPrazoLegalCancelamento } from "@/lib/emissorFiscal";
+import { registrarAuditoria } from "@/server/auditoria";
+import { transmitirVendaParaEmissor } from "@/server/emissorFiscalCore";
+import { comoErro, corpo, exigirPermissao, tenant, texto } from "@/server/tenant";
 
 export type ItemPdv = { produtoId: string; qtd: number; preco: number };
 export type Pagamento = { forma: string; valor: number };
 
-const REVALIDAR = ["/", "/pdv", "/documentos", "/estoque", "/financeiro", "/produtos", "/clientes"];
+const REVALIDAR = ["/", "/pdv", "/caixa", "/documentos", "/emissor", "/estoque", "/financeiro", "/produtos", "/clientes"];
 const revalidarTudo = () => REVALIDAR.forEach((p) => revalidatePath(p));
 
 async function proximoNumero(empresaId: string, campo: "numero" | "numeroNota") {
@@ -65,10 +68,33 @@ async function gravarVenda(
   },
 ): Promise<ResultadoVenda> {
   try {
-    const { empresaId, empresa } = await tenant();
     input = corpo(input);
+    const tipoVenda = input.tipo === "dav" ? "dav" : "fiscal";
+    const { empresaId, empresa, usuario } = await exigirPermissao(tipoVenda === "dav" ? "dav.criar" : "pdv.vender");
     const itens = (input.itens ?? []).filter((i) => i?.qtd > 0);
     if (itens.length === 0) return { ok: false, erro: "A venda está sem itens." };
+
+    let sessaoAberta: { id: string; numero: number; terminal: string } | null = null;
+    if (tipoVenda === "fiscal") {
+      const [aberta] = await db
+        .select({ id: caixaSessoes.id, numero: caixaSessoes.numero, terminal: caixaSessoes.terminal })
+        .from(caixaSessoes)
+        .where(
+          and(
+            eq(caixaSessoes.empresaId, empresaId),
+            eq(caixaSessoes.operadorId, usuario.id),
+            eq(caixaSessoes.status, "aberto"),
+          ),
+        )
+        .limit(1);
+      if (!aberta) {
+        return {
+          ok: false,
+          erro: "Caixa fechado: abra o seu caixa antes de registrar vendas fiscais.",
+        };
+      }
+      sessaoAberta = aberta;
+    }
 
     const produtosRows = await db
       .select()
@@ -145,8 +171,10 @@ async function gravarVenda(
         autorizadaEm: fiscal ? Date.now() : null,
         validade: !fiscal ? (input.validade || somaDias(hojeISO(), 3)) : null,
         observacao: input.observacao || null,
-        operador: input.operador || "Frente de caixa",
-        caixa: input.caixa || "CAIXA 1",
+        operador: input.operador || usuario.nome || "Frente de caixa",
+        operadorId: usuario.id,
+        caixaSessaoId: sessaoAberta?.id ?? null,
+        caixa: sessaoAberta?.terminal || input.caixa || "CAIXA 1",
         ambiente: String(((empresa.fiscal ?? {}) as Record<string, unknown>).ambiente ?? "2"),
         origem: input.davOrigemId ? "dav" : "pdv",
         davOrigemId: input.davOrigemId ?? null,
@@ -216,8 +244,22 @@ async function gravarVenda(
     if (input.davOrigemId)
       await db.update(vendas).set({ status: "faturado" }).where(eq(vendas.id, input.davOrigemId));
 
+    let chaveFinal = chave;
+    if (fiscal) {
+      const rFis = await transmitirVendaParaEmissor({
+        empresaId,
+        vendaId: venda.id,
+        usuario,
+        registrarNaAuditoria: false,
+      });
+      if (rFis.chave) chaveFinal = rFis.chave;
+      if (!rFis.ok) {
+        aviso = `Venda registrada · Pendência fiscal SEFAZ (${rFis.cstat}): verifique em Emissor SEFAZ.`;
+      }
+    }
+
     revalidarTudo();
-    return { ok: true, id: venda.id, total, numero, numeroNota, chave, troco, aviso };
+    return { ok: true, id: venda.id, total, numero, numeroNota, chave: chaveFinal, troco, aviso };
   } catch (e) {
     return comoErro(e);
   }
@@ -258,7 +300,7 @@ export async function faturarDav(input: {
   desconto?: number;
 }): Promise<ResultadoVenda> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("dav.faturar");
     input = corpo(input);
     const [dav] = await db.select().from(vendas).where(and(eq(vendas.id, input.davId), eq(vendas.empresaId, empresaId))).limit(1);
     if (!dav) return { ok: false, erro: "DAV não encontrado." };
@@ -284,14 +326,113 @@ export async function faturarDav(input: {
 
 export async function cancelarVenda(input: { vendaId: string; motivo: string }): Promise<{ ok: true } | { ok: false; erro: string }> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId, empresa, usuario } = await exigirPermissao("venda.cancelar");
     input = corpo(input);
-    if (!texto(input.motivo).trim()) return { ok: false, erro: "Descreva o motivo do cancelamento." };
+    const motivoLimpo = texto(input.motivo).trim();
+    if (!motivoLimpo) return { ok: false, erro: "Descreva o motivo do cancelamento." };
     const [venda] = await db.select().from(vendas).where(and(eq(vendas.id, input.vendaId), eq(vendas.empresaId, empresaId))).limit(1);
     if (!venda) return { ok: false, erro: "Documento não encontrado." };
     if (venda.status === "cancelado") return { ok: false, erro: "Este documento já está cancelado." };
 
-    await db.update(vendas).set({ status: "cancelado", observacao: `${venda.observacao ?? ""} · Cancelado: ${texto(input.motivo).trim()}`.trim() }).where(eq(vendas.id, venda.id));
+    if (venda.tipo === "fiscal") {
+      if (motivoLimpo.length < 15) {
+        return { ok: false, erro: "O evento de cancelamento SEFAZ (110111) exige justificativa com no mínimo 15 caracteres." };
+      }
+      const amb = Number(((empresa.fiscal ?? {}) as Record<string, unknown>).ambiente ?? venda.ambiente ?? 2);
+      const prazo = verificarPrazoLegalCancelamento({
+        modelo: venda.modelo,
+        autorizadaEm: venda.autorizadaEm,
+      });
+      if (amb === 1 && !prazo.dentroDoPrazo) {
+        return {
+          ok: false,
+          erro: `Prazo legal da SEFAZ expirado para cancelamento (${prazo.rotuloLimite}; decorridos ${prazo.decorridoMinutos} min). Emita nota de devolução.`,
+        };
+      }
+    }
+
+    let sessaoEstornoId: string | null = null;
+    if (venda.tipo === "fiscal") {
+      if (venda.caixaSessaoId) {
+        const [sessaoOrigem] = await db
+          .select({ id: caixaSessoes.id, status: caixaSessoes.status })
+          .from(caixaSessoes)
+          .where(and(eq(caixaSessoes.id, venda.caixaSessaoId), eq(caixaSessoes.empresaId, empresaId)))
+          .limit(1);
+        if (sessaoOrigem?.status === "aberto") {
+          sessaoEstornoId = sessaoOrigem.id;
+        }
+      }
+      if (!sessaoEstornoId) {
+        const [minhaAberta] = await db
+          .select({ id: caixaSessoes.id })
+          .from(caixaSessoes)
+          .where(
+            and(
+              eq(caixaSessoes.empresaId, empresaId),
+              eq(caixaSessoes.operadorId, usuario.id),
+              eq(caixaSessoes.status, "aberto"),
+            ),
+          )
+          .limit(1);
+        if (!minhaAberta) {
+          return {
+            ok: false,
+            erro: "Caixa fechado: abra uma sessão de caixa antes de cancelar ou estornar uma venda fiscal.",
+          };
+        }
+        sessaoEstornoId = minhaAberta.id;
+      }
+    }
+
+    await db
+      .update(vendas)
+      .set({
+        status: "cancelado",
+        ...(venda.tipo === "fiscal"
+          ? {
+              statusSefaz: "cancelada_sefaz",
+              cstatSefaz: "135",
+              motivoSefaz: `Evento 110111 homologado: ${motivoLimpo}`.slice(0, 300),
+            }
+          : {}),
+        observacao: `${venda.observacao ?? ""} · Cancelado: ${motivoLimpo}`.trim(),
+      })
+      .where(eq(vendas.id, venda.id));
+
+    if (venda.tipo === "fiscal" && venda.chave) {
+      await db.insert(eventosFiscais).values({
+        empresaId,
+        vendaId: venda.id,
+        chave: venda.chave,
+        tipo: "cancelamento",
+        sequencia: 1,
+        descricao: motivoLimpo,
+        protocolo: `${venda.protocolo || "135000000000"}11`,
+      });
+    }
+
+    if (venda.tipo === "fiscal" && sessaoEstornoId) {
+      const rateio = ratearPagamentosLiquidos({
+        total: Number(venda.total),
+        formaPagamento: venda.formaPagamento,
+        pagamentos: (venda.pagamentos ?? []) as { forma: string; valor: number }[],
+      });
+      for (const [forma, valor] of Object.entries(rateio)) {
+        if (valor <= 0) continue;
+        await db.insert(caixaMovimentos).values({
+          empresaId,
+          sessaoId: sessaoEstornoId,
+          tipo: "estorno",
+          forma,
+          valor,
+          motivo: `Estorno ${venda.modelo ?? "NFC-e"} ${venda.numeroNota ?? venda.numero}: ${texto(input.motivo).trim()}`,
+          vendaId: venda.id,
+          usuarioId: usuario.id,
+          usuarioNome: usuario.nome,
+        });
+      }
+    }
 
     const itens = await db.select().from(vendaItens).where(eq(vendaItens.vendaId, venda.id));
     if (venda.tipo === "fiscal") {
@@ -316,6 +457,15 @@ export async function cancelarVenda(input: { vendaId: string; motivo: string }):
       }
     }
     await db.delete(contas).where(and(eq(contas.vendaId, venda.id), eq(contas.status, "aberta")));
+    await registrarAuditoria({
+      empresaId,
+      usuario,
+      acao: "venda.cancelar",
+      entidade: "venda",
+      registroId: venda.id,
+      resumo: `${venda.tipo === "dav" ? `DAV ${venda.numero}` : `${venda.modelo ?? "NFC-e"} ${venda.numeroNota ?? venda.numero}`} cancelado: ${texto(input.motivo).trim()}`,
+      alteracoes: { numero: venda.numero, numeroNota: venda.numeroNota, total: Number(venda.total), motivo: texto(input.motivo).trim() },
+    });
     revalidarTudo();
     return { ok: true };
   } catch (e) {
@@ -325,7 +475,7 @@ export async function cancelarVenda(input: { vendaId: string; motivo: string }):
 
 export async function excluirDav(davId: string): Promise<{ ok: true } | { ok: false; erro: string }> {
   try {
-    const { empresaId } = await tenant();
+    const { empresaId } = await exigirPermissao("dav.criar");
     const [dav] = await db.select().from(vendas).where(and(eq(vendas.id, davId), eq(vendas.empresaId, empresaId))).limit(1);
     if (!dav) return { ok: false, erro: "DAV não encontrado." };
     if (dav.status === "faturado") return { ok: false, erro: "DAV faturado não pode ser apagado — cancele a nota." };

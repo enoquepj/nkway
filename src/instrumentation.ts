@@ -5,6 +5,12 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  try {
+    const { garantirMigracoesNk } = await import("./db/migracao");
+    await garantirMigracoesNk();
+  } catch (e) {
+    console.error("[nkway] migração incremental ignorada:", e instanceof Error ? e.message : e);
+  }
   if (process.env.NKWAY_SEED === "off") return;
   try {
     const { semearAmbiente } = await import("./db/seed");

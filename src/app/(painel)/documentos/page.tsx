@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { normalizarPerfil } from "@/lib/permissoes";
 import { contexto } from "@/lib/session";
 import { listarInutilizacoes, listarProximoNumero, listarVendas } from "@/server/dados";
 import { DocumentosView } from "@/views/Documentos";
@@ -41,6 +42,7 @@ export default async function DocumentosPage() {
       inutilizacoes={inutilizacoes}
       proximoNumero={proximoNumero}
       serieAtual={serieAtual}
+      usuarioPapel={normalizarPerfil(c.usuario.papel)}
     />
   );
 }
