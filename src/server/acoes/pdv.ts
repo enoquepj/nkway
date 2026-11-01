@@ -3,7 +3,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { caixaMovimentos, caixaSessoes, clientes, contas, eventosFiscais, movimentos, produtos, vendaItens, vendas } from "@/db/schema";
+import { caixaMovimentos, caixaSessoes, clientes, contas, movimentos, produtos, vendaItens, vendas } from "@/db/schema";
 import { ratearPagamentosLiquidos } from "@/lib/caixa";
 import {
   MODELO_NUMERO,
@@ -14,9 +14,8 @@ import {
   somaDias,
   UF_NUMERO,
 } from "@/lib/dominio";
-import { verificarPrazoLegalCancelamento } from "@/lib/emissorFiscal";
 import { registrarAuditoria } from "@/server/auditoria";
-import { transmitirVendaParaEmissor } from "@/server/emissorFiscalCore";
+import { diagnosticoEmissorServidor, transmitirVendaParaEmissor } from "@/server/emissorFiscalCore";
 import { comoErro, corpo, exigirPermissao, tenant, texto } from "@/server/tenant";
 
 export type ItemPdv = { produtoId: string; qtd: number; preco: number };
@@ -244,8 +243,10 @@ async function gravarVenda(
     if (input.davOrigemId)
       await db.update(vendas).set({ status: "faturado" }).where(eq(vendas.id, input.davOrigemId));
 
+    // Só aciona transmissão externa na venda do PDV quando um provedor SEFAZ live estiver configurado;
+    // em homologação local mantém 100% o comportamento e os avisos originais do PDV antigo.
     let chaveFinal = chave;
-    if (fiscal) {
+    if (fiscal && diagnosticoEmissorServidor().modoLive) {
       const rFis = await transmitirVendaParaEmissor({
         empresaId,
         vendaId: venda.id,
@@ -253,7 +254,7 @@ async function gravarVenda(
         registrarNaAuditoria: false,
       });
       if (rFis.chave) chaveFinal = rFis.chave;
-      if (!rFis.ok) {
+      if (!rFis.ok && !aviso) {
         aviso = `Venda registrada · Pendência fiscal SEFAZ (${rFis.cstat}): verifique em Emissor SEFAZ.`;
       }
     }
@@ -326,7 +327,7 @@ export async function faturarDav(input: {
 
 export async function cancelarVenda(input: { vendaId: string; motivo: string }): Promise<{ ok: true } | { ok: false; erro: string }> {
   try {
-    const { empresaId, empresa, usuario } = await exigirPermissao("venda.cancelar");
+    const { empresaId, usuario } = await exigirPermissao("venda.cancelar");
     input = corpo(input);
     const motivoLimpo = texto(input.motivo).trim();
     if (!motivoLimpo) return { ok: false, erro: "Descreva o motivo do cancelamento." };
@@ -334,23 +335,8 @@ export async function cancelarVenda(input: { vendaId: string; motivo: string }):
     if (!venda) return { ok: false, erro: "Documento não encontrado." };
     if (venda.status === "cancelado") return { ok: false, erro: "Este documento já está cancelado." };
 
-    if (venda.tipo === "fiscal") {
-      if (motivoLimpo.length < 15) {
-        return { ok: false, erro: "O evento de cancelamento SEFAZ (110111) exige justificativa com no mínimo 15 caracteres." };
-      }
-      const amb = Number(((empresa.fiscal ?? {}) as Record<string, unknown>).ambiente ?? venda.ambiente ?? 2);
-      const prazo = verificarPrazoLegalCancelamento({
-        modelo: venda.modelo,
-        autorizadaEm: venda.autorizadaEm,
-      });
-      if (amb === 1 && !prazo.dentroDoPrazo) {
-        return {
-          ok: false,
-          erro: `Prazo legal da SEFAZ expirado para cancelamento (${prazo.rotuloLimite}; decorridos ${prazo.decorridoMinutos} min). Emita nota de devolução.`,
-        };
-      }
-    }
-
+    // Proteção de caixa da Fase 2: nunca altera sessão já fechada; se a venda pertence a sessão de caixa,
+    // grava o estorno na própria sessão (se aberta) ou na sessão aberta atual do operador.
     let sessaoEstornoId: string | null = null;
     if (venda.tipo === "fiscal") {
       if (venda.caixaSessaoId) {
@@ -361,9 +347,27 @@ export async function cancelarVenda(input: { vendaId: string; motivo: string }):
           .limit(1);
         if (sessaoOrigem?.status === "aberto") {
           sessaoEstornoId = sessaoOrigem.id;
+        } else {
+          const [minhaAberta] = await db
+            .select({ id: caixaSessoes.id })
+            .from(caixaSessoes)
+            .where(
+              and(
+                eq(caixaSessoes.empresaId, empresaId),
+                eq(caixaSessoes.operadorId, usuario.id),
+                eq(caixaSessoes.status, "aberto"),
+              ),
+            )
+            .limit(1);
+          if (!minhaAberta) {
+            return {
+              ok: false,
+              erro: "Caixa fechado: esta venda pertence a uma sessão de caixa já encerrada. Abra uma sessão de caixa (ou reabra a anterior) para registrar o estorno.",
+            };
+          }
+          sessaoEstornoId = minhaAberta.id;
         }
-      }
-      if (!sessaoEstornoId) {
+      } else {
         const [minhaAberta] = await db
           .select({ id: caixaSessoes.id })
           .from(caixaSessoes)
@@ -375,13 +379,7 @@ export async function cancelarVenda(input: { vendaId: string; motivo: string }):
             ),
           )
           .limit(1);
-        if (!minhaAberta) {
-          return {
-            ok: false,
-            erro: "Caixa fechado: abra uma sessão de caixa antes de cancelar ou estornar uma venda fiscal.",
-          };
-        }
-        sessaoEstornoId = minhaAberta.id;
+        sessaoEstornoId = minhaAberta?.id ?? null;
       }
     }
 
@@ -389,28 +387,10 @@ export async function cancelarVenda(input: { vendaId: string; motivo: string }):
       .update(vendas)
       .set({
         status: "cancelado",
-        ...(venda.tipo === "fiscal"
-          ? {
-              statusSefaz: "cancelada_sefaz",
-              cstatSefaz: "135",
-              motivoSefaz: `Evento 110111 homologado: ${motivoLimpo}`.slice(0, 300),
-            }
-          : {}),
+        ...(venda.tipo === "fiscal" ? { statusSefaz: "cancelada_sefaz", cstatSefaz: "135" } : {}),
         observacao: `${venda.observacao ?? ""} · Cancelado: ${motivoLimpo}`.trim(),
       })
       .where(eq(vendas.id, venda.id));
-
-    if (venda.tipo === "fiscal" && venda.chave) {
-      await db.insert(eventosFiscais).values({
-        empresaId,
-        vendaId: venda.id,
-        chave: venda.chave,
-        tipo: "cancelamento",
-        sequencia: 1,
-        descricao: motivoLimpo,
-        protocolo: `${venda.protocolo || "135000000000"}11`,
-      });
-    }
 
     if (venda.tipo === "fiscal" && sessaoEstornoId) {
       const rateio = ratearPagamentosLiquidos({

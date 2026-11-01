@@ -49,6 +49,7 @@ export function PdvView({
   const podeVenderFiscal = temPermissao(usuario.papel, "pdv.vender");
   const podeAbrirCaixa = temPermissao(usuario.papel, "caixa.abrir");
   const [modalAbrirCaixa, setModalAbrirCaixa] = useState(false);
+  const [finalizarAposAbrir, setFinalizarAposAbrir] = useState(false);
   const [terminalRapido, setTerminalRapido] = useState("CAIXA 1");
   const [saldoRapido, setSaldoRapido] = useState("100,00");
   const ativos = useMemo(() => produtos.filter((p) => p.ativo), [produtos]);
@@ -169,17 +170,18 @@ export function PdvView({
     }
   }
 
-  async function finalizar(tipo: "fiscal" | "dav") {
-    if (tipo === "fiscal" && !podeVenderFiscal) {
-      return toast("Seu perfil emite apenas DAV / orçamento. Encaminhe ao operador de caixa para faturar.", "erro");
-    }
-    if (tipo === "fiscal" && !sessaoCaixa) {
-      setModalAbrirCaixa(true);
-      return toast("Caixa fechado: abra o seu caixa antes de emitir vendas fiscais.", "info");
-    }
+  async function finalizar(tipo: "fiscal" | "dav", caixaRecemAberto = false) {
     if (linhas.length === 0) return toast("Coloque ao menos um item na venda.", "erro");
     const itens: ItemPdv[] = linhas.map((l) => ({ produtoId: l.produtoId, qtd: l.qtd, preco: l.preco }));
     if (itens.some((i) => i.qtd <= 0)) return toast("Informe a quantidade/peso de todos os itens.", "erro");
+    if (tipo === "fiscal" && !podeVenderFiscal) {
+      return toast("Seu perfil emite apenas DAV / orçamento. Encaminhe ao operador de caixa para faturar.", "erro");
+    }
+    if (tipo === "fiscal" && !sessaoCaixa && !caixaRecemAberto) {
+      setFinalizarAposAbrir(true);
+      setModalAbrirCaixa(true);
+      return toast("Caixa fechado: confirme a abertura do seu caixa para concluir a venda.", "info");
+    }
     if (tipo === "fiscal" && pagamentos.length === 0) definirPagamentoAutomatico("dinheiro");
 
     const payloadPagamentos = pagamentos.length ? pagamentos : tipo === "fiscal" ? [{ forma: "dinheiro", valor: total }] : [];
@@ -253,7 +255,7 @@ export function PdvView({
               ↑ ↓ navegam · Enter adiciona · F10 finaliza · Esc limpa · leitor de código de barras funciona no campo de busca
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {fila > 0 && (
               <button
                 type="button"
@@ -264,56 +266,33 @@ export function PdvView({
                 {fila} venda(s) na fila local · sincronizar
               </button>
             )}
+            {sessaoCaixa ? (
+              <Link
+                href="/caixa"
+                title="Gerenciar suprimento, sangria ou fechamento de caixa"
+                className="inline-flex items-center gap-1.5 rounded-md bg-way-50 px-2 py-0.5 text-[11px] font-semibold text-way-700 ring-1 ring-inset ring-way-200 transition hover:bg-way-100"
+              >
+                <Icon name="carteira" className="size-3" />
+                <span>Caixa #{sessaoCaixa.numero} ({sessaoCaixa.terminal})</span>
+                <span className="tabular">· {moeda(sessaoCaixa.saldoDinheiro)}</span>
+              </Link>
+            ) : podeAbrirCaixa ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setFinalizarAposAbrir(false);
+                  setModalAbrirCaixa(true);
+                }}
+                className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200 transition hover:bg-amber-100"
+              >
+                <Icon name="caixa" className="size-3" />
+                Caixa fechado · Abrir
+              </button>
+            ) : null}
             <Badge tom={empresa.ambiente === "1" ? "erro" : "info"}>
               {empresa.ambiente === "1" ? "Produção" : "Homologação"}
             </Badge>
           </div>
-        </div>
-
-        {/* Barra de sessão de caixa do operador (Fase 2) */}
-        <div
-          className={cn(
-            "mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-[12.5px]",
-            !podeVenderFiscal
-              ? "border-violet-200 bg-violet-50/60 text-violet-900"
-              : sessaoCaixa
-                ? "border-way-200 bg-way-50/60 text-ink-800"
-                : "border-amber-200 bg-amber-50/70 text-amber-900",
-          )}
-        >
-          {!podeVenderFiscal ? (
-            <p className="font-medium">
-              <b>Modo Pré-venda ({usuario.nome}):</b> monte o pedido e clique em <b>Gerar DAV</b> para o caixa faturar.
-            </p>
-          ) : sessaoCaixa ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge tom="ok">Caixa #{sessaoCaixa.numero} aberto</Badge>
-                <span className="font-semibold">{sessaoCaixa.terminal}</span>
-                <span className="text-ink-500">· Operador: {usuario.nome}</span>
-                <span className="tabular font-semibold text-way-700">· Gaveta: {moeda(sessaoCaixa.saldoDinheiro)}</span>
-              </div>
-              <Link href="/caixa">
-                <Button tamanho="sm" variante="secundario" icone="carteira">
-                  Sangria / Fechar caixa →
-                </Button>
-              </Link>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <Badge tom="alerta">Caixa fechado</Badge>
-                <span className="font-medium">
-                  Abra sua sessão de caixa para liberar vendas fiscais (DAVs continuam liberados).
-                </span>
-              </div>
-              {podeAbrirCaixa && (
-                <Button tamanho="sm" icone="caixa" onClick={() => setModalAbrirCaixa(true)}>
-                  Abrir caixa agora
-                </Button>
-              )}
-            </>
-          )}
         </div>
 
         <Card className="p-2.5">
@@ -610,25 +589,14 @@ export function PdvView({
             </div>
           </dl>
           <div className="space-y-2 border-t border-ink-100 px-4 py-3">
-            {podeVenderFiscal && (
-              <Button
-                className="w-full pulse-way"
-                disabled={ocupado || total <= 0 || falta > 0.01}
-                onClick={() => finalizar("fiscal")}
-              >
-                {ocupado
-                  ? "Enviando à SEFAZ…"
-                  : sessaoCaixa
-                    ? `Finalizar venda · ${moeda(total)}`
-                    : "Abrir caixa para finalizar venda"}
-              </Button>
-            )}
             <Button
-              variante={podeVenderFiscal ? "secundario" : "primario"}
-              className="w-full"
-              disabled={ocupado || total <= 0}
-              onClick={() => finalizar("dav")}
+              className="w-full pulse-way"
+              disabled={ocupado || total <= 0 || falta > 0.01 || !podeVenderFiscal}
+              onClick={() => finalizar("fiscal")}
             >
+              {ocupado ? "Enviando à SEFAZ…" : `Finalizar venda · ${moeda(total)}`}
+            </Button>
+            <Button variante="secundario" className="w-full" disabled={ocupado || total <= 0} onClick={() => finalizar("dav")}>
               Gerar DAV (sem valor fiscal)
             </Button>
             <p className="text-center text-[10.5px] leading-snug text-ink-400">
@@ -764,13 +732,22 @@ export function PdvView({
       {/* abertura rápida de caixa no PDV */}
       <Modal
         aberto={modalAbrirCaixa}
-        aoFechar={() => setModalAbrirCaixa(false)}
+        aoFechar={() => {
+          setModalAbrirCaixa(false);
+          setFinalizarAposAbrir(false);
+        }}
         titulo="Abrir sessão de caixa"
         descricao={`Operador: ${usuario.nome} · Libera vendas fiscais e controle de gaveta`}
         largura="max-w-md"
         rodape={
           <div className="flex justify-end gap-2">
-            <Button variante="secundario" onClick={() => setModalAbrirCaixa(false)}>
+            <Button
+              variante="secundario"
+              onClick={() => {
+                setModalAbrirCaixa(false);
+                setFinalizarAposAbrir(false);
+              }}
+            >
               Cancelar
             </Button>
             <Button
@@ -780,14 +757,22 @@ export function PdvView({
                 setOcupado(true);
                 const r = await abrirCaixa({ terminal: terminalRapido, saldoInicial: saldoRapido });
                 setOcupado(false);
-                toast(r.ok ? (r.aviso ?? "Caixa aberto.") : r.erro, r.ok ? "ok" : "erro");
-                if (r.ok) {
-                  setModalAbrirCaixa(false);
-                  router.refresh();
+                if (!r.ok) {
+                  toast(r.erro, "erro");
+                  return;
+                }
+                const deveConcluirVenda = finalizarAposAbrir && linhas.length > 0;
+                setModalAbrirCaixa(false);
+                setFinalizarAposAbrir(false);
+                router.refresh();
+                if (deveConcluirVenda) {
+                  await finalizar("fiscal", true);
+                } else {
+                  toast(r.aviso ?? "Caixa aberto.", "ok");
                 }
               }}
             >
-              {ocupado ? "Abrindo…" : "Abrir caixa"}
+              {ocupado ? "Abrindo…" : finalizarAposAbrir ? "Abrir caixa e finalizar venda" : "Abrir caixa"}
             </Button>
           </div>
         }

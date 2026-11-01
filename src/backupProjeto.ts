@@ -11,8 +11,8 @@ const utf8 = (texto: string) => new Uint8Array(new TextEncoder().encode(texto));
 const arquivos = {
   ...import.meta.glob("/src/**/*.{ts,tsx,css}", { query: "?raw", import: "default", eager: true }),
   ...import.meta.glob("/public/*.{js,webmanifest,json,txt,svg}", { query: "?raw", import: "default", eager: true }),
-  ...import.meta.glob("/supabase/**/*.sql", { query: "?raw", import: "default", eager: true }),
-  ...import.meta.glob("/*.{md,json,toml,html,sh,sql}", { query: "?raw", import: "default", eager: true }),
+  ...import.meta.glob("/supabase/*.sql", { query: "?raw", import: "default", eager: true }),
+  ...import.meta.glob("/*.{md,json,toml,html,sh}", { query: "?raw", import: "default", eager: true }),
   ...import.meta.glob(["/vite.config.ts", "/.gitignore", "/.env.example", "/.npmrc"], { query: "?raw", import: "default", eager: true }),
 } as Record<string, string>;
 
