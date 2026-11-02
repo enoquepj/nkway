@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import {
   assinaturaFaturas,
@@ -28,6 +28,12 @@ import { padNsu, type DfePainelDados } from "@/lib/dfe";
 import { diasAteTrial, planoById, round2, situacaoEstoque, soDigitos, validarCnpj, type SituacaoEstoque } from "@/lib/dominio";
 import type { ProvedorEmissorFiscal, StatusSefazVenda } from "@/lib/emissorFiscal";
 import { normalizarPerfil, temPermissao, type PerfilUsuario } from "@/lib/permissoes";
+import {
+  resolverProtocoloOrigemVenda,
+  resolverSituacaoFiscalVenda,
+  type ProtocoloOrigemVenda,
+  type SituacaoFiscalVenda,
+} from "@/lib/situacaoFiscal";
 import { diagnosticoGatewayServidor, type ProvedorGateway } from "@/server/assinaturaGateway";
 import { ambienteDfeServidor, lerDocumentosDfeFiscal } from "@/server/dfeCore";
 import { diagnosticoEmissorServidor } from "@/server/emissorFiscalCore";
@@ -218,6 +224,8 @@ export type VendaDto = {
   numeroNota: number | null;
   chave: string | null;
   protocolo: string | null;
+  protocoloOrigem: ProtocoloOrigemVenda;
+  situacaoFiscal: SituacaoFiscalVenda;
   validade: string | null;
   observacao: string | null;
   operador: string | null;
@@ -236,19 +244,158 @@ export type VendaDto = {
   eventos: { id: string; tipo: string; sequencia: number; descricao: string; protocolo: string; em: string }[];
 };
 
-export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal" | "dav"; ids?: string[] }) {
-  const condicoes = [eq(vendas.empresaId, empresaId)];
-  if (filtro?.tipo) condicoes.push(eq(vendas.tipo, filtro.tipo));
+export type FiltroListarVendas = {
+  tipo?: "fiscal" | "dav" | "sem_nota" | "todos" | "";
+  ids?: string[];
+  busca?: string;
+  inicio?: string;
+  fim?: string;
+  situacao?: string;
+  pagina?: number;
+  tamanhoPagina?: number;
+};
+
+function montarCondicoesVendas(empresaId: string, filtro?: FiltroListarVendas): SQL[] | null {
+  const condicoes: SQL[] = [eq(vendas.empresaId, empresaId)];
+
+  if (filtro?.tipo && filtro.tipo !== "todos") {
+    condicoes.push(eq(vendas.tipo, filtro.tipo));
+  }
   if (filtro?.ids) {
-    if (filtro.ids.length === 0) return [];
+    if (filtro.ids.length === 0) return null;
     condicoes.push(inArray(vendas.id, filtro.ids));
   }
-  const linhas = await db
+  if (filtro?.inicio && /^\d{4}-\d{2}-\d{2}$/.test(filtro.inicio)) {
+    condicoes.push(sql`${vendas.data} >= (${filtro.inicio}::date)`);
+  }
+  if (filtro?.fim && /^\d{4}-\d{2}-\d{2}$/.test(filtro.fim)) {
+    condicoes.push(sql`${vendas.data} < (${filtro.fim}::date + interval '1 day')`);
+  }
+
+  const sit = String(filtro?.situacao ?? "").trim();
+  if (sit && sit !== "todas" && sit !== "todos") {
+    if (sit === "aberto" || sit === "faturado" || sit === "cancelado") {
+      condicoes.push(eq(vendas.status, sit));
+    } else if (sit === "cancelada") {
+      condicoes.push(or(eq(vendas.status, "cancelado"), eq(vendas.statusSefaz, "cancelada_sefaz"))!);
+    } else if (sit === "autorizada") {
+      condicoes.push(
+        and(
+          ne(vendas.status, "cancelado"),
+          or(
+            and(eq(vendas.situacaoFiscal, "autorizada"), eq(vendas.protocoloOrigem, "autorizado_sefaz")),
+            and(isNull(vendas.situacaoFiscal), eq(vendas.statusSefaz, "autorizada"), sql`coalesce(${vendas.protocolo}, '') <> ''`),
+          ),
+        )!,
+      );
+    } else if (sit === "pendente_transmissao") {
+      condicoes.push(
+        and(
+          ne(vendas.status, "cancelado"),
+          or(
+            eq(vendas.situacaoFiscal, "pendente_transmissao"),
+            and(isNull(vendas.situacaoFiscal), inArray(vendas.statusSefaz, ["pendente_envio", "contingencia"])),
+          ),
+        )!,
+      );
+    } else if (sit === "simulado") {
+      condicoes.push(
+        and(
+          ne(vendas.status, "cancelado"),
+          eq(vendas.tipo, "fiscal"),
+          or(
+            eq(vendas.situacaoFiscal, "simulado"),
+            and(isNull(vendas.situacaoFiscal), eq(vendas.statusSefaz, "simulado")),
+          ),
+        )!,
+      );
+    } else if (sit === "nao_emitida") {
+      condicoes.push(
+        and(
+          ne(vendas.status, "cancelado"),
+          or(eq(vendas.situacaoFiscal, "nao_emitida"), inArray(vendas.tipo, ["dav", "sem_nota"])),
+        )!,
+      );
+    } else if (sit === "rejeitada") {
+      condicoes.push(
+        and(
+          ne(vendas.status, "cancelado"),
+          or(eq(vendas.situacaoFiscal, "rejeitada"), eq(vendas.statusSefaz, "rejeitada")),
+        )!,
+      );
+    }
+  }
+
+  const termoBruto = String(filtro?.busca ?? "").trim();
+  if (termoBruto) {
+    const digitos = soDigitos(termoBruto);
+    const padraoTexto = `%${termoBruto}%`;
+    const clausulasBusca: SQL[] = [
+      sql`${vendas.clienteNome} ilike ${padraoTexto}`,
+      sql`coalesce(${vendas.protocolo}, '') ilike ${padraoTexto}`,
+      sql`coalesce(${vendas.chave}, '') ilike ${padraoTexto}`,
+      sql`cast(${vendas.numero} as text) = ${termoBruto}`,
+      sql`cast(coalesce(${vendas.numeroNota}, -1) as text) = ${termoBruto}`,
+      sql`exists (
+        select 1 from nk_cliente c
+        where c.empresa_id = ${empresaId}
+          and c.id = ${vendas.clienteId}
+          and c.nome ilike ${padraoTexto}
+      )`,
+    ];
+
+    if (digitos.length > 0) {
+      if (digitos.length <= 9) {
+        clausulasBusca.push(sql`cast(${vendas.numero} as text) = ${digitos}`);
+        clausulasBusca.push(sql`cast(coalesce(${vendas.numeroNota}, -1) as text) = ${digitos}`);
+      }
+      if (digitos.length >= 4) {
+        clausulasBusca.push(
+          sql`regexp_replace(coalesce(${vendas.chave}, ''), '\\D', '', 'g') like ${`%${digitos}%`}`,
+        );
+        clausulasBusca.push(
+          sql`regexp_replace(coalesce(${vendas.protocolo}, ''), '\\D', '', 'g') like ${`%${digitos}%`}`,
+        );
+      }
+      if (digitos.length >= 3) {
+        clausulasBusca.push(
+          sql`exists (
+            select 1 from nk_cliente c
+            where c.empresa_id = ${empresaId}
+              and (c.id = ${vendas.clienteId} or upper(c.nome) = upper(${vendas.clienteNome}))
+              and regexp_replace(coalesce(c.documento, ''), '\\D', '', 'g') like ${`%${digitos}%`}
+          )`,
+        );
+      }
+    }
+
+    condicoes.push(or(...clausulasBusca)!);
+  }
+
+  return condicoes;
+}
+
+export async function listarVendas(empresaId: string, filtro?: FiltroListarVendas) {
+  const condicoes = montarCondicoesVendas(empresaId, filtro);
+  if (!condicoes) return [];
+
+  const usarPaginacao =
+    (filtro?.pagina !== undefined && filtro.pagina > 0) ||
+    (filtro?.tamanhoPagina !== undefined && filtro.tamanhoPagina > 0);
+
+  const pagina = Math.max(1, Math.floor(Number(filtro?.pagina ?? 1) || 1));
+  const tamanhoPagina = Math.min(200, Math.max(1, Math.floor(Number(filtro?.tamanhoPagina ?? 20) || 20)));
+
+  const queryBase = db
     .select()
     .from(vendas)
     .where(and(...condicoes))
-    .orderBy(desc(vendas.data))
-    .limit(500);
+    .orderBy(desc(vendas.data), desc(vendas.numero));
+
+  const linhas = usarPaginacao
+    ? await queryBase.limit(tamanhoPagina).offset((pagina - 1) * tamanhoPagina)
+    : await queryBase;
+
   const ids = linhas.map((l) => l.id);
   const itens = ids.length ? await db.select().from(vendaItens).where(inArray(vendaItens.vendaId, ids)) : [];
   const evs = ids.length
@@ -280,6 +427,8 @@ export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal"
     numeroNota: v.numeroNota,
     chave: v.chave,
     protocolo: v.protocolo,
+    protocoloOrigem: resolverProtocoloOrigemVenda(v),
+    situacaoFiscal: resolverSituacaoFiscalVenda(v),
     validade: iso(v.validade),
     observacao: v.observacao,
     operador: v.operador,
@@ -310,6 +459,46 @@ export async function listarVendas(empresaId: string, filtro?: { tipo?: "fiscal"
       .filter((i) => i.vendaId === v.id)
       .map((i) => ({ nome: i.nome, qtd: N(i.qtd, 3), precoUnit: N(i.precoUnit, 4), total: N(i.total), unidade: i.unidade })),
   }));
+}
+
+export async function listarVendasPaginado(
+  empresaId: string,
+  filtro?: FiltroListarVendas,
+): Promise<{
+  itens: VendaDto[];
+  total: number;
+  pagina: number;
+  tamanhoPagina: number;
+  totalPaginas: number;
+}> {
+  const pagina = Math.max(1, Math.floor(Number(filtro?.pagina ?? 1) || 1));
+  const tamanhoPagina = Math.min(100, Math.max(1, Math.floor(Number(filtro?.tamanhoPagina ?? 15) || 15)));
+  const condicoes = montarCondicoesVendas(empresaId, filtro);
+  if (!condicoes) {
+    return { itens: [], total: 0, pagina: 1, tamanhoPagina, totalPaginas: 1 };
+  }
+
+  const [contagem] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(vendas)
+    .where(and(...condicoes));
+
+  const total = Number(contagem?.n ?? 0);
+  const totalPaginas = Math.max(1, Math.ceil(total / tamanhoPagina));
+  const paginaSegura = Math.min(pagina, totalPaginas);
+  const itens = await listarVendas(empresaId, {
+    ...filtro,
+    pagina: paginaSegura,
+    tamanhoPagina,
+  });
+
+  return {
+    itens,
+    total,
+    pagina: paginaSegura,
+    tamanhoPagina,
+    totalPaginas,
+  };
 }
 
 /* --------------------------------------------------------------- entradas */

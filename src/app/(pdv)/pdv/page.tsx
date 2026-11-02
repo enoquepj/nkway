@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { normalizarPerfil } from "@/lib/permissoes";
 import { contexto } from "@/lib/session";
+import type { Emitente } from "@/lib/danfe";
 import { listarClientes, listarProdutos, obterSessaoCaixaOperador } from "@/server/dados";
 import { PdvView } from "@/views/Pdv";
 
@@ -36,6 +37,20 @@ export default async function PdvPage() {
         municipio: c.empresa.municipio || "",
         ambiente: String(fiscal.ambiente ?? "2"),
       }}
+      emitente={
+        {
+          nome: c.empresa.nome,
+          fantasia: c.empresa.nomeFantasia || c.empresa.nome,
+          cnpj: c.empresa.cnpj,
+          ie: c.empresa.ie || "",
+          regime: c.empresa.regime,
+          endereco: [c.empresa.endereco, c.empresa.numero, c.empresa.bairro].filter(Boolean).join(", "),
+          municipio: c.empresa.municipio || "",
+          uf: c.empresa.uf,
+          codMunicipio: c.empresa.codMunicipio || "",
+        } satisfies Emitente
+      }
+      cscId={String(fiscal.cscId ?? "00000000")}
       usuario={{
         nome: c.usuario.nome,
         papel,

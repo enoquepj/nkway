@@ -49,8 +49,9 @@ bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de to
 | `src/lib/dfe.ts` + `src/server/dfeCore.ts` | protocolo `NfeDistDFeInteresse` v1.01, `docZip` GZIP+Base64, cofre AES-256-GCM, inspeção A1 `.pfx`, bucket privado REST e worker mTLS |
 | `src/server/acoes/dfe.ts` + `src/views/Dfe.tsx` | tela `/dfe`: Certificado A1, captura SEFAZ (`distNSU`/`consChNFe`), manifestação (210210/210200/210220/210240) e importação p/ Entrada |
 | `src/app/api/dfe/dist/route.ts` | webhook/cron a cada 10 min (`DFE_CRON_SECRET` / `CRON_SECRET`, 401 sem segredo) |
-| `src/server/dados.ts` | todas as leituras (painel, produtos, vendas, entradas, kardex, contas, curva ABC, `obterPainelDfe`) |
-| `src/server/diagnostico.ts` | console do dev: 145 testes (25 módulos) → `Diagnostico` |
+| `src/lib/atalhosPdv.ts` + `src/lib/situacaoFiscal.ts` | fonte única `ATALHOS_PDV` (ajuda `F1` + barra inferior) e modelo `situacaoFiscal` / `protocoloOrigem` (`autorizado_sefaz` vs `simulado`) |
+| `src/server/dados.ts` | todas as leituras + `listarVendasPaginado` (busca no servidor por chave c/ ou s/ espaços, nº, CPF/CNPJ, cliente, protocolo) |
+| `src/server/diagnostico.ts` | console do dev: 152 testes (25 módulos) → `Diagnostico` |
 | `src/server/acoes/numeracao.ts` | inutilização de faixa + carta de correção (evento 110110) |
 | `src/views/Numeracao.tsx` | aba Numeração e eventos em Documentos (faixas, próximo número, timeline de eventos) |
 | `src/server/acoes/devolucoes.ts` | devolução de compra: emite, cancela, baixa estoque, cria crédito |
@@ -64,7 +65,8 @@ bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de to
 | `src/components/shell.tsx` | sidebar grafite + topbar com trial/plano/ambiente |
 | `src/views/*.tsx` | 11 telas + `Diagnostico.tsx` + `Devolucoes.tsx` + `Numeracao.tsx` |
 | `src/app/api/diagnostico/route.ts` | `GET` → bateria de testes do tenant logado (401 sem sessão) |
-| `src/app/(painel)/*/page.tsx` | páginas finas: `contexto()` → `dados` → `<View />` |
+| `src/app/(painel)/*/page.tsx` | páginas finas com `<Shell />` (exceto `/pdv`): `contexto()` → `dados` → `<View />` |
+| `src/app/(pdv)/layout.tsx` + `src/app/(pdv)/pdv/page.tsx` | grupo de rotas isolado do `/pdv` em tela cheia real (`100dvh`), sem `<Shell />`, com `contexto()` → `redirect("/login")` |
 
 ## 3. Convenções que o projeto segue
 
@@ -137,6 +139,16 @@ bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de to
 6. ~~Assinatura com gateway (recorrência por CNPJ) no lugar do `alterarPlano` simulado~~ **FEITO (2026)** — tabelas `nk_assinatura` e `nk_assinatura_fatura` + `src/lib/assinatura.ts` + `src/server/assinaturaGateway.ts` + `src/server/acoes/assinatura.ts` + `src/views/Assinatura.tsx` (em `/assinatura` e na aba **Assinatura** de `/config`) + webhook autenticado `POST /api/assinatura/webhook` (token Asaas ou HMAC-SHA256, 401 sem credencial). Exige CNPJ de 14 dígitos com DV real (`validarCnpjAssinatura`), ciclos `mensal` e `anual` (-20%), cobrança por PIX (payload EMV BR Code com CRC-16/CCITT-FALSE ≤ 124 bytes + QR Code SVG próprio), Boleto Registrado FEBRABAN de 47 dígitos (Mod-10 e Mod-11) e Cartão Recorrente (validação Luhn em memória, persistindo só bandeira e 4 últimos dígitos). Conecta nativamente ao Asaas v3 (`ASAAS_API_KEY`) ou Stripe (`STRIPE_SECRET_KEY`) com modo Sandbox Homologação integrado e liquidação auditada em `nk_auditoria`. Bateria: módulo **Assinatura CNPJ** (6 testes).
 7. ~~`contraparteId` em vez de vínculo por nome~~ **FEITO (2026)** — `nk_conta` ganhou `contraparteId` + `contraparteTipo` (`cliente` | `fornecedor` | nulo para lançamento avulso). PDV, entradas, devoluções e lançamento manual gravam o id junto do nome. `saldoEmAberto` em `listarClientes()` casa por **id**, com fallback pelo nome só para títulos antigos sem id. Financeiro agora tem Select de cliente/fornecedor em vez de nome digitado. Bateria: módulo **Vínculos** (4 testes). Obs.: o protótipo usava `citaNome` para vendas — aqui `nk_venda.clienteId` **já era uuid**, então o ajuste foi em `nk_conta`, onde o vínculo por nome realmente existia.
 8. ~~Campos ➕ do `FILTROS.md`~~ **FEITO (2026)** — campos novos: `nk_produto.lote/validade/localizacao`, `nk_venda.caixa/ambiente/origem`, `nk_movimento.usuarioId/usuarioNome`, `nk_conta.origem/origemId` (`contraparteId` e `lancadaEm` já existiam). Gravados em PDV, entradas, devoluções, ajuste de estoque e lançamento manual. **Filtros de Produtos**: situação fiscal (CSOSN), unidade, tipo (unitário/pesável), exceções (sem GTIN, GTIN inválido, sem NCM, margem negativa, custo zerado, preço abaixo do custo, sem localização, validade em 30 dias), faixas de margem máxima e estoque. **Filtros de Clientes**: tipo de pessoa (PF/PJ), cidade, crédito (em aberto, acima de 85% do limite, sem limite, com limite disponível), cadastro SEFAZ, contribuinte ICMS (indIEDest), recência da última compra (30d/30-60/60-90/+90/nunca), faixas de total comprado e limite. Busca de ambos aceita documento **com ou sem máscara**. Bateria: módulo **FILTROS** (5 testes).
+9. ~~Melhoria do PDV em Etapas (Etapas 0 a 11)~~ **FEITO (2026)** —
+   - **Etapa 1:** grupo isolado `src/app/(pdv)/layout.tsx` + `src/app/(pdv)/pdv/page.tsx` sem `<Shell />`, `src/app/(painel)/pdv/page.tsx` removido, layout `100dvh` em duas colunas com rolagem própria e sem rolagem da página (`smoke.sh` valida ausência do `Shell` em `/pdv` e presença em `/documentos`).
+   - **Etapa 2:** barra escura fixa no topo com `← Voltar` (`Alt+←`) e modal de saída com 3 opções (`Continuar no PDV`, `Descartar e sair`, `Sair mantendo a fila offline`) quando há itens; saída direta sem modal quando vazio.
+   - **Etapa 3:** botão `Tela cheia` + `Alt+Enter` (`F11`), preferência em `localStorage["nkway.pdv.telaCheia"]`, aviso de 1 linha `"Clique em qualquer lugar para entrar em tela cheia"` quando bloqueado sem gesto e entrada no primeiro gesto.
+   - **Etapa 4:** lista única `ATALHOS_PDV` em `src/lib/atalhosPdv.ts` alimentando o modal `F1` e a legenda inferior (`F1`, `F2`, `F3`, `F4`, `F6` com confirmação, `F8`, `F10`, `Del` + `Ctrl+Z` p/ desfazer [D1], `Alt+1..6` + botões `[1]..[6]` [D6], `Esc`).
+   - **Etapa 5:** barra escura superior preservando `Caixa`, `Ambiente` e `Sincronizar fila`; barra inferior com itens, unidades bipadas, pago/falta/troco, situação da fila offline e legenda de `ATALHOS_PDV`.
+   - **Etapa 6:** `Esc` na busca limpa apenas o texto digitado [D5], sem jamais apagar a venda.
+   - **Etapas 7 e 8:** migração aditiva `situacao_fiscal` e `protocolo_origem` em `nk_venda` (`src/lib/situacaoFiscal.ts`, sem mutar registros existentes [D2]); `registrarDav` sem chave e sem baixa de estoque; `faturarDav` com trava atômica baixando estoque exatamente 1 vez; `emitirNfceDaVenda` sem SEFAZ grava `"pendente_transmissao"` (nunca `"autorizada"` e sem inventar chave/protocolo).
+   - **Etapa 9:** modal `F10` com 3 opções (`Salvar como DAV`, `Finalizar sem nota`, `Finalizar e emitir NFC-e`) e confirmação explícita antes de emitir.
+   - **Etapas 10 e 11:** busca paginada no servidor (`F3` [D3] → `buscarDocumentosPdv` / `listarVendasPaginado`) aceitando nº da venda, nº da nota, chave c/ ou s/ espaços, CPF/CNPJ, cliente e protocolo, reaproveitando `Tabela` e `Impressao`, + 7 testes novos no módulo **PDV** (`pdv-9` a `pdv-15` em `src/server/diagnostico.ts`).
 
 ## 6b. Blindagem das server actions (2026)
 

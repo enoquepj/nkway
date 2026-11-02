@@ -85,15 +85,18 @@ create table if not exists public.nk_caixa_movimento (
 create index if not exists nk_caixa_mov_sessao_idx on public.nk_caixa_movimento (sessao_id);
 create index if not exists nk_caixa_mov_empresa_idx on public.nk_caixa_movimento (empresa_id);
 
--- 3. FASE 3 E EMISSOR SEFAZ 4.00 — Colunas xml_fiscal e status_sefaz em nk_venda
+-- 3. FASE 3, EMISSOR SEFAZ 4.00 E ETAPA 7 PDV — Colunas xml_fiscal, status_sefaz, situacao_fiscal e protocolo_origem em nk_venda
 alter table public.nk_venda
   add column if not exists xml_fiscal text,
   add column if not exists status_sefaz text default 'simulado',
   add column if not exists cstat_sefaz text default '100',
   add column if not exists motivo_sefaz text default '',
-  add column if not exists emissor_provedor text default 'local';
+  add column if not exists emissor_provedor text default 'local',
+  add column if not exists situacao_fiscal text,
+  add column if not exists protocolo_origem text;
 
 create index if not exists nk_venda_status_sefaz_idx on public.nk_venda (empresa_id, status_sefaz);
+create index if not exists nk_venda_situacao_fiscal_idx on public.nk_venda (empresa_id, situacao_fiscal);
 
 -- 4. ASSINATURA COM GATEWAY E RECORRÊNCIA POR CNPJ (nk_assinatura e nk_assinatura_fatura)
 create table if not exists public.nk_assinatura (

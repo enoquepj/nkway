@@ -162,6 +162,10 @@ export const vendas = pgTable(
     numeroNota: integer("numero_nota"),
     chave: text("chave"),
     protocolo: text("protocolo"),
+    /** autorizado_sefaz | simulado | null (Etapa 7 — sem alterar registros antigos sem confirmação) */
+    protocoloOrigem: text("protocolo_origem"),
+    /** nao_emitida | pendente_transmissao | simulado | autorizada | rejeitada | cancelada */
+    situacaoFiscal: text("situacao_fiscal"),
     /** XML fiscal autorizado efetivamente armazenado ou retornado pela integração (nunca fictício) */
     xmlFiscal: text("xml_fiscal"),
     /** simulado | pendente_envio | contingencia | autorizada | rejeitada | cancelada_sefaz */

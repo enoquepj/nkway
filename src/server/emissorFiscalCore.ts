@@ -317,6 +317,12 @@ export async function transmitirVendaParaEmissor(params: {
         .set({
           chave: chaveFinal,
           protocolo: protocoloFinal,
+          protocoloOrigem: autorizada && protocoloFinal ? "autorizado_sefaz" : venda.protocoloOrigem,
+          situacaoFiscal: autorizada
+            ? "autorizada"
+            : emProcessamento
+              ? "pendente_transmissao"
+              : "rejeitada",
           xmlFiscal: xmlValido,
           statusSefaz: novoStatusSefaz,
           cstatSefaz: cstat,
@@ -536,6 +542,8 @@ export async function processarWebhookEmissorFiscal(
       .set({
         chave: chaveFinal,
         protocolo,
+        protocoloOrigem: "autorizado_sefaz",
+        situacaoFiscal: "autorizada",
         xmlFiscal: xmlValido,
         statusSefaz: "autorizada",
         cstatSefaz: cstat,

@@ -110,6 +110,23 @@ const CAMINHOS: Record<string, ReactNode> = {
     </>
   ),
   seta: <path d="M5 12h13m-5-6 6 6-6 6" />,
+  voltar: <path d="M19 12H6m5-6-6 6 6 6" />,
+  expandir: (
+    <>
+      <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+    </>
+  ),
+  minimizar: (
+    <>
+      <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M10 14l-7 7" />
+    </>
+  ),
+  ajuda: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.6 9.3a2.5 2.5 0 1 1 3.7 2.2c-.8.4-1.3.9-1.3 1.8M12 16.8v.1" />
+    </>
+  ),
   chevron: <path d="m9 6 6 6-6 6" />,
   raio: <path d="M13 2 4.5 13.5H11l-1 8.5L19.5 10H13l0-8Z" />,
   atualizar: (

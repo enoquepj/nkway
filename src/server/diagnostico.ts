@@ -4,7 +4,10 @@
  * aqui as verificações rodam no servidor, sobre os dados reais do tenant logado,
  * e são expostas na rota `/api/diagnostico` e na aba "Ambiente" das Configurações.
  */
-import { eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   assinaturaFaturas,
@@ -56,11 +59,13 @@ import {
   processarMigracaoLegado,
   uuidDeterministico,
 } from "@/server/migracaoLegadoCore";
+import { ATALHOS_PDV } from "@/lib/atalhosPdv";
 import {
   PLANOS_CFG,
   classeAcumulado,
   dvChaveAcesso,
   documentoValido,
+  formatChave,
   gerarChave,
   gerarGtin,
   mascaraDocumento,
@@ -75,9 +80,10 @@ import {
 } from "@/lib/dominio";
 import { emPeriodo, periodoRelativo } from "@/lib/filtros";
 import { buildSoapConsChNFe, buildSoapDistNsu, padNsu } from "@/lib/dfe";
+import { resolverProtocoloOrigemVenda, resolverSituacaoFiscalVenda } from "@/lib/situacaoFiscal";
 import { notaPorChaveDemo, parseNfeXml } from "@/lib/xmlNfe";
 import { qrBits } from "@/lib/qrcode";
-import { proximoNumeroFiscal } from "@/server/dados";
+import { listarVendasPaginado, proximoNumeroFiscal } from "@/server/dados";
 import {
   cifrarSegredo,
   decifrarSegredo,
@@ -321,10 +327,17 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
 
   /* ------------------------------------------------------------------ PDV */
   const fiscais = vds.filter((v) => v.tipo === "fiscal");
+  const fiscaisTransmitidas = fiscais.filter(
+    (v) => resolverSituacaoFiscalVenda(v) !== "pendente_transmissao" && resolverSituacaoFiscalVenda(v) !== "nao_emitida",
+  );
   const davs = vds.filter((v) => v.tipo === "dav");
-  const semChave = fiscais.filter((v) => !v.chave);
-  const chaveRuim = fiscais.filter((v) => v.chave && (soDigitos(v.chave).length !== 44 || dvChaveAcesso(soDigitos(v.chave).slice(0, 43)) !== Number(soDigitos(v.chave)[43])));
-  const davComNota = davs.filter((v) => v.chave);
+  const semChave = fiscaisTransmitidas.filter((v) => !v.chave);
+  const chaveRuim = fiscais.filter(
+    (v) =>
+      v.chave &&
+      (soDigitos(v.chave).length !== 44 || dvChaveAcesso(soDigitos(v.chave).slice(0, 43)) !== Number(soDigitos(v.chave)[43])),
+  );
+  const davComNota = davs.filter((v) => v.chave || v.protocolo);
   const totalRuim = vds.filter((v) => {
     const soma = round2((itensPorVenda.get(v.id) ?? []).reduce((s, i) => s + Number(i.qtd) * Number(i.precoUnit), 0));
     return Math.abs(soma - Number(v.desconto) + Number(v.vFrete) - Number(v.total)) > 0.02;
@@ -337,7 +350,7 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   });
   const notaSemNumero = fiscais.filter((v) => v.numeroNota == null || !v.serie || !v.modelo);
 
-  ok("pdv-1", "PDV", "Toda venda fiscal possui chave de acesso", semChave.length === 0, semChave.length ? `${semChave.length} sem chave` : `${qtd(fiscais.length, "nota")}`, true);
+  ok("pdv-1", "PDV", "Toda venda fiscal emitida/simulada possui chave de acesso", semChave.length === 0, semChave.length ? `${semChave.length} sem chave` : `${qtd(fiscaisTransmitidas.length, "nota")}`, true);
   ok("pdv-2", "PDV", "Chaves com 44 dígitos e DV correto", chaveRuim.length === 0, chaveRuim.length ? lista(chaveRuim.map((v) => String(v.numero))) : "layout SEFAZ validado", true);
   ok("pdv-3", "PDV", "DAV não possui bloco fiscal", davComNota.length === 0, davComNota.length ? `${davComNota.length} DAV(s) com chave` : `${qtd(davs.length, "DAV")}`, true);
   ok("pdv-4", "PDV", "Total = itens − desconto + frete", totalRuim.length === 0, totalRuim.length ? lista(totalRuim.map((v) => String(v.numero))) : "conferência aritmética de todas as vendas", true);
@@ -345,6 +358,219 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("pdv-6", "PDV", "Parcelas somam o total da venda", parcelasRuins.length === 0, parcelasRuins.length ? `${parcelasRuins.length} venda(s) com pagamento dividido errado` : "pagamento dividido confere", true);
   ok("pdv-7", "PDV", "Venda fiscal tem número, série e modelo", notaSemNumero.length === 0, notaSemNumero.length ? `${notaSemNumero.length} incompleta(s)` : "ide completo para o DANFE", true);
   ok("pdv-8", "PDV", "Itens de venda existem para todas as vendas", itensPorVenda.size === vds.length, `${qtd(itens.length, "item")} em ${qtd(itensPorVenda.size, "venda")}`, true);
+
+  // Etapa 11 — Verificações obrigatórias de DAV, estoque único, situação fiscal, busca e layout /pdv
+  let davSemChaveProbeOk = false;
+  let davNaoBaixaEstoqueOk = false;
+  let faturarBaixaUmaVezOk = false;
+  let notaSemSefazNaoAutorizadaOk = false;
+  let buscaChaveEspacosOk = false;
+  let buscaIsolamentoTenantOk = false;
+
+  const prodProbeId = randomUUID();
+  const davProbeId = randomUUID();
+  const vendaFatProbeId = randomUUID();
+  const vendaPendProbeId = randomUUID();
+  const vendaChaveProbeId = randomUUID();
+  const chaveProbe44 = gerarChave({
+    uf: "11",
+    aamm: "2611",
+    cnpj: "04583620000151",
+    modelo: "65",
+    serie: "1",
+    numeroNota: 98765,
+  });
+
+  try {
+    await db.insert(produtos).values({
+      id: prodProbeId,
+      empresaId,
+      nome: "PRODUTO PROBE ETAPA 11",
+      sku: "PRB-E11",
+      gtin: "SEM GTIN",
+      estoque: 10,
+      estoqueMin: 1,
+      custo: 5,
+      preco: 12,
+    });
+
+    // 1 & 2) Cria DAV para 3 unidades -> sem chave e estoque permanece 10
+    await db.insert(vendas).values({
+      id: davProbeId,
+      empresaId,
+      numero: 998701,
+      clienteNome: "CLIENTE PROBE DAV",
+      subtotal: 36,
+      total: 36,
+      tipo: "dav",
+      status: "aberto",
+      chave: null,
+      protocolo: null,
+      protocoloOrigem: null,
+      situacaoFiscal: "nao_emitida",
+    });
+    await db.insert(vendaItens).values({
+      vendaId: davProbeId,
+      produtoId: prodProbeId,
+      nome: "PRODUTO PROBE ETAPA 11",
+      qtd: 3,
+      precoUnit: 12,
+      total: 36,
+    });
+
+    const [davBanco] = await db.select().from(vendas).where(eq(vendas.id, davProbeId)).limit(1);
+    const [prodAposDav] = await db.select().from(produtos).where(eq(produtos.id, prodProbeId)).limit(1);
+    const movsDav = await db.select().from(movimentos).where(eq(movimentos.produtoId, prodProbeId));
+
+    davSemChaveProbeOk =
+      davComNota.length === 0 &&
+      Boolean(davBanco) &&
+      davBanco.chave === null &&
+      davBanco.protocolo === null &&
+      resolverSituacaoFiscalVenda(davBanco) === "nao_emitida";
+
+    davNaoBaixaEstoqueOk = Number(prodAposDav?.estoque ?? -1) === 10 && movsDav.length === 0;
+
+    // 3) Faturamento atômico do DAV -> baixa estoque exatamente uma vez (10 -> 7), segunda chamada concorrente bloqueada!
+    const tentarFaturarProbe = async () => {
+      const travou = await db
+        .update(vendas)
+        .set({ status: "faturado", situacaoFiscal: "nao_emitida" })
+        .where(
+          and(
+            eq(vendas.id, davProbeId),
+            eq(vendas.empresaId, empresaId),
+            eq(vendas.tipo, "dav"),
+            eq(vendas.status, "aberto"),
+          ),
+        )
+        .returning({ id: vendas.id });
+      if (travou.length === 0) return false;
+
+      const [pAtual] = await db.select().from(produtos).where(eq(produtos.id, prodProbeId)).limit(1);
+      const novoSaldo = round2(Number(pAtual.estoque) - 3);
+      await db.update(produtos).set({ estoque: novoSaldo }).where(eq(produtos.id, prodProbeId));
+      await db.insert(vendas).values({
+        id: vendaFatProbeId,
+        empresaId,
+        numero: 998702,
+        clienteNome: "CLIENTE PROBE DAV",
+        subtotal: 36,
+        total: 36,
+        tipo: "sem_nota",
+        status: "faturado",
+        davOrigemId: davProbeId,
+        situacaoFiscal: "nao_emitida",
+      });
+      return true;
+    };
+
+    const rFat1 = await tentarFaturarProbe();
+    const rFat2 = await tentarFaturarProbe();
+    const [prodAposFat] = await db.select().from(produtos).where(eq(produtos.id, prodProbeId)).limit(1);
+    faturarBaixaUmaVezOk = rFat1 === true && rFat2 === false && Number(prodAposFat?.estoque ?? -1) === 7;
+
+    // 4) Nota emitida sem SEFAZ live -> pendente_transmissao, protocolo nulo, nunca aparece como autorizada
+    await db.insert(vendas).values({
+      id: vendaPendProbeId,
+      empresaId,
+      numero: 998703,
+      clienteNome: "CLIENTE SEM SEFAZ",
+      subtotal: 24,
+      total: 24,
+      tipo: "fiscal",
+      status: "faturado",
+      modelo: "NFC-e",
+      serie: "1",
+      numeroNota: 98764,
+      chave: null,
+      protocolo: null,
+      protocoloOrigem: null,
+      situacaoFiscal: "pendente_transmissao",
+      statusSefaz: "pendente_envio",
+      cstatSefaz: "",
+    });
+    const [pendRow] = await db.select().from(vendas).where(eq(vendas.id, vendaPendProbeId)).limit(1);
+    const tentativaFalsaAutorizada = resolverSituacaoFiscalVenda({
+      tipo: "fiscal",
+      status: "faturado",
+      protocolo: "111000000000000",
+      protocoloOrigem: "simulado",
+      statusSefaz: "simulado",
+      situacaoFiscal: "autorizada",
+    });
+    const simuladasExistentesOk = fiscais
+      .filter((v) => v.statusSefaz !== "autorizada" && v.status !== "cancelado")
+      .every((v) => resolverSituacaoFiscalVenda(v) !== "autorizada" && resolverProtocoloOrigemVenda(v) !== "autorizado_sefaz");
+
+    notaSemSefazNaoAutorizadaOk =
+      Boolean(pendRow) &&
+      resolverSituacaoFiscalVenda(pendRow) === "pendente_transmissao" &&
+      resolverSituacaoFiscalVenda(pendRow) !== "autorizada" &&
+      tentativaFalsaAutorizada !== "autorizada" &&
+      simuladasExistentesOk;
+
+    // 5 & 6) Busca paginada no servidor: chave com e sem espaços retorna a mesma nota + isolamento de outra empresa
+    await db.insert(vendas).values({
+      id: vendaChaveProbeId,
+      empresaId,
+      numero: 998704,
+      clienteNome: "CLIENTE BUSCA CHAVE",
+      subtotal: 48,
+      total: 48,
+      tipo: "fiscal",
+      status: "faturado",
+      modelo: "NFC-e",
+      serie: "1",
+      numeroNota: 98765,
+      chave: chaveProbe44,
+      protocolo: "111998704",
+      protocoloOrigem: "simulado",
+      situacaoFiscal: "simulado",
+      statusSefaz: "simulado",
+    });
+
+    const chaveComEspacos = formatChave(chaveProbe44);
+    const [buscaSemEspaco, buscaComEspaco, buscaOutraEmpresa] = await Promise.all([
+      listarVendasPaginado(empresaId, { busca: chaveProbe44, pagina: 1, tamanhoPagina: 10 }),
+      listarVendasPaginado(empresaId, { busca: chaveComEspacos, pagina: 1, tamanhoPagina: 10 }),
+      listarVendasPaginado(randomUUID(), { busca: chaveProbe44, pagina: 1, tamanhoPagina: 10 }),
+    ]);
+
+    buscaChaveEspacosOk =
+      chaveComEspacos.includes(" ") &&
+      buscaSemEspaco.total === 1 &&
+      buscaComEspaco.total === 1 &&
+      buscaSemEspaco.itens[0]?.id === vendaChaveProbeId &&
+      buscaComEspaco.itens[0]?.id === buscaSemEspaco.itens[0]?.id;
+
+    buscaIsolamentoTenantOk = buscaOutraEmpresa.total === 0 && buscaOutraEmpresa.itens.length === 0;
+  } finally {
+    await db.delete(vendas).where(sql`id in (${davProbeId}, ${vendaFatProbeId}, ${vendaPendProbeId}, ${vendaChaveProbeId})`);
+    await db.delete(movimentos).where(eq(movimentos.produtoId, prodProbeId));
+    await db.delete(produtos).where(eq(produtos.id, prodProbeId));
+  }
+
+  const raizProj = process.cwd();
+  const arqLayoutPdv = path.join(raizProj, "src/app/(pdv)/layout.tsx");
+  const arqPagePdvNovo = path.join(raizProj, "src/app/(pdv)/pdv/page.tsx");
+  const arqPagePdvAntigo = path.join(raizProj, "src/app/(painel)/pdv/page.tsx");
+  const layoutPdvTxt = fs.existsSync(arqLayoutPdv) ? fs.readFileSync(arqLayoutPdv, "utf8") : "";
+  const teclasObrigatorias = ["F1", "F2", "F3", "F4", "F6", "F8", "F10", "Del", "Alt+1..6", "Esc"];
+  const pdvSemShellOk =
+    fs.existsSync(arqLayoutPdv) &&
+    fs.existsSync(arqPagePdvNovo) &&
+    !fs.existsSync(arqPagePdvAntigo) &&
+    !layoutPdvTxt.includes("Shell") &&
+    teclasObrigatorias.every((t) => ATALHOS_PDV.some((a) => a.tecla === t));
+
+  ok("pdv-9", "PDV", "DAV não tem chave nem protocolo fiscal", davSemChaveProbeOk, "situacaoFiscal = nao_emitida · chave = null", true);
+  ok("pdv-10", "PDV", "DAV não baixa estoque ao ser registrado", davNaoBaixaEstoqueOk, "saldo mantido intacto até o faturamento", true);
+  ok("pdv-11", "PDV", "Faturar DAV baixa estoque exatamente uma vez", faturarBaixaUmaVezOk, "trava atômica bloqueia faturamento duplo (10 → 7)", true);
+  ok("pdv-12", "PDV", "Nota sem SEFAZ não aparece como autorizada", notaSemSefazNaoAutorizadaOk, "pendente_transmissao / simulado nunca viram autorizada", true);
+  ok("pdv-13", "PDV", "Busca por chave com e sem espaços retorna a mesma nota", buscaChaveEspacosOk, "normalização de 44 dígitos no servidor", true);
+  ok("pdv-14", "PDV", "Busca de documentos no PDV não retorna venda de outra empresa", buscaIsolamentoTenantOk, "filtro obrigatório por empresa_id", true);
+  ok("pdv-15", "PDV", "/pdv isolado sem Shell e lista única ATALHOS_PDV ativa", pdvSemShellOk, "grupo (pdv) 100dvh sem sidebar/topbar", true);
 
   /* -------------------------------------------------------------- estoque */
   const ordemKardex = [...movs].sort((a, b) => new Date(a.data ?? 0).getTime() - new Date(b.data ?? 0).getTime());

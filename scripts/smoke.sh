@@ -50,6 +50,8 @@ marca $? "consulta Drizzle/Postgres"
 echo "→ rota sem sessão (espera 307 para /login)"
 LOC=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/")
 [[ "$LOC" == "307" || "$LOC" == "200" ]]; marca $? "GET / = $LOC"
+PDV_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/pdv")
+[[ "$PDV_ANON" == "307" ]]; marca $? "GET /pdv sem sessão = $PDV_ANON"
 
 echo "→ rotas autenticadas"
 COOKIE=$(node -e '
@@ -70,6 +72,20 @@ else
     code=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" "$BASE$p")
     [[ "$code" == "200" ]]; marca $? "GET $p = $code"
   done
+
+  PDV_HTML=$(curl -s -H "Cookie: $COOKIE" "$BASE/pdv")
+  if echo "$PDV_HTML" | grep -qE "ERP · PDV · Fiscal|Abrir PDV|Monitor Emissor SEFAZ"; then
+    marca 1 "/pdv sem Shell (sidebar/topbar/footer ausentes)"
+  else
+    marca 0 "/pdv sem Shell (sidebar/topbar/footer ausentes)"
+  fi
+
+  DOC_HTML=$(curl -s -H "Cookie: $COOKIE" "$BASE/documentos")
+  if echo "$DOC_HTML" | grep -q "ERP · PDV · Fiscal" && echo "$DOC_HTML" | grep -q "Abrir PDV"; then
+    marca 0 "/documentos continua com Shell"
+  else
+    marca 1 "/documentos continua com Shell"
+  fi
 
   CRON_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/dfe/dist")
   [[ "$CRON_CODE" == "401" ]]; marca $? "GET /api/dfe/dist sem segredo = $CRON_CODE"

@@ -42,9 +42,12 @@ export async function garantirMigracoesNk() {
       add column if not exists status_sefaz text default 'simulado',
       add column if not exists cstat_sefaz text default '100',
       add column if not exists motivo_sefaz text default '',
-      add column if not exists emissor_provedor text default 'local'
+      add column if not exists emissor_provedor text default 'local',
+      add column if not exists situacao_fiscal text,
+      add column if not exists protocolo_origem text
   `);
   await db.execute(sql`create index if not exists nk_venda_status_sefaz_idx on nk_venda (empresa_id, status_sefaz)`);
+  await db.execute(sql`create index if not exists nk_venda_situacao_fiscal_idx on nk_venda (empresa_id, situacao_fiscal)`);
   await db.execute(sql`create index if not exists nk_venda_caixa_sessao_idx on nk_venda (caixa_sessao_id)`);
   await db.execute(sql`
     create table if not exists nk_caixa_sessao (
