@@ -63,46 +63,35 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 
 **Nunca no front / nunca no GitHub:** `service_role`, senha do A1, arquivo `.pfx`, secrets `DFE_*`.
 
-### 2.2 Entrada de mercadoria (ERP)
+### 2.2 Módulos operacionais principais (ERP Next.js em produção)
 | O quê | Onde |
 |---|---|
-| XML, chave SEFAZ (demo/bridge), manual, tratamento | `src/erp/pages/Entradas.tsx` |
-| Parse XML / importar por chave | `src/erp/xmlNfe.ts` |
-| Manutenção de preços / markup / massa | `src/erp/pages/ManutencaoPrecos.tsx` |
+| PDV Frente de Caixa em Tela Cheia (`100dvh`, sem `<Shell />`, `← Voltar`, `ATALHOS_PDV`, `F3` busca paginada, `F10` 3 opções) | Rota `/pdv` · `src/app/(pdv)/layout.tsx`, `src/app/(pdv)/pdv/page.tsx`, `src/views/Pdv.tsx`, `src/lib/atalhosPdv.ts`, `src/lib/situacaoFiscal.ts`, `src/server/acoes/pdv.ts` |
+| Entrada de mercadoria (XML, chave SEFAZ, manual, tratamento) | Rota `/entradas` · `src/views/Entradas.tsx` + `src/server/acoes/entradas.ts` + `src/lib/xmlNfe.ts` |
+| Emissor Fiscal SEFAZ 4.00, contingência e webhook | Rota `/emissor` + `/api/fiscal/webhook` · `src/views/EmissorFiscal.tsx` + `src/server/emissorFiscalCore.ts` |
+| Produtos e manutenção de preços | Rota `/produtos` · `src/views/Produtos.tsx` + `src/server/acoes/cadastros.ts` |
+| Script consolidado aditivo de tabelas/colunas `nk_*` | `ATUALIZAR_SUPABASE_AGORA.sql` + `src/db/migracao.ts` |
 
 ### 2.3 Publicar código no GitHub (seu PC)
 | O quê | Onde |
 |---|---|
-| Preferência: **GitHub Desktop**, cliques, sem comando prompt | `CONTEXTO.md` → Preferências |
-| Backup .zip do app | Botão amarelo **Contexto / Backup** no app |
-| Guia antigo GitHub | `GITHUB.md` |
-| Deploy Netlify/Vercel | `DEPLOY.md` |
+| Preferência: **GitHub Desktop**, cliques, sem prompt de comando | `CONTINUAR_NKWAY.txt` e `CONTEXTO_ARENA.md` → seção 7 |
+| Produção oficial Vercel + Supabase | `VERCEL_SUPABASE.md` |
+| Guia antigo GitHub / Deploy | `GITHUB.md` / `DEPLOY.md` |
 
 ### 2.4 Outros guias
 | Arquivo | Conteúdo |
 |---|---|
 | `FILTROS.md` | Especificação de filtros por módulo |
 | `CHECKLIST.md` | QA antes de publicar |
-| `DEV.md` | Console do desenvolvedor |
+| `DEV.md` | Console do desenvolvedor (`/api/diagnostico` — 152 testes / 25 módulos) |
 | `README.md` | Visão geral do produto |
 
 ---
 
 ## 3. Como um chat novo de IA retoma o trabalho
 
-Cole no chat novo (também está na seção 0 do `CONTEXTO.md`):
-
-```
-CONTINUAR NKWAY
-Repositório: https://github.com/enoquepj/nkway
-Branch: main
-
-1. Clone e leia SOMENTE CONTEXTO.md e MEMORANDO.md primeiro.
-2. Para DF-e, use supabase/DFE_ROTEIRO_CONFIG.md.
-3. Restaure pela seção 2 do CONTEXTO.md e rode npm run build.
-4. Siga Preferências: "comando prompt" (nunca "terminal"); GitHub Desktop com cliques; sem git no PC do usuário.
-5. Execute a seção 7 do CONTEXTO ou a tarefa que eu descrever.
-```
+Copie e cole o conteúdo inteiro do arquivo **`CONTINUAR_NKWAY.txt`** na primeira mensagem da nova conversa (ele já traz as regras de produção Next.js + Vercel + Supabase, segurança, estado atual dos módulos e validações obrigatórias).
 
 Se o repositório estiver **privado**, deixe público temporariamente ou envie token **só de leitura**.
 
