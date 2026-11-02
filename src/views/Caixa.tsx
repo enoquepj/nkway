@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
+import { LinkPdv } from "@/components/LinkPdv";
 import {
   Abas,
   Area,
@@ -352,11 +352,11 @@ export function CaixaView({
         }
         acao={
           <>
-            <Link href="/pdv">
+            <LinkPdv>
               <Button variante="secundario" tamanho="sm" icone="caixa">
                 Ir para o PDV
               </Button>
-            </Link>
+            </LinkPdv>
             {sessaoAtual && podeMovimentar && (
               <>
                 <Button

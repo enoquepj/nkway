@@ -59,7 +59,49 @@ import {
   processarMigracaoLegado,
   uuidDeterministico,
 } from "@/server/migracaoLegadoCore";
+import {
+  CHAVE_TELA_CHEIA,
+  abrirPdvComTelaCheia,
+  consumirFalhaRecenteTelaCheia,
+  ehCliqueModificadoPdv,
+  resetarEstadoTelaCheiaPdv,
+} from "@/lib/abrirPdv";
 import { ATALHOS_PDV } from "@/lib/atalhosPdv";
+import {
+  calcularTributosProdutoPdv,
+  consultarProdutosPrecoPdv,
+  decodificarEtiquetaBalancaPdv,
+  gerarEtiquetaBalancaEan13Pdv,
+  removerVendaDeEsperaPdv,
+  retomarVendaDeEsperaPdv,
+  suspenderVendaParaEsperaPdv,
+} from "@/lib/balcaoPdv";
+import {
+  ESTADO_MULTIPLICADOR_INICIAL,
+  aplicarAdicaoItemPdv,
+  normalizarQtdPdv,
+  podeIniciarMultiplicadorPdv,
+  resolverProdutoPorCodigoOuBusca,
+  transicionarMultiplicadorPdv,
+  validarTextoQuantidadeMultiplicador,
+} from "@/lib/multiplicadorPdv";
+import {
+  carregarDavParaTelaPdv,
+  converterReciboParaDocFiscalPdv,
+  montarReciboDeFechamentoPdv,
+  montarReciboDeVendaDtoPdv,
+  resumirFilaOfflinePdv,
+  sanitizarFilaOfflinePdv,
+  validarCancelamentoDocumentoPdv,
+  validarMovimentoGavetaPdv,
+} from "@/lib/operacoesPdv";
+import {
+  calcularResumoPagamentoPdv,
+  editarParcelaPagamentoPdv,
+  normalizarPagamentosLiquidosPdv,
+  registrarParcelaPagamentoPdv,
+  validarCreditoVendaPdv,
+} from "@/lib/pagamentoPdv";
 import {
   PLANOS_CFG,
   classeAcumulado,
@@ -571,6 +613,994 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("pdv-13", "PDV", "Busca por chave com e sem espaços retorna a mesma nota", buscaChaveEspacosOk, "normalização de 44 dígitos no servidor", true);
   ok("pdv-14", "PDV", "Busca de documentos no PDV não retorna venda de outra empresa", buscaIsolamentoTenantOk, "filtro obrigatório por empresa_id", true);
   ok("pdv-15", "PDV", "/pdv isolado sem Shell e lista única ATALHOS_PDV ativa", pdvSemShellOk, "grupo (pdv) 100dvh sem sidebar/topbar", true);
+
+  // Complemento PDV 1 de 3 — Fullscreen na entrada oficial + Multiplicador X + Qtd + Enter (13 testes obrigatórios)
+  const arqShell = path.join(raizProj, "src/components/shell.tsx");
+  const arqDashboard = path.join(raizProj, "src/views/Dashboard.tsx");
+  const arqCaixa = path.join(raizProj, "src/views/Caixa.tsx");
+  const arqPdvView = path.join(raizProj, "src/views/Pdv.tsx");
+  const shellTxt = fs.existsSync(arqShell) ? fs.readFileSync(arqShell, "utf8") : "";
+  const dashTxt = fs.existsSync(arqDashboard) ? fs.readFileSync(arqDashboard, "utf8") : "";
+  const caixaTxt = fs.existsSync(arqCaixa) ? fs.readFileSync(arqCaixa, "utf8") : "";
+  const pdvTxt = fs.existsSync(arqPdvView) ? fs.readFileSync(arqPdvView, "utf8") : "";
+
+  // 1) Clique sidebar/button solicita fullscreen e navega (preservando Ctrl/Cmd+clique)
+  resetarEstadoTelaCheiaPdv();
+  let chamadasFs1 = 0;
+  let rotasNavegadas1: string[] = [];
+  let preventChamado1 = false;
+  const memStorage1 = new Map<string, string>();
+  const storageMock1 = {
+    getItem: (k: string) => memStorage1.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      memStorage1.set(k, v);
+    },
+  };
+  const docMockOk = {
+    fullscreenElement: null,
+    documentElement: {
+      requestFullscreen: () => {
+        chamadasFs1++;
+        return Promise.resolve();
+      },
+    },
+  };
+  const rCliqueNormal = abrirPdvComTelaCheia({
+    navegar: (r) => rotasNavegadas1.push(r),
+    origem: "clique",
+    eventoClique: {
+      button: 0,
+      preventDefault: () => {
+        preventChamado1 = true;
+      },
+    },
+    pathnameAtual: "/",
+    doc: docMockOk,
+    storage: storageMock1,
+    agora: 1000,
+  });
+  await rCliqueNormal.promessaTelaCheia;
+  const rCliqueCtrl = abrirPdvComTelaCheia({
+    navegar: (r) => rotasNavegadas1.push(r),
+    origem: "clique",
+    eventoClique: { button: 0, ctrlKey: true },
+    pathnameAtual: "/",
+    doc: docMockOk,
+    storage: storageMock1,
+    agora: 2000,
+  });
+  const entradasMenuUsamHelper =
+    shellTxt.includes("LinkPdv") &&
+    shellTxt.includes("abrirPdvComTelaCheia") &&
+    !shellTxt.includes('<Link href="/pdv">') &&
+    dashTxt.includes("LinkPdv") &&
+    !dashTxt.includes('<Link href="/pdv">') &&
+    caixaTxt.includes("LinkPdv") &&
+    !caixaTxt.includes('<Link href="/pdv">');
+  const teste1FullscreenMenuOk =
+    entradasMenuUsamHelper &&
+    chamadasFs1 === 1 &&
+    preventChamado1 &&
+    rotasNavegadas1.length === 1 &&
+    rotasNavegadas1[0] === "/pdv" &&
+    memStorage1.get(CHAVE_TELA_CHEIA) === "true" &&
+    ehCliqueModificadoPdv({ ctrlKey: true }) &&
+    ehCliqueModificadoPdv({ metaKey: true }) &&
+    !rCliqueCtrl.interceptado &&
+    !rCliqueCtrl.navegou;
+
+  // 2) Fullscreen negado não impede abrir PDV e aciona fallback atual
+  resetarEstadoTelaCheiaPdv();
+  let rotasNegado: string[] = [];
+  const memStorage2 = new Map<string, string>();
+  const rNegado = abrirPdvComTelaCheia({
+    navegar: (r) => rotasNegado.push(r),
+    origem: "clique",
+    eventoClique: { button: 0 },
+    pathnameAtual: "/documentos",
+    doc: {
+      fullscreenElement: null,
+      documentElement: {
+        requestFullscreen: () => Promise.reject(new Error("NotAllowedError")),
+      },
+    },
+    storage: {
+      getItem: (k) => memStorage2.get(k) ?? null,
+      setItem: (k, v) => {
+        memStorage2.set(k, v);
+      },
+    },
+    agora: Date.now(),
+  });
+  const resultadoFsNegado = await rNegado.promessaTelaCheia;
+  const acionouFallbackRecente = consumirFalhaRecenteTelaCheia(5000);
+  const teste2FallbackNegadoOk =
+    rNegado.navegou &&
+    rotasNegado[0] === "/pdv" &&
+    resultadoFsNegado === false &&
+    memStorage2.get(CHAVE_TELA_CHEIA) === "true" &&
+    acionouFallbackRecente &&
+    pdvTxt.includes("consumirFalhaRecenteTelaCheia") &&
+    pdvTxt.includes("aguardandoGestoTelaCheia");
+
+  // 3) Atalho de abertura não duplica pedidos/listeners
+  resetarEstadoTelaCheiaPdv();
+  let chamadasFsConcorrentes = 0;
+  let liberarFs!: () => void;
+  const docPendente = {
+    fullscreenElement: null,
+    documentElement: {
+      requestFullscreen: () => {
+        chamadasFsConcorrentes++;
+        return new Promise<void>((res) => {
+          liberarFs = res;
+        });
+      },
+    },
+  };
+  let navAtalho = 0;
+  const rAt1 = abrirPdvComTelaCheia({
+    navegar: () => {
+      navAtalho++;
+    },
+    origem: "atalho",
+    eventoTeclado: { repeat: false },
+    pathnameAtual: "/",
+    doc: docPendente,
+    storage: null,
+    agora: 5000,
+  });
+  const rAt2 = abrirPdvComTelaCheia({
+    navegar: () => {
+      navAtalho++;
+    },
+    origem: "atalho",
+    eventoTeclado: { repeat: false },
+    pathnameAtual: "/",
+    doc: docPendente,
+    storage: null,
+    agora: 5050,
+  });
+  const rAtRepeat = abrirPdvComTelaCheia({
+    navegar: () => {
+      navAtalho++;
+    },
+    origem: "atalho",
+    eventoTeclado: { repeat: true },
+    pathnameAtual: "/",
+    doc: docPendente,
+    storage: null,
+    agora: 5300,
+  });
+  liberarFs();
+  await rAt1.promessaTelaCheia;
+  const listenersKeydownShell = (shellTxt.match(/window\.addEventListener\("keydown"/g) ?? []).length;
+  const listenersKeydownPdv = (pdvTxt.match(/window\.addEventListener\("keydown"/g) ?? []).length;
+  const teste3SemDuplicacaoOk =
+    chamadasFsConcorrentes === 1 &&
+    rAt1.promessaTelaCheia === rAt2.promessaTelaCheia &&
+    navAtalho === 1 &&
+    !rAtRepeat.navegou &&
+    listenersKeydownShell === 1 &&
+    listenersKeydownPdv === 2; // 1 listener de atalhos + 1 listener { once: true } do fallback de tela cheia (Etapa 3)
+  resetarEstadoTelaCheiaPdv();
+
+  // Produtos sintéticos para validação pura dos cenários 4 a 13
+  const prodUnit = {
+    id: "p-unit-1",
+    nome: "ARROZ TIPO 1 5KG",
+    sku: "NK0001",
+    gtin: "7891000000006",
+    preco: 32.9,
+    unidade: "PC",
+    estoque: 20,
+    pesavel: false,
+  };
+  const prodPeso = {
+    id: "p-peso-1",
+    nome: "QUEIJO MUSSARELA",
+    sku: "NK0020",
+    gtin: "7891000000198",
+    preco: 45.9,
+    unidade: "KG",
+    estoque: 10,
+    pesavel: true,
+  };
+
+  // 4) X, 5, Enter, scan adiciona 5
+  let st4 = ESTADO_MULTIPLICADOR_INICIAL;
+  st4 = transicionarMultiplicadorPdv(st4, { tipo: "INICIAR", teclaInicial: "X" }).estado;
+  st4 = transicionarMultiplicadorPdv(st4, { tipo: "DIGITAR_TECLA", tecla: "5" }).estado;
+  st4 = transicionarMultiplicadorPdv(st4, { tipo: "ARMAR" }).estado;
+  const prodScan4 = resolverProdutoPorCodigoOuBusca([prodUnit, prodPeso], "7891000000006", [prodUnit], 0);
+  const ad4 =
+    st4.status === "armado" && prodScan4
+      ? aplicarAdicaoItemPdv([], prodScan4, st4.quantidade)
+      : { ok: false as const, erro: "falha" };
+  const teste4MultCincoOk =
+    st4.status === "armado" &&
+    st4.quantidade === 5 &&
+    st4.rotulo === "Próximo item × 5" &&
+    ad4.ok &&
+    ad4.linhas.length === 1 &&
+    ad4.linhas[0].qtd === 5;
+
+  // 5) Produto já existente soma 5, não 1
+  const linhasBase5 = ad4.ok ? ad4.linhas : [];
+  const ad5 = aplicarAdicaoItemPdv(linhasBase5, prodUnit, 5);
+  const teste5SomaExistenteOk = ad5.ok && ad5.linhas.length === 1 && ad5.linhas[0].qtd === 10 && ad5.qtdAplicada === 5;
+
+  // 6) Quantidade volta a 1 após sucesso
+  const st6PosConsumo = transicionarMultiplicadorPdv(st4, { tipo: "CONSUMIR" }).estado;
+  const ad6PadraoUm = ad5.ok ? aplicarAdicaoItemPdv(ad5.linhas, prodUnit, undefined) : { ok: false as const, erro: "" };
+  const teste6VoltaParaUmOk =
+    st6PosConsumo.status === "inativo" &&
+    st6PosConsumo.ultimaTransicao === "consumida" &&
+    ad6PadraoUm.ok &&
+    ad6PadraoUm.linhas[0].qtd === 11;
+
+  // 7) Produto não encontrado não consome quantidade armada
+  const naoAchado = resolverProdutoPorCodigoOuBusca([prodUnit, prodPeso], "7899999999999", [], 0);
+  const st7PosErro = transicionarMultiplicadorPdv(st4, {
+    tipo: "REGISTRAR_ERRO_LEITURA",
+    erro: "Produto não encontrado.",
+  }).estado;
+  const teste7MantemArmadoOk =
+    naoAchado === null &&
+    st7PosErro.status === "armado" &&
+    st7PosErro.quantidade === 5 &&
+    Boolean(st7PosErro.erro);
+
+  // 8) Esc cancela multiplicador sem apagar itens
+  const st8Digitando = transicionarMultiplicadorPdv(ESTADO_MULTIPLICADOR_INICIAL, {
+    tipo: "INICIAR",
+    teclaInicial: "x",
+  }).estado;
+  const st8CancDig = transicionarMultiplicadorPdv(st8Digitando, { tipo: "CANCELAR" }).estado;
+  const st8CancArm = transicionarMultiplicadorPdv(st7PosErro, { tipo: "CANCELAR" }).estado;
+  const teste8EscCancelaSemApagarOk =
+    st8CancDig.status === "inativo" &&
+    st8CancDig.ultimaTransicao === "cancelada" &&
+    st8CancArm.status === "inativo" &&
+    st8CancArm.ultimaTransicao === "cancelada" &&
+    ad5.ok &&
+    ad5.linhas.length === 1 &&
+    ad5.linhas[0].qtd === 10;
+
+  // 9) Zero, negativo, vazio, acima do limite e decimal inválido são rejeitados
+  const invalidos9 = ["", "   ", "0", "0,00", "-2", "10000", "1,2345", "1..5", "abc"];
+  const todosRejeitados9 = invalidos9.every((txt) => {
+    const v = validarTextoQuantidadeMultiplicador(txt);
+    let s = transicionarMultiplicadorPdv(ESTADO_MULTIPLICADOR_INICIAL, { tipo: "INICIAR" }).estado;
+    s = transicionarMultiplicadorPdv(s, { tipo: "DEFINIR_RASCUNHO", rascunho: txt }).estado;
+    if (s.status !== "digitando") return !v.ok;
+    const armado = transicionarMultiplicadorPdv(s, { tipo: "ARMAR" }).estado;
+    return !v.ok && armado.status === "digitando" && Boolean(armado.erro);
+  });
+
+  // 10) Peso/decimal segue regra do produto (e sem erro de ponto flutuante ou estouro de estoque)
+  const vDecimalOk = validarTextoQuantidadeMultiplicador("1,5");
+  const adPeso1 = aplicarAdicaoItemPdv([], prodPeso, 1.5);
+  const adPeso2 = adPeso1.ok ? aplicarAdicaoItemPdv(adPeso1.linhas, prodPeso, 0.1) : { ok: false as const, erro: "" };
+  const adPeso3 = adPeso2.ok ? aplicarAdicaoItemPdv(adPeso2.linhas, prodPeso, 0.2) : { ok: false as const, erro: "" };
+  const adPesoPreservaSemMult = adPeso3.ok
+    ? aplicarAdicaoItemPdv(adPeso3.linhas, prodPeso, undefined)
+    : { ok: false as const, erro: "" };
+  const adUnitFracionado = aplicarAdicaoItemPdv([], prodUnit, 1.5);
+  const adAcimaEstoque = aplicarAdicaoItemPdv([], prodUnit, 25);
+  const teste10PesoRegraOk =
+    vDecimalOk.ok &&
+    vDecimalOk.quantidade === 1.5 &&
+    normalizarQtdPdv(0.1 + 0.2) === 0.3 &&
+    adPeso3.ok &&
+    adPeso3.qtdFinalLinha === 1.8 &&
+    adPesoPreservaSemMult.ok &&
+    adPesoPreservaSemMult.qtdFinalLinha === 1.8 &&
+    adPesoPreservaSemMult.abrirEdicaoId === prodPeso.id &&
+    !adUnitFracionado.ok &&
+    !adAcimaEstoque.ok;
+
+  // 11) Digitar produto com X continua possível (sem sequestrar busca textual nem composição IME)
+  const st11Ini = transicionarMultiplicadorPdv(ESTADO_MULTIPLICADOR_INICIAL, {
+    tipo: "INICIAR",
+    teclaInicial: "X",
+  }).estado;
+  const st11Letra = transicionarMultiplicadorPdv(st11Ini, { tipo: "DIGITAR_TECLA", tecla: "a" });
+  const st11Btn = transicionarMultiplicadorPdv(st11Ini, { tipo: "CONVERTER_PARA_BUSCA_X" });
+  const naoIniciaComTexto = !podeIniciarMultiplicadorPdv({
+    estadoAtual: ESTADO_MULTIPLICADOR_INICIAL,
+    algumModalAberto: false,
+    editandoItem: false,
+    focoNaBipagem: true,
+    termoBusca: "CAIXA",
+    key: "x",
+  });
+  const naoIniciaComIme = !podeIniciarMultiplicadorPdv({
+    estadoAtual: ESTADO_MULTIPLICADOR_INICIAL,
+    algumModalAberto: false,
+    editandoItem: false,
+    focoNaBipagem: true,
+    termoBusca: "",
+    key: "x",
+    isComposing: true,
+  });
+  const teste11BuscaComXOk =
+    st11Letra.estado.status === "inativo" &&
+    st11Letra.converterParaTermoBusca === "Xa" &&
+    st11Btn.converterParaTermoBusca === "X" &&
+    naoIniciaComTexto &&
+    naoIniciaComIme;
+
+  // 12) Modais/outros inputs não acionam multiplicador
+  const bloqueiaEmModal = !podeIniciarMultiplicadorPdv({
+    estadoAtual: ESTADO_MULTIPLICADOR_INICIAL,
+    algumModalAberto: true,
+    editandoItem: false,
+    focoNaBipagem: true,
+    termoBusca: "",
+    key: "X",
+  });
+  const bloqueiaOutroInput = !podeIniciarMultiplicadorPdv({
+    estadoAtual: ESTADO_MULTIPLICADOR_INICIAL,
+    algumModalAberto: false,
+    editandoItem: false,
+    focoNaBipagem: false,
+    termoBusca: "",
+    key: "X",
+  });
+  const bloqueiaEditandoLinha = !podeIniciarMultiplicadorPdv({
+    estadoAtual: ESTADO_MULTIPLICADOR_INICIAL,
+    algumModalAberto: false,
+    editandoItem: true,
+    focoNaBipagem: true,
+    termoBusca: "",
+    key: "X",
+  });
+  const bloqueiaAtalhoCtrlX = !podeIniciarMultiplicadorPdv({
+    estadoAtual: ESTADO_MULTIPLICADOR_INICIAL,
+    algumModalAberto: false,
+    editandoItem: false,
+    focoNaBipagem: true,
+    termoBusca: "",
+    key: "x",
+    ctrlKey: true,
+  });
+  const teste12IsolamentoFocoModalOk =
+    bloqueiaEmModal && bloqueiaOutroInput && bloqueiaEditandoLinha && bloqueiaAtalhoCtrlX;
+
+  // 13) Regressão de scanner, busca, Del, Esc e fila offline
+  const achaSku = resolverProdutoPorCodigoOuBusca([prodUnit, prodPeso], "nk0020", [], 0);
+  const achaLista = resolverProdutoPorCodigoOuBusca([prodUnit, prodPeso], "queijo", [prodPeso], 0);
+  const teste13RegressaoPdvOk =
+    achaSku?.id === prodPeso.id &&
+    achaLista?.id === prodPeso.id &&
+    ATALHOS_PDV.some((a) => a.id === "multiplicador_qtd") &&
+    ATALHOS_PDV.some((a) => a.id === "remover_ultimo") &&
+    ATALHOS_PDV.some((a) => a.id === "escape") &&
+    pdvTxt.includes('CHAVE_FILA = "nkway.fila"') &&
+    pdvTxt.includes("removerUltimoItem") &&
+    pdvTxt.includes("desfazerUltimoItem") &&
+    pdvTxt.includes("sincronizar");
+
+  ok("pdv-16", "PDV", "Menu/botão PDV solicita fullscreen no gesto e navega", teste1FullscreenMenuOk, "helper único LinkPdv + Ctrl/Cmd preservado", true);
+  ok("pdv-17", "PDV", "Fullscreen negado não bloqueia /pdv e aciona fallback", teste2FallbackNegadoOk, "navega normalmente + aviso de 1 linha", true);
+  ok("pdv-18", "PDV", "Atalho de abertura não duplica pedidos nem listeners", teste3SemDuplicacaoOk, "deduplicação de promessa ativa e keydown único", true);
+  ok("pdv-19", "PDV", "Multiplicador X + 5 + Enter + scan adiciona 5", teste4MultCincoOk, "Próximo item × 5 aplicado na leitura", true);
+  ok("pdv-20", "PDV", "Produto já existente soma quantidade multiplicada (não +1)", teste5SomaExistenteOk, "5 + 5 = 10 unidades exatas", true);
+  ok("pdv-21", "PDV", "Multiplicador volta para 1 após adição com sucesso", teste6VoltaParaUmOk, "consumo único → próxima leitura soma +1", true);
+  ok("pdv-22", "PDV", "Produto não encontrado mantém quantidade armada", teste7MantemArmadoOk, "não consome multiplicador silenciosamente", true);
+  ok("pdv-23", "PDV", "Esc cancela multiplicador sem apagar itens da venda", teste8EscCancelaSemApagarOk, "itens preservados integralmente", true);
+  ok("pdv-24", "PDV", "Zero, negativo, vazio, > 9.999 e decimal inválido rejeitados", todosRejeitados9, "validação estrita antes de armar", true);
+  ok("pdv-25", "PDV", "Peso/decimal respeita produto pesável, arredondamento e estoque", teste10PesoRegraOk, "KG aceita até 3 casas; UN recusa fração", true);
+  ok("pdv-26", "PDV", "Busca textual por produto iniciando com X continua possível", teste11BuscaComXOk, "X + letra converte para busca; IME respeitado", true);
+  ok("pdv-27", "PDV", "Modais e outros campos não acionam multiplicador", teste12IsolamentoFocoModalOk, "restrito ao campo de bipagem vazio e sem modal", true);
+  ok("pdv-28", "PDV", "Regressão de scanner, busca, Del, Esc e fila offline intacta", teste13RegressaoPdvOk, "GTIN/SKU, Del/Ctrl+Z, Esc e nkway.fila preservados", true);
+
+  // Complemento PDV 2 de 3 — Pagamento dividido, troco/crédito, consulta F7, espera F9 e etiqueta de balança (12 testes)
+  // 29) Pagamento dividido parcial + quitação exata
+  const pagP1 = registrarParcelaPagamentoPdv({
+    pagamentosAtuais: [],
+    totalVenda: 73.5,
+    forma: "dinheiro",
+    valorInformado: "50,00",
+  });
+  const pagP2 = pagP1.ok
+    ? registrarParcelaPagamentoPdv({
+        pagamentosAtuais: pagP1.pagamentos,
+        totalVenda: 73.5,
+        forma: "pix",
+        valorInformado: "23,50",
+      })
+    : { ok: false as const, erro: "" };
+  const teste29DivisaoExataOk =
+    pagP1.ok &&
+    pagP1.resumo.falta === 23.5 &&
+    !pagP1.resumo.quitado &&
+    pagP2.ok &&
+    pagP2.resumo.pago === 73.5 &&
+    pagP2.resumo.falta === 0 &&
+    pagP2.resumo.troco === 0 &&
+    pagP2.resumo.quitado;
+
+  // 30) Troco exclusivo em dinheiro e trava de excesso nas demais formas
+  const pagDinTroco = registrarParcelaPagamentoPdv({
+    pagamentosAtuais: [],
+    totalVenda: 73.5,
+    forma: "dinheiro",
+    valorInformado: "100,00",
+  });
+  const pagPixExcesso = registrarParcelaPagamentoPdv({
+    pagamentosAtuais: pagP1.ok ? pagP1.pagamentos : [],
+    totalVenda: 73.5,
+    forma: "pix",
+    valorInformado: "80,00",
+  });
+  const edPixExcesso = editarParcelaPagamentoPdv({
+    pagamentosAtuais: [
+      { forma: "dinheiro", valor: 20 },
+      { forma: "credito", valor: 30 },
+    ],
+    totalVenda: 73.5,
+    indice: 1,
+    novoValor: "90,00",
+  });
+  const teste30TrocoSoDinheiroOk =
+    pagDinTroco.ok &&
+    pagDinTroco.resumo.troco === 26.5 &&
+    pagPixExcesso.ok &&
+    pagPixExcesso.limitadoAoSaldo &&
+    pagPixExcesso.valorAplicado === 23.5 &&
+    pagPixExcesso.resumo.troco === 0 &&
+    edPixExcesso.limitadoAoSaldo &&
+    edPixExcesso.pagamentos[1]?.valor === 53.5 &&
+    edPixExcesso.resumo.troco === 0;
+
+  // 31) Saldo já quitado bloqueia lançamento duplicado
+  const pagDuplicado = pagP2.ok
+    ? registrarParcelaPagamentoPdv({
+        pagamentosAtuais: pagP2.pagamentos,
+        totalVenda: 73.5,
+        forma: "credito",
+        valorInformado: "10,00",
+      })
+    : { ok: true as const };
+  const teste31BloqueiaQuitadoOk = !pagDuplicado.ok;
+
+  // 32) Normalização líquida para persistência (soma das parcelas gravadas = total da venda)
+  const normTroco = normalizarPagamentosLiquidosPdv(
+    [
+      { forma: "pix", valor: 23.5 },
+      { forma: "dinheiro", valor: 100 },
+    ],
+    73.5,
+  );
+  const normPixInvalido = normalizarPagamentosLiquidosPdv([{ forma: "pix", valor: 100 }], 73.5);
+  const somaLiquida = normTroco.ok
+    ? round2(normTroco.pagamentosLiquidos.reduce((s, p) => s + p.valor, 0))
+    : -1;
+  const teste32NormalizacaoLiquidaOk =
+    normTroco.ok && normTroco.troco === 50 && somaLiquida === 73.5 && !normPixInvalido.ok;
+
+  // 33) Venda a prazo/boleto exige cliente identificado (mas permite Salvar como DAV)
+  const credSemCliente = validarCreditoVendaPdv({
+    modo: "sem_nota",
+    pagamentos: [{ forma: "prazo", valor: 80 }],
+    totalVenda: 80,
+    cliente: null,
+  });
+  const credDavSemCliente = validarCreditoVendaPdv({
+    modo: "dav",
+    pagamentos: [{ forma: "prazo", valor: 80 }],
+    totalVenda: 80,
+    cliente: null,
+  });
+  const teste33ClienteObrigatorioPrazoOk =
+    !credSemCliente.ok && credSemCliente.codigo === "cliente_obrigatorio" && credDavSemCliente.ok;
+
+  // 34) Limite de crédito do cliente respeitado (bloqueia acima do disponível; aprova dentro)
+  const cliLimite = { id: "cli-1", nome: "MERCADO TESTE", limiteCredito: 300, saldoEmAberto: 220 };
+  const credEstoura = validarCreditoVendaPdv({
+    modo: "emitir_nfce",
+    pagamentos: [
+      { forma: "dinheiro", valor: 20 },
+      { forma: "prazo", valor: 100 },
+    ],
+    totalVenda: 120,
+    cliente: cliLimite,
+  });
+  const credDentro = validarCreditoVendaPdv({
+    modo: "emitir_nfce",
+    pagamentos: [
+      { forma: "dinheiro", valor: 40 },
+      { forma: "prazo", valor: 80 },
+    ],
+    totalVenda: 120,
+    cliente: cliLimite,
+  });
+  const teste34LimiteCreditoOk =
+    !credEstoura.ok &&
+    credEstoura.codigo === "limite_excedido" &&
+    credDentro.ok &&
+    credDentro.limiteDisponivel === 0 &&
+    credDentro.novoSaldoAberto === 300;
+
+  // 35) Etiqueta de balança GS1-2 decodifica peso (gramas) e valor (centavos)
+  const etiqPeso = gerarEtiquetaBalancaEan13Pdv({ codigoProduto: 20, medidaCincoDigitos: 1250 });
+  const etiqValor = gerarEtiquetaBalancaEan13Pdv({ codigoProduto: 20, medidaCincoDigitos: 2295 });
+  const decPeso = decodificarEtiquetaBalancaPdv(etiqPeso, [prodUnit, prodPeso], "peso");
+  const decValor = decodificarEtiquetaBalancaPdv(etiqValor, [prodUnit, prodPeso], "valor");
+  const teste35BalancaGs1Ok =
+    decPeso.ehEtiquetaBalanca &&
+    decPeso.ok &&
+    decPeso.produto.id === prodPeso.id &&
+    decPeso.pesoKg === 1.25 &&
+    decPeso.valorEtiqueta === round2(1.25 * prodPeso.preco) &&
+    decValor.ehEtiquetaBalanca &&
+    decValor.ok &&
+    decValor.pesoKg === 0.5 &&
+    decValor.valorEtiqueta === 22.95;
+
+  // 36) Etiqueta de balança inválida (DV incorreto ou código inexistente) é rejeitada com segurança
+  const etiqDvRuim = `${etiqPeso.slice(0, 12)}${(Number(etiqPeso[12]) + 1) % 10}`;
+  const etiqSemProd = gerarEtiquetaBalancaEan13Pdv({ codigoProduto: 999, medidaCincoDigitos: 500 });
+  const decRuim = decodificarEtiquetaBalancaPdv(etiqDvRuim, [prodUnit, prodPeso], "peso");
+  const decSemProd = decodificarEtiquetaBalancaPdv(etiqSemProd, [prodUnit, prodPeso], "peso");
+  const teste36BalancaInvalidaOk =
+    decRuim.ehEtiquetaBalanca && !decRuim.ok && decSemProd.ehEtiquetaBalanca && !decSemProd.ok;
+
+  // 37) Consulta de preço (F7) busca por GTIN, balança, SKU e nome sem acentos e calcula IBS/CBS
+  const prodAcento = {
+    ...prodUnit,
+    id: "p-acento",
+    nome: "AÇÚCAR CRISTAL ESPECIAL 5KG",
+    sku: "NK0099",
+    ibsAliq: 0.1,
+    cbsAliq: 0.9,
+  };
+  const consAcento = consultarProdutosPrecoPdv("acucar cristal", [prodUnit, prodPeso, prodAcento], "peso");
+  const consBal = consultarProdutosPrecoPdv(etiqPeso, [prodUnit, prodPeso, prodAcento], "peso");
+  const tribCalc = calcularTributosProdutoPdv(prodAcento, 1);
+  const teste37ConsultaPrecoF7Ok =
+    consAcento.destaque?.id === "p-acento" &&
+    consBal.destaque?.id === prodPeso.id &&
+    consBal.leituraBalanca?.pesoKg === 1.25 &&
+    tribCalc.total > 0;
+
+  // 38 & 39) Vendas em espera (F9): suspensão, retomada e troca automática sem perder venda ativa na tela
+  const rSusp1 = suspenderVendaParaEsperaPdv({
+    listaAtual: [],
+    vendaAtiva: {
+      linhas: [
+        {
+          produtoId: prodUnit.id,
+          nome: prodUnit.nome,
+          qtd: 2,
+          preco: prodUnit.preco,
+          unidade: prodUnit.unidade,
+          estoque: prodUnit.estoque,
+          pesavel: false,
+        },
+      ],
+      clienteId: "cli-1",
+      clienteNome: "JOAO ESPERA",
+      descontoModo: "real",
+      descontoValor: "5,80",
+      pagamentos: [{ forma: "pix", valor: 20 }],
+    },
+    identificacao: "Cesta Azul",
+    idGerado: "esp-1",
+    agora: 1000,
+  });
+  const teste38SuspenderEsperaOk =
+    rSusp1.ok &&
+    rSusp1.lista.length === 1 &&
+    rSusp1.suspensa.total === 60 &&
+    rSusp1.suspensa.unidades === 2;
+
+  const rRetTroca = rSusp1.ok
+    ? retomarVendaDeEsperaPdv({
+        listaAtual: rSusp1.lista,
+        idAlvo: "esp-1",
+        vendaAtivaNaTela: {
+          linhas: [
+            {
+              produtoId: prodPeso.id,
+              nome: prodPeso.nome,
+              qtd: 1.5,
+              preco: prodPeso.preco,
+              unidade: prodPeso.unidade,
+              estoque: prodPeso.estoque,
+              pesavel: true,
+            },
+          ],
+          clienteId: null,
+          clienteNome: "CONSUMIDOR",
+          descontoModo: "real",
+          descontoValor: "",
+          pagamentos: [],
+        },
+        produtosAtivos: [prodUnit, prodPeso],
+        agora: 2000,
+      })
+    : { ok: false as const, erro: "" };
+  const listaPosRemocao = rRetTroca.ok ? removerVendaDeEsperaPdv(rRetTroca.listaRestante, rRetTroca.listaRestante[0]?.id ?? "") : [];
+  const teste39RetomarTrocaSeguraOk =
+    rRetTroca.ok &&
+    rRetTroca.trocouComAtual &&
+    rRetTroca.retomada.id === "esp-1" &&
+    rRetTroca.listaRestante.length === 1 &&
+    rRetTroca.listaRestante[0].linhas[0].produtoId === prodPeso.id &&
+    listaPosRemocao.length === 0;
+
+  // 40) ATALHOS_PDV documenta F7 e F9, listener único mantido e modais isolados
+  const listenersPdvFinal = (pdvTxt.match(/window\.addEventListener\("keydown"/g) ?? []).length;
+  const resumoConsistente = calcularResumoPagamentoPdv([{ forma: "dinheiro", valor: 50 }], 50).quitado;
+  const teste40AtalhosEIsolamentoOk =
+    resumoConsistente &&
+    ATALHOS_PDV.some((a) => a.id === "consultar_preco" && a.tecla === "F7") &&
+    ATALHOS_PDV.some((a) => a.id === "venda_espera" && a.tecla === "F9") &&
+    pdvTxt.includes("modalConsultaPreco") &&
+    pdvTxt.includes("modalEspera") &&
+    listenersPdvFinal === 2;
+
+  ok("pdv-29", "PDV", "Pagamento dividido soma parcelas e calcula falta exata", teste29DivisaoExataOk, "Dinheiro 50,00 + PIX 23,50 = 73,50 quitado", true);
+  ok("pdv-30", "PDV", "Troco exclusivo em dinheiro e trava de excesso em PIX/cartão", teste30TrocoSoDinheiroOk, "formas não-dinheiro limitadas ao saldo restante", true);
+  ok("pdv-31", "PDV", "Venda já quitada bloqueia parcela duplicada acidental", teste31BloqueiaQuitadoOk, "exige remover ou zerar antes de relançar", true);
+  ok("pdv-32", "PDV", "Persistência abate troco em dinheiro mantendo soma líquida = total", teste32NormalizacaoLiquidaOk, "consistente com apuração de caixa e pdv-6", true);
+  ok("pdv-33", "PDV", "Venda a prazo/boleto exige cliente cadastrado (DAV livre)", teste33ClienteObrigatorioPrazoOk, "bloqueia fiado anônimo para CONSUMIDOR", true);
+  ok("pdv-34", "PDV", "Limite de crédito bloqueia excesso a prazo no PDV e servidor", teste34LimiteCreditoOk, "saldoEmAberto + valorAPrazo <= limiteCredito", true);
+  ok("pdv-35", "PDV", "Etiqueta de balança EAN-13 (2…) decodifica peso e valor", teste35BalancaGs1Ok, "gramas (1,250 KG) e centavos (R$ 22,95 → 0,500 KG)", true);
+  ok("pdv-36", "PDV", "Etiqueta de balança inválida é recusada sem perder estado", teste36BalancaInvalidaOk, "DV EAN-13 e vínculo SKU pesável validados", true);
+  ok("pdv-37", "PDV", "Consulta de preço (F7) busca sem acento e exibe IBS/CBS sem vender", teste37ConsultaPrecoF7Ok, "consulta isolada da venda em andamento", true);
+  ok("pdv-38", "PDV", "Venda em espera (F9) suspende atendimento em nkway.pdv.espera", teste38SuspenderEsperaOk, "preserva itens, cliente, desconto e parcelas", true);
+  ok("pdv-39", "PDV", "Retomar venda em espera protege venda aberta trocando-as", teste39RetomarTrocaSeguraOk, "zero perda acidental de itens na tela", true);
+  ok("pdv-40", "PDV", "ATALHOS_PDV integra F7 e F9 no listener único do PDV", teste40AtalhosEIsolamentoOk, "F1 e barra inferior sincronizados pela mesma fonte", true);
+
+  // Complemento PDV 3 de 3 — Bobina térmica 80 mm (.print-area), Carregar/Cancelar F3, Gaveta Alt+G e Fila Offline (12 testes)
+  // 41) Recibo térmico 80 mm pós-venda com itens, parcelas divididas, troco e .print-area ativo
+  const reciboFech = montarReciboDeFechamentoPdv({
+    id: "rec-1",
+    modo: "sem_nota",
+    numeroVenda: 501,
+    numeroNota: null,
+    modelo: null,
+    situacaoFiscal: "nao_emitida",
+    chave: null,
+    protocolo: null,
+    clienteNome: "MARCOS BALCAO",
+    clienteDocumento: "123.456.789-00",
+    operador: "Ana Ribeiro",
+    terminal: "CAIXA 1",
+    ambiente: "2",
+    itens: [
+      { nome: "ARROZ TIPO 1 5KG", qtd: 2, precoUnit: 32.9, unidade: "PC" },
+      { nome: "QUEIJO MUSSARELA", qtd: 0.5, precoUnit: 45.9, unidade: "KG" },
+    ],
+    subtotal: 88.75,
+    desconto: 3.75,
+    total: 85,
+    pagamentosBrutos: [
+      { forma: "pix", valor: 35 },
+      { forma: "dinheiro", valor: 100 },
+    ],
+    troco: 50,
+  });
+  const teste41Bobina80mmOk =
+    reciboFech.itens.length === 2 &&
+    reciboFech.unidadesTotais === 2.5 &&
+    reciboFech.parcelas.length === 2 &&
+    reciboFech.troco === 50 &&
+    reciboFech.tributosTotal > 0 &&
+    pdvTxt.includes("!imprimindo && \"print-area\"") &&
+    pdvTxt.includes("w-[302px]");
+
+  // 42) Honestidade fiscal na bobina 80 mm: pendente_transmissao e DAV nunca inventam chave/protocolo; autorizada converte p/ DANFE
+  const reciboPend = montarReciboDeFechamentoPdv({
+    id: "rec-pend",
+    modo: "emitir_nfce",
+    numeroVenda: 502,
+    numeroNota: 8801,
+    modelo: "NFC-e",
+    situacaoFiscal: "pendente_transmissao",
+    chave: "11261123567891000174650010000088011000088019",
+    protocolo: "111999999",
+    clienteNome: "CONSUMIDOR",
+    operador: "Ana",
+    terminal: "CAIXA 1",
+    ambiente: "2",
+    itens: [{ nome: "ARROZ", qtd: 1, precoUnit: 32.9, unidade: "PC" }],
+    subtotal: 32.9,
+    desconto: 0,
+    total: 32.9,
+    pagamentosBrutos: [{ forma: "dinheiro", valor: 32.9 }],
+    troco: 0,
+  });
+  const reciboAut = montarReciboDeFechamentoPdv({
+    id: "rec-aut",
+    modo: "emitir_nfce",
+    numeroVenda: 503,
+    numeroNota: 8802,
+    modelo: "NFC-e",
+    situacaoFiscal: "autorizada",
+    chave: chaveProbe44,
+    protocolo: "111260000880201",
+    clienteNome: "CONSUMIDOR",
+    operador: "Ana",
+    terminal: "CAIXA 1",
+    ambiente: "2",
+    itens: [{ nome: "ARROZ", qtd: 1, precoUnit: 32.9, unidade: "PC" }],
+    subtotal: 32.9,
+    desconto: 0,
+    total: 32.9,
+    pagamentosBrutos: [{ forma: "pix", valor: 32.9 }],
+    troco: 0,
+  });
+  const docDanfe = converterReciboParaDocFiscalPdv(reciboAut);
+  const docNaoFiscal = converterReciboParaDocFiscalPdv(reciboFech);
+  const teste42HonestidadeBobinaEDanfeOk =
+    reciboPend.chave === null &&
+    reciboPend.protocolo === null &&
+    reciboAut.chave === chaveProbe44 &&
+    docDanfe?.chave === chaveProbe44 &&
+    docNaoFiscal === null;
+
+  // 43) Reimpressão 80 mm a partir de VendaDto em Documentos (F3) para DAV, Sem Nota e Fiscal
+  const davDtoSim = {
+    id: "dav-sim-1",
+    numero: 770,
+    numeroNota: null,
+    serie: null,
+    modelo: null,
+    tipo: "dav",
+    status: "aberto",
+    situacaoFiscal: "nao_emitida" as const,
+    protocoloOrigem: null,
+    chave: null,
+    protocolo: null,
+    clienteId: "cli-dav",
+    clienteNome: "CLIENTE ORCAMENTO",
+    subtotal: 65.8,
+    desconto: 5.8,
+    vFrete: 0,
+    total: 60,
+    formaPagamento: "dinheiro",
+    pagamentos: [],
+    validade: "2026-11-10",
+    observacao: null,
+    operador: "Ana",
+    caixa: "CAIXA 1",
+    ambiente: "2",
+    data: "2026-11-02T12:00:00.000Z",
+    itens: [
+      {
+        produtoId: prodUnit.id,
+        gtin: prodUnit.gtin,
+        nome: prodUnit.nome,
+        qtd: 2,
+        precoUnit: prodUnit.preco,
+        total: 65.8,
+        unidade: prodUnit.unidade,
+      },
+    ],
+  };
+  const recDavDto = montarReciboDeVendaDtoPdv(davDtoSim);
+  const teste43ReimpressaoDto80mmOk =
+    recDavDto.tipo === "dav" &&
+    recDavDto.chave === null &&
+    recDavDto.parcelas.length === 0 &&
+    recDavDto.tituloBobina.includes("DAV") &&
+    recDavDto.total === 60;
+
+  // 44) Carregar DAV em aberto para a tela do PDV preserva itens, cliente, desconto e guarda venda ativa em Espera (F9)
+  const carDavTroca = carregarDavParaTelaPdv({
+    dav: davDtoSim,
+    produtosAtivos: [prodUnit, prodPeso],
+    listaEsperaAtual: [],
+    vendaAtivaNaTela: {
+      linhas: [
+        {
+          produtoId: prodPeso.id,
+          nome: prodPeso.nome,
+          qtd: 1.2,
+          preco: prodPeso.preco,
+          unidade: prodPeso.unidade,
+          estoque: prodPeso.estoque,
+          pesavel: true,
+        },
+      ],
+      clienteId: null,
+      clienteNome: "CONSUMIDOR",
+      descontoModo: "real",
+      descontoValor: "",
+      pagamentos: [],
+    },
+    agora: 5000,
+  });
+  const teste44CarregarDavComProtecaoOk =
+    carDavTroca.ok &&
+    carDavTroca.davNumero === 770 &&
+    carDavTroca.linhas.length === 1 &&
+    carDavTroca.linhas[0].qtd === 2 &&
+    carDavTroca.clienteId === "cli-dav" &&
+    carDavTroca.descontoValor === "5,80" &&
+    carDavTroca.guardouVendaAnteriorEmEspera &&
+    carDavTroca.listaEsperaAtualizada.length === 1;
+
+  // 45) DAV já faturado/cancelado ou venda fiscal não pode ser reaberto como rascunho de DAV
+  const carDavFechado = carregarDavParaTelaPdv({
+    dav: { ...davDtoSim, status: "faturado" },
+    produtosAtivos: [prodUnit],
+    listaEsperaAtual: [],
+  });
+  const carNaoDav = carregarDavParaTelaPdv({
+    dav: { ...davDtoSim, tipo: "fiscal" },
+    produtosAtivos: [prodUnit],
+    listaEsperaAtual: [],
+  });
+  const teste45BloqueiaCarregarDavFechadoOk = !carDavFechado.ok && !carNaoDav.ok;
+
+  // 46) Cancelamento em Documentos (F3) exige motivo >= 15 caracteres e recusa documento já cancelado
+  const cancCurto = validarCancelamentoDocumentoPdv({
+    venda: davDtoSim,
+    motivo: "erro",
+  });
+  const cancJaCancelado = validarCancelamentoDocumentoPdv({
+    venda: { ...davDtoSim, status: "cancelado" },
+    motivo: "Solicitação de cancelamento válida pelo cliente",
+  });
+  const cancValido = validarCancelamentoDocumentoPdv({
+    venda: davDtoSim,
+    motivo: "Cliente desistiu do orçamento no balcão",
+  });
+  const teste46ValidacaoMotivoCancelamentoOk =
+    !cancCurto.ok &&
+    cancCurto.codigo === "motivo_curto" &&
+    !cancJaCancelado.ok &&
+    cancJaCancelado.codigo === "ja_cancelado" &&
+    cancValido.ok;
+
+  // 47) Cancelamento respeita janela legal SEFAZ (30 min NFC-e 65 / 24h NF-e 55) para notas autorizadas
+  const baseCancPdvMs = Date.parse("2026-11-02T12:00:00.000Z");
+  const nfceAut = {
+    tipo: "fiscal",
+    status: "faturado",
+    modelo: "NFC-e",
+    situacaoFiscal: "autorizada" as const,
+    protocoloOrigem: "autorizado_sefaz" as const,
+    data: new Date(baseCancPdvMs).toISOString(),
+    numero: 800,
+    numeroNota: 800,
+  };
+  const cancNfceDentro = validarCancelamentoDocumentoPdv({
+    venda: nfceAut,
+    motivo: "Erro de digitação constatado imediatamente no caixa",
+    agoraMs: baseCancPdvMs + 20 * 60_000,
+  });
+  const cancNfceExpirado = validarCancelamentoDocumentoPdv({
+    venda: nfceAut,
+    motivo: "Tentativa após quarenta e cinco minutos da emissão",
+    agoraMs: baseCancPdvMs + 45 * 60_000,
+  });
+  const cancNfe55Dentro = validarCancelamentoDocumentoPdv({
+    venda: { ...nfceAut, modelo: "NF-e" },
+    motivo: "Cancelamento dentro de vinte e quatro horas legais",
+    agoraMs: baseCancPdvMs + 120 * 60_000,
+  });
+  const teste47PrazoLegalSefazCancelamentoOk =
+    cancNfceDentro.ok &&
+    !cancNfceExpirado.ok &&
+    cancNfceExpirado.codigo === "prazo_sefaz_expirado" &&
+    cancNfe55Dentro.ok;
+
+  // 48) Gaveta rápida (Alt+G): suprimento soma ao saldo previsto e sangria válida abate do saldo
+  const sessaoMock = { id: "ses-1", numero: 12, terminal: "CAIXA 1", saldoDinheiro: 150 };
+  const gavSup = validarMovimentoGavetaPdv({
+    sessaoAberta: sessaoMock,
+    tipo: "suprimento",
+    forma: "dinheiro",
+    valorInformado: "50,00",
+    motivo: "Reforço de troco",
+  });
+  const gavSangOk = validarMovimentoGavetaPdv({
+    sessaoAberta: sessaoMock,
+    tipo: "sangria",
+    forma: "dinheiro",
+    valorInformado: "120,00",
+    motivo: "Sangria para o cofre",
+  });
+  const teste48GavetaSuprimentoSangriaOk =
+    gavSup.ok &&
+    gavSup.saldoDinheiroApos === 200 &&
+    gavSangOk.ok &&
+    gavSangOk.saldoDinheiroApos === 30;
+
+  // 49) Gaveta rápida (Alt+G) bloqueia caixa fechado, motivo curto, valor zerado e sangria acima do saldo em dinheiro
+  const gavFechado = validarMovimentoGavetaPdv({
+    sessaoAberta: null,
+    tipo: "sangria",
+    forma: "dinheiro",
+    valorInformado: "20,00",
+    motivo: "Sangria",
+  });
+  const gavExcesso = validarMovimentoGavetaPdv({
+    sessaoAberta: sessaoMock,
+    tipo: "sangria",
+    forma: "dinheiro",
+    valorInformado: "180,00",
+    motivo: "Sangria acima do disponível",
+  });
+  const gavSemMotivo = validarMovimentoGavetaPdv({
+    sessaoAberta: sessaoMock,
+    tipo: "suprimento",
+    forma: "dinheiro",
+    valorInformado: "20,00",
+    motivo: "oi",
+  });
+  const teste49GavetaTravasOk =
+    !gavFechado.ok &&
+    gavFechado.codigo === "caixa_fechado" &&
+    !gavExcesso.ok &&
+    gavExcesso.codigo === "saldo_insuficiente" &&
+    !gavSemMotivo.ok &&
+    gavSemMotivo.codigo === "motivo_curto";
+
+  // 50 & 51) Inspetor da fila offline (nkway.fila): sanitização retrocompatível, cálculo de total e retenção de erro sem perda
+  const filaSanitizada = sanitizarFilaOfflinePdv([
+    {
+      tipo: "fiscal",
+      itens: [{ produtoId: prodUnit.id, qtd: 2, preco: 32.9 }],
+      clienteNome: "CLIENTE OFFLINE 1",
+      desconto: 5.8,
+      pagamentos: [{ forma: "dinheiro", valor: 60 }],
+      modelo: "NFC-e",
+      criadoEm: 1700000000000,
+    },
+    {
+      idFila: "fila-erro-2",
+      tipo: "sem_nota",
+      itens: [{ produtoId: prodPeso.id, qtd: 1, preco: 45.9 }],
+      clienteNome: "CLIENTE OFFLINE 2",
+      desconto: 0,
+      pagamentos: [{ forma: "pix", valor: 45.9 }],
+      tentativas: 2,
+      ultimoErro: "Caixa fechado: abra o seu caixa antes de finalizar vendas.",
+      criadoEm: 1700000005000,
+    },
+    { tipo: "fiscal", itens: [] }, // inválido/vazio ignorado com segurança
+  ]);
+  const resFila = resumirFilaOfflinePdv(filaSanitizada);
+  const teste50FilaSanitizacaoOk =
+    filaSanitizada.length === 2 &&
+    filaSanitizada[0].totalEstimado === 60 &&
+    filaSanitizada[0].qtdUnidades === 2;
+  const teste51FilaResumoRetencaoErroOk =
+    resFila.quantidade === 2 &&
+    resFila.valorTotal === 105.9 &&
+    resFila.comErro === 1 &&
+    filaSanitizada[1].tentativas === 2 &&
+    Boolean(filaSanitizada[1].ultimoErro);
+
+  // 52) ATALHOS_PDV documenta Alt+G, modais isolados e listener global único preservado
+  const listenersPdvC3 = (pdvTxt.match(/window\.addEventListener\("keydown"/g) ?? []).length;
+  const teste52AtalhosEIntegridadeC3Ok =
+    ATALHOS_PDV.some((a) => a.id === "gaveta_caixa" && a.tecla === "Alt+G") &&
+    pdvTxt.includes("modalGaveta") &&
+    pdvTxt.includes("modalFilaOffline") &&
+    pdvTxt.includes("docCancelando") &&
+    listenersPdvC3 === 2;
+
+  ok("pdv-41", "PDV", "Bobina térmica 80 mm lista itens, parcelas, troco e .print-area", teste41Bobina80mmOk, "layout 302px pronto para window.print() sem folha em branco", true);
+  ok("pdv-42", "PDV", "Bobina 80 mm preserva honestidade fiscal e converte p/ DANFE", teste42HonestidadeBobinaEDanfeOk, "sem chave fictícia em pendente_transmissao", true);
+  ok("pdv-43", "PDV", "Reimpressão 80 mm atende DAV, venda sem nota e nota fiscal em F3", teste43ReimpressaoDto80mmOk, "comprovante não fiscal claro para DAV e sem_nota", true);
+  ok("pdv-44", "PDV", "Carregar DAV para edição no PDV protege venda ativa em Espera", teste44CarregarDavComProtecaoOk, "restaura itens/cliente/desconto sem perda na tela", true);
+  ok("pdv-45", "PDV", "DAV faturado/cancelado não pode ser reaberto como rascunho", teste45BloqueiaCarregarDavFechadoOk, "apenas DAV aberto entra para edição", true);
+  ok("pdv-46", "PDV", "Cancelamento em F3 exige motivo >= 15 caracteres e status ativo", teste46ValidacaoMotivoCancelamentoOk, "padrão evento 110111 SEFAZ", true);
+  ok("pdv-47", "PDV", "Cancelamento em F3 respeita prazo legal SEFAZ (30m NFC-e / 24h NF-e)", teste47PrazoLegalSefazCancelamentoOk, "bloqueia nota autorizada fora da janela legal", true);
+  ok("pdv-48", "PDV", "Gaveta rápida (Alt+G) calcula suprimento e sangria no PDV", teste48GavetaSuprimentoSangriaOk, "movimentação sem sair da tela cheia", true);
+  ok("pdv-49", "PDV", "Gaveta rápida bloqueia caixa fechado e sangria acima do saldo", teste49GavetaTravasOk, "proteção contra saldo negativo em espécie", true);
+  ok("pdv-50", "PDV", "Fila offline (nkway.fila) sanitiza registros e calcula totais", teste50FilaSanitizacaoOk, "compatível com registros legados do navegador", true);
+  ok("pdv-51", "PDV", "Inspetor da fila offline retém último erro sem descartar venda", teste51FilaResumoRetencaoErroOk, "permite corrigir caixa/estoque e reenviar", true);
+  ok("pdv-52", "PDV", "ATALHOS_PDV integra Alt+G mantendo listener único e isolamento", teste52AtalhosEIntegridadeC3Ok, "F1, barra inferior e modais 100% sincronizados", true);
 
   /* -------------------------------------------------------------- estoque */
   const ordemKardex = [...movs].sort((a, b) => new Date(a.data ?? 0).getTime() - new Date(b.data ?? 0).getTime());

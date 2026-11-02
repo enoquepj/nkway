@@ -6,14 +6,18 @@
 export type IdAcaoAtalhoPdv =
   | "ajuda"
   | "bipagem"
+  | "multiplicador_qtd"
   | "documentos"
   | "desconto"
   | "cancelar_venda"
+  | "consultar_preco"
   | "cliente"
+  | "venda_espera"
   | "finalizar"
   | "remover_ultimo"
   | "desfazer_item"
   | "formas_pagamento"
+  | "gaveta_caixa"
   | "escape"
   | "voltar"
   | "tela_cheia";
@@ -60,6 +64,17 @@ export const ATALHOS_PDV: readonly AtalhoPdvItem[] = [
     roteiroTeste: "Clicar em outro campo, pressionar F2 e confirmar foco no campo de bipagem.",
   },
   {
+    id: "multiplicador_qtd",
+    tecla: "X + Qtd",
+    rotuloCurto: "Multiplicar",
+    descricao:
+      "Com o campo de bipagem vazio, pressione X, digite a quantidade (ex.: 5 ou 1,5 p/ pesáveis) e Enter para armar o próximo item.",
+    alternativaNavegador:
+      "Esc cancela o multiplicador sem apagar itens; para buscar produto iniciado por X, continue digitando o nome normalmente",
+    exibirNaBarra: true,
+    roteiroTeste: "No campo vazio, teclar X, 5, Enter, ver 'Próximo item × 5' e bipar um produto.",
+  },
+  {
     id: "documentos",
     tecla: "F3",
     rotuloCurto: "Documentos",
@@ -86,12 +101,30 @@ export const ATALHOS_PDV: readonly AtalhoPdvItem[] = [
     roteiroTeste: "Com itens na venda, pressionar F6, confirmar no modal e verificar limpeza.",
   },
   {
+    id: "consultar_preco",
+    tecla: "F7",
+    rotuloCurto: "Preço",
+    descricao: "Consulta preço, saldo em estoque, NCM/CSOSN e tributos (IBS/CBS/ICMS) sem adicionar à venda.",
+    alternativaNavegador: "Botão Preço (F7) na barra superior",
+    exibirNaBarra: true,
+    roteiroTeste: "Pressionar F7, bipar ou buscar um produto e fechar com Esc confirmando que a venda não mudou.",
+  },
+  {
     id: "cliente",
     tecla: "F8",
     rotuloCurto: "Cliente",
     descricao: "Abre a identificação de cliente por nome, CPF ou CNPJ.",
     exibirNaBarra: true,
     roteiroTeste: "Pressionar F8, selecionar um cliente cadastrado e confirmar vínculo na venda.",
+  },
+  {
+    id: "venda_espera",
+    tecla: "F9",
+    rotuloCurto: "Espera",
+    descricao: "Suspende a venda atual em espera no caixa ou retoma um atendimento suspenso sem perder itens.",
+    alternativaNavegador: "Botão Espera (F9) na barra superior",
+    exibirNaBarra: true,
+    roteiroTeste: "Com itens na venda, pressionar F9, suspender o atendimento e retomá-lo em seguida.",
   },
   {
     id: "finalizar",
@@ -126,6 +159,15 @@ export const ATALHOS_PDV: readonly AtalhoPdvItem[] = [
     alternativaNavegador: "Ctrl+Alt+1..6 ou botões numerados [1] a [6] na coluna de pagamento",
     exibirNaBarra: true,
     roteiroTeste: "Com itens na venda, pressionar Alt+1..Alt+6 e verificar seleção da forma de pagamento.",
+  },
+  {
+    id: "gaveta_caixa",
+    tecla: "Alt+G",
+    rotuloCurto: "Gaveta",
+    descricao: "Registra Suprimento (reforço de troco) ou Sangria (retirada) sem sair da tela cheia do PDV.",
+    alternativaNavegador: "Botão Caixa # / Gaveta na barra superior",
+    exibirNaBarra: true,
+    roteiroTeste: "Com caixa aberto, pressionar Alt+G, lançar sangria ou suprimento e verificar saldo atualizado.",
   },
   {
     id: "escape",

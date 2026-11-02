@@ -11,6 +11,7 @@ import {
   somaDias,
   valorAPrazo,
 } from "@/lib/dominio";
+import { normalizarPagamentosLiquidosPdv, validarCreditoVendaPdv } from "@/lib/pagamentoPdv";
 import type { SituacaoFiscalVenda } from "@/lib/situacaoFiscal";
 import { registrarAuditoria } from "@/server/auditoria";
 import { diagnosticoEmissorServidor, transmitirVendaParaEmissor } from "@/server/emissorFiscalCore";
@@ -147,17 +148,66 @@ async function gravarOperacaoPdv(params: {
     }))
     .filter((p) => p.valor > 0);
 
-  const somaPagos = round2(pagamentos.reduce((s, p) => s + p.valor, 0));
-  if (!ehDav && pagamentos.length && somaPagos + 0.01 < total) {
-    return { ok: false, erro: `Faltam R$ ${round2(total - somaPagos).toFixed(2)} em pagamentos.` };
+  let pagamentosEfetivos = pagamentos;
+  let troco = 0;
+
+  if (!ehDav) {
+    const normPag = normalizarPagamentosLiquidosPdv(pagamentos, total);
+    if (!normPag.ok) {
+      return { ok: false, erro: normPag.erro };
+    }
+    pagamentosEfetivos = normPag.pagamentosLiquidos;
+    troco = normPag.troco;
   }
 
-  const pagamentosEfetivos = !ehDav && pagamentos.length === 0 ? [{ forma: "dinheiro", valor: total }] : pagamentos;
   const formaPrincipal = pagamentosEfetivos.length
     ? pagamentosEfetivos.slice().sort((a, b) => b.valor - a.valor)[0].forma
     : "dinheiro";
   const aPrazo = !ehDav ? valorAPrazo(pagamentosEfetivos, total, formaPrincipal) : 0;
-  const troco = round2(Math.max(0, round2(pagamentosEfetivos.reduce((s, p) => s + p.valor, 0)) - total));
+
+  if (!ehDav && aPrazo > 0) {
+    if (!params.clienteId) {
+      return {
+        ok: false,
+        erro: "Identifique um cliente cadastrado (F8) para registrar venda a prazo ou boleto.",
+      };
+    }
+    const [cliCredito] = await db
+      .select()
+      .from(clientes)
+      .where(and(eq(clientes.id, params.clienteId), eq(clientes.empresaId, params.empresaId)))
+      .limit(1);
+    if (!cliCredito) {
+      return { ok: false, erro: "Cliente informado não pertence a esta empresa." };
+    }
+    const [resAberto] = await db
+      .select({
+        saldo: sql<string>`coalesce(sum(${contas.valor} - ${contas.valorPago}), 0)`,
+      })
+      .from(contas)
+      .where(
+        and(
+          eq(contas.empresaId, params.empresaId),
+          eq(contas.tipo, "receber"),
+          eq(contas.status, "aberta"),
+          sql`(${contas.contraparteId} = ${cliCredito.id} or (${contas.contraparteId} is null and ${contas.contraparteNome} = ${cliCredito.nome}))`,
+        ),
+      );
+    const checkCredito = validarCreditoVendaPdv({
+      modo: params.modo,
+      pagamentos: pagamentosEfetivos,
+      totalVenda: total,
+      cliente: {
+        id: cliCredito.id,
+        nome: cliCredito.nome,
+        limiteCredito: Number(cliCredito.limiteCredito) || 0,
+        saldoEmAberto: Number(resAberto?.saldo ?? 0) || 0,
+      },
+    });
+    if (!checkCredito.ok) {
+      return { ok: false, erro: checkCredito.erro };
+    }
+  }
 
   if (baixaEstoque) {
     for (const i of itens) {
@@ -626,6 +676,9 @@ export async function faturarDav(bruto: unknown): Promise<ResultadoVenda> {
       davId?: unknown;
       modelo?: unknown;
       emitirNota?: unknown;
+      itens?: ItemPdv[];
+      clienteId?: unknown;
+      clienteNome?: unknown;
       pagamentos?: Pagamento[];
       desconto?: unknown;
     }>(bruto);
@@ -643,22 +696,31 @@ export async function faturarDav(bruto: unknown): Promise<ResultadoVenda> {
       return { ok: false, erro: "Este DAV já foi faturado ou cancelado." };
     }
 
-    const itens = await db.select().from(vendaItens).where(eq(vendaItens.vendaId, dav.id));
+    const itensBanco = await db.select().from(vendaItens).where(eq(vendaItens.vendaId, dav.id));
+    const itensEfetivos: ItemPdv[] =
+      Array.isArray(input.itens) && input.itens.length > 0
+        ? input.itens
+        : itensBanco
+            .filter((i) => Boolean(i.produtoId))
+            .map((i) => ({ produtoId: i.produtoId!, qtd: Number(i.qtd), preco: Number(i.precoUnit) }));
+
     const modTxt = texto(input.modelo);
     const modelo: "NFC-e" | "NF-e" | "SAT" =
       modTxt === "NF-e" || modTxt === "SAT" ? modTxt : "NFC-e";
     const emitirNota = input.emitirNota === false ? false : true;
+    const clienteIdEfetivo =
+      input.clienteId !== undefined ? texto(input.clienteId) || null : dav.clienteId;
+    const clienteNomeEfetivo =
+      input.clienteNome !== undefined ? texto(input.clienteNome) || "CONSUMIDOR" : dav.clienteNome;
 
     return await gravarOperacaoPdv({
       empresaId,
       empresa,
       usuario,
       modo: emitirNota ? "emitir_nfce" : "sem_nota",
-      itens: itens
-        .filter((i) => Boolean(i.produtoId))
-        .map((i) => ({ produtoId: i.produtoId!, qtd: Number(i.qtd), preco: Number(i.precoUnit) })),
-      clienteId: dav.clienteId,
-      clienteNome: dav.clienteNome,
+      itens: itensEfetivos,
+      clienteId: clienteIdEfetivo,
+      clienteNome: clienteNomeEfetivo,
       desconto: input.desconto !== undefined ? numero(input.desconto) : Number(dav.desconto),
       frete: Number(dav.vFrete),
       pagamentos: Array.isArray(input.pagamentos) ? input.pagamentos : [],

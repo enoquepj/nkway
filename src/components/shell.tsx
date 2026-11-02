@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
+import { ROTA_PDV, abrirPdvComTelaCheia } from "@/lib/abrirPdv";
 import { ROTULO_PERFIL, temPermissao, type PerfilUsuario, type PermissaoAcao } from "@/lib/permissoes";
+import { LinkPdv } from "./LinkPdv";
 import { Badge, Button, Icon, cn } from "./ui";
 import { sair } from "@/server/acoes/auth";
 
@@ -69,14 +71,18 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
 
   useEffect(() => {
     const f = (e: KeyboardEvent) => {
-      if (e.altKey && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        router.push("/pdv");
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "k") {
+        abrirPdvComTelaCheia({
+          navegar: (rota) => router.push(rota),
+          origem: "atalho",
+          eventoTeclado: e,
+          pathnameAtual: pathname,
+        });
       }
     };
     window.addEventListener("keydown", f);
     return () => window.removeEventListener("keydown", f);
-  }, [router]);
+  }, [router, pathname]);
 
   const ativo = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
@@ -111,17 +117,15 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
             <div key={g.titulo} className="mb-3">
               <p className="micro px-2.5 py-1 text-ink-500">{g.titulo}</p>
               <ul className="space-y-0.5">
-                {visiveis.map((i) => (
-                  <li key={i.href}>
-                    <Link
-                      href={i.href}
-                      className={cn(
-                        "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition",
-                        ativo(i.href)
-                          ? "bg-way-600/15 text-white ring-1 ring-inset ring-way-500/35"
-                          : "text-ink-300 hover:bg-ink-800 hover:text-white",
-                      )}
-                    >
+                {visiveis.map((i) => {
+                  const classeItem = cn(
+                    "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition",
+                    ativo(i.href)
+                      ? "bg-way-600/15 text-white ring-1 ring-inset ring-way-500/35"
+                      : "text-ink-300 hover:bg-ink-800 hover:text-white",
+                  );
+                  const conteudoItem = (
+                    <>
                       <Icon
                         name={i.icone}
                         className={cn("size-4 shrink-0", ativo(i.href) ? "text-way-300" : "text-ink-400 group-hover:text-way-300")}
@@ -132,9 +136,22 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
                           {i.atalho}
                         </kbd>
                       )}
-                    </Link>
-                  </li>
-                ))}
+                    </>
+                  );
+                  return (
+                    <li key={i.href}>
+                      {i.href === ROTA_PDV ? (
+                        <LinkPdv className={classeItem} aoAbrir={() => setAberto(false)}>
+                          {conteudoItem}
+                        </LinkPdv>
+                      ) : (
+                        <Link href={i.href} className={classeItem}>
+                          {conteudoItem}
+                        </Link>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
             );
@@ -229,11 +246,11 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
               {dados.trialDias > 0 ? `Trial: ${dados.trialDias} dia(s) · Assinar` : "Trial expirado · Assinar"}
             </Link>
           )}
-          <Link href="/pdv">
+          <LinkPdv>
             <Button tamanho="sm" icone="caixa">
               Abrir PDV
             </Button>
-          </Link>
+          </LinkPdv>
         </header>
         <main className="mx-auto w-full max-w-[1320px] flex-1 px-4 py-5 sm:px-6">{children}</main>
         <footer className="sem-impressao flex flex-wrap items-center justify-between gap-2 border-t border-ink-100 px-6 py-3 text-[11px] text-ink-400">

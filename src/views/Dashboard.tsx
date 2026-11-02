@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { LinkPdv } from "@/components/LinkPdv";
 import { Badge, Button, Card, CardTitulo, Icon, Kpi, PageHeader, cn } from "@/components/ui";
 import { Tabela, type Coluna } from "@/components/Tabela";
 import { ROTULO_SITUACAO, diasAteTrial, moeda, planoById, round2 } from "@/lib/dominio";
@@ -106,9 +107,9 @@ export function DashboardView({
                 Lançar entrada
               </Button>
             </Link>
-            <Link href="/pdv">
+            <LinkPdv>
               <Button icone="caixa">Abrir PDV</Button>
-            </Link>
+            </LinkPdv>
           </>
         }
         etiquetas={

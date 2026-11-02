@@ -240,7 +240,15 @@ export type VendaDto = {
   motivoSefaz: string;
   emissorProvedor: ProvedorEmissorFiscal;
   data: string;
-  itens: { nome: string; qtd: number; precoUnit: number; total: number; unidade: string | null }[];
+  itens: {
+    produtoId?: string | null;
+    gtin?: string | null;
+    nome: string;
+    qtd: number;
+    precoUnit: number;
+    total: number;
+    unidade: string | null;
+  }[];
   eventos: { id: string; tipo: string; sequencia: number; descricao: string; protocolo: string; em: string }[];
 };
 
@@ -457,7 +465,15 @@ export async function listarVendas(empresaId: string, filtro?: FiltroListarVenda
     data: v.data ? new Date(v.data).toISOString() : "",
     itens: itens
       .filter((i) => i.vendaId === v.id)
-      .map((i) => ({ nome: i.nome, qtd: N(i.qtd, 3), precoUnit: N(i.precoUnit, 4), total: N(i.total), unidade: i.unidade })),
+      .map((i) => ({
+        produtoId: i.produtoId,
+        gtin: i.gtin,
+        nome: i.nome,
+        qtd: N(i.qtd, 3),
+        precoUnit: N(i.precoUnit, 4),
+        total: N(i.total),
+        unidade: i.unidade,
+      })),
   }));
 }
 
