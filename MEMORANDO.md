@@ -3,7 +3,7 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Atualizado em:** 2026-10-31 (produção Next.js no Vercel + Supabase funcionando)
+**Atualizado em:** 2026-11-03 (produção Next.js no Vercel + Supabase funcionando; rota de agendamento DF-e `/api/dfe/dist` restaurada; motor de apuração/fechamento de caixa corrigido)
 
 ---
 
@@ -71,6 +71,8 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 | Emissor Fiscal SEFAZ 4.00, contingência e webhook | Rota `/emissor` + `/api/fiscal/webhook` · `src/views/EmissorFiscal.tsx` + `src/server/emissorFiscalCore.ts` |
 | Produtos e manutenção de preços | Rota `/produtos` · `src/views/Produtos.tsx` + `src/server/acoes/cadastros.ts` |
 | Script consolidado aditivo de tabelas/colunas `nk_*` | `ATUALIZAR_SUPABASE_AGORA.sql` + `src/db/migracao.ts` |
+| Agendamento DF-e a cada 10 min (cron/webhook; 401 sem `DFE_CRON_SECRET`/`CRON_SECRET`; só empresas ativas com A1 em modo live; demo apenas a pedido) | `GET`/`POST /api/dfe/dist` · `src/app/api/dfe/dist/route.ts` + `executarCicloCronDfe` / `verificarAutenticacaoCronDfe` em `src/server/dfeCore.ts` · como agendar: `supabase/DFE_ROTEIRO_CONFIG.md` → Fase 7 → Opção 0 |
+| Motor de apuração e fechamento de caixa (sessão real do operador; todas as vendas concretas — fiscal, sem nota, DAV concreto; DAV orçamento fora; DAV + nota sem duplicidade; pagamento dividido com troco só em dinheiro; fechamento em transação com `FOR UPDATE` e snapshot) | `src/lib/caixa.ts` (`compoeCaixa`, `apurarSessaoCaixa`, `ratearPagamentosDetalhado`) + `src/server/caixaCore.ts` (`fecharSessaoCaixaTransacional`) + `src/server/acoes/caixa.ts` · testes `cx-6`…`cx-22` e `node scripts/testar-caixa-motor.mjs` · detalhes em `CONTEXTO_ARENA.md` §6 item 13 e §4 itens 33–38 |
 
 ### 2.3 Publicar código no GitHub (seu PC)
 | O quê | Onde |

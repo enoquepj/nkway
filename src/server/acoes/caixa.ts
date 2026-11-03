@@ -3,16 +3,12 @@
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { caixaMovimentos, caixaSessoes, vendas } from "@/db/schema";
-import {
-  calcularApuracaoCaixa,
-  calcularConferenciaCaixa,
-  type MovimentoCaixaInput,
-  type VendaCaixaInput,
-} from "@/lib/caixa";
+import { caixaMovimentos, caixaSessoes } from "@/db/schema";
+import { calcularConferenciaCaixa } from "@/lib/caixa";
 import { FORMAS_PAGAMENTO, moeda, round2 } from "@/lib/dominio";
 import { temPermissao } from "@/lib/permissoes";
 import { registrarAuditoria } from "@/server/auditoria";
+import { apurarSessaoNoBanco, fecharSessaoCaixaTransacional } from "@/server/caixaCore";
 import { comoErro, corpo, exigirPermissao, logico, numero, texto } from "@/server/tenant";
 
 export type ResultadoCaixa =
@@ -21,46 +17,6 @@ export type ResultadoCaixa =
 
 function revalidarCaixa() {
   ["/caixa", "/pdv", "/", "/relatorios", "/usuarios"].forEach((p) => revalidatePath(p));
-}
-
-async function carregarInsumosSessao(empresaId: string, sessaoId: string) {
-  const [vds, movs] = await Promise.all([
-    db
-      .select({
-        id: vendas.id,
-        status: vendas.status,
-        total: vendas.total,
-        formaPagamento: vendas.formaPagamento,
-        pagamentos: vendas.pagamentos,
-      })
-      .from(vendas)
-      .where(and(eq(vendas.empresaId, empresaId), eq(vendas.caixaSessaoId, sessaoId), eq(vendas.tipo, "fiscal"))),
-    db
-      .select()
-      .from(caixaMovimentos)
-      .where(and(eq(caixaMovimentos.empresaId, empresaId), eq(caixaMovimentos.sessaoId, sessaoId))),
-  ]);
-
-  const vendasNorm: VendaCaixaInput[] = vds.map((v) => ({
-    id: v.id,
-    status: v.status,
-    total: Number(v.total),
-    formaPagamento: v.formaPagamento,
-    pagamentos: (v.pagamentos ?? []) as { forma: string; valor: number }[],
-  }));
-
-  const movsNorm: MovimentoCaixaInput[] = movs.map((m) => ({
-    id: m.id,
-    tipo: m.tipo as MovimentoCaixaInput["tipo"],
-    forma: m.forma,
-    valor: Number(m.valor),
-    motivo: m.motivo,
-    vendaId: m.vendaId,
-    usuarioNome: m.usuarioNome,
-    criadoEm: m.createdAt ? new Date(m.createdAt).toISOString() : "",
-  }));
-
-  return { vendasNorm, movsNorm };
 }
 
 export async function abrirCaixa(bruto: {
@@ -212,12 +168,8 @@ export async function registrarMovimentoCaixa(bruto: {
     }
 
     if (tipo === "sangria") {
-      const { vendasNorm, movsNorm } = await carregarInsumosSessao(empresaId, sessao.id);
-      const apuracao = calcularApuracaoCaixa({
-        saldoInicial: Number(sessao.saldoInicial),
-        vendas: vendasNorm,
-        movimentos: movsNorm,
-      });
+      // mesma regra do fechamento: saldo disponível vem do motor corrigido (todas as vendas concretas)
+      const apuracao = await apurarSessaoNoBanco(empresaId, sessao);
       const disponivel = round2(apuracao.esperadosMap[forma] ?? 0);
       if (valor > disponivel + 0.01) {
         return {
@@ -293,91 +245,37 @@ export async function fecharCaixa(bruto: {
       return { ok: false, erro: "Confirme a conferência dos valores antes de concluir o fechamento do caixa." };
     }
 
-    const [sessao] = await db
-      .select()
-      .from(caixaSessoes)
-      .where(and(eq(caixaSessoes.id, sessaoId), eq(caixaSessoes.empresaId, empresaId)))
-      .limit(1);
-
-    if (!sessao) return { ok: false, erro: "Sessão de caixa não encontrada." };
-    if (sessao.operadorId !== usuario.id && !temPermissao(usuario.papel, "caixa.relatorio_todos")) {
-      return { ok: false, erro: "Você só pode fechar a sua própria sessão de caixa." };
-    }
-    if (sessao.status !== "aberto") {
-      return { ok: false, erro: `O Caixa #${sessao.numero} já está fechado. Fechamento duplicado impedido.` };
-    }
-
-    const { vendasNorm, movsNorm } = await carregarInsumosSessao(empresaId, sessao.id);
-    const apuracao = calcularApuracaoCaixa({
-      saldoInicial: Number(sessao.saldoInicial),
-      vendas: vendasNorm,
-      movimentos: movsNorm,
+    // Recalcula no servidor, dentro de transação com trava de linha (fecharSessaoCaixaTransacional)
+    const r = await fecharSessaoCaixaTransacional({
+      empresaId,
+      sessaoId,
+      usuario,
+      valoresInformados: corpo<Record<string, unknown>>(input.valoresInformados),
+      justificativa: texto(input.justificativa),
     });
-
-    const informadosNum: Record<string, number> = {};
-    const mapaBruto = corpo<Record<string, unknown>>(input.valoresInformados);
-    for (const fp of FORMAS_PAGAMENTO) {
-      const v = numero(mapaBruto[fp.id]);
-      if (v < 0) return { ok: false, erro: `O valor informado em ${fp.label} não pode ser negativo.` };
-      informadosNum[fp.id] = round2(v);
-    }
-
-    const conferencia = calcularConferenciaCaixa(apuracao.esperadosMap, informadosNum);
-    const justificativa = texto(input.justificativa);
-
-    if (conferencia.temDivergencia && justificativa.length < 10) {
-      return {
-        ok: false,
-        erro: `Há divergência de ${moeda(conferencia.diferencaTotal)} na conferência. Informe uma justificativa com no mínimo 10 caracteres.`,
-      };
-    }
-
-    // UPDATE condicional atômico: impede fechamento duplicado em acessos simultâneos
-    const [fechado] = await db
-      .update(caixaSessoes)
-      .set({
-        status: "fechado",
-        valoresEsperados: apuracao.esperadosMap,
-        valoresInformados: conferencia.informados,
-        diferencas: conferencia.diferencas,
-        totalEsperado: conferencia.totalEsperado,
-        totalInformado: conferencia.totalInformado,
-        diferencaTotal: conferencia.diferencaTotal,
-        justificativaFechamento: justificativa,
-        fechadoEm: new Date(),
-        fechadoPorId: usuario.id,
-        fechadoPorNome: usuario.nome,
-      })
-      .where(
-        and(
-          eq(caixaSessoes.id, sessao.id),
-          eq(caixaSessoes.empresaId, empresaId),
-          eq(caixaSessoes.status, "aberto"),
-        ),
-      )
-      .returning({ id: caixaSessoes.id });
-
-    if (!fechado) {
-      return {
-        ok: false,
-        erro: `O Caixa #${sessao.numero} já foi fechado em outro acesso simultâneo.`,
-      };
-    }
+    if (!r.ok) return r;
+    const { apuracao, conferencia, justificativa } = r;
 
     await registrarAuditoria({
       empresaId,
       usuario,
       acao: "caixa.fechar",
       entidade: "caixa_sessao",
-      registroId: sessao.id,
-      resumo: `Caixa #${sessao.numero} (${sessao.operadorNome}) fechado · esperado ${moeda(conferencia.totalEsperado)} · informado ${moeda(conferencia.totalInformado)} · dif. ${moeda(conferencia.diferencaTotal)}`,
+      registroId: r.sessaoId,
+      resumo: `Caixa #${r.numero} (${r.operadorNome}) fechado · esperado ${moeda(conferencia.totalEsperado)} · informado ${moeda(conferencia.totalInformado)} · dif. ${moeda(conferencia.diferencaTotal)}`,
       alteracoes: {
-        numero: sessao.numero,
-        operador: sessao.operadorNome,
+        numero: r.numero,
+        operador: r.operadorNome,
         esperados: apuracao.esperadosMap,
         informados: conferencia.informados,
         diferencas: conferencia.diferencas,
         diferencaTotal: conferencia.diferencaTotal,
+        vendasConsideradas: apuracao.consideradas,
+        vendasExcluidas: apuracao.excluidas.length,
+        troco: apuracao.totalTroco,
+        naoFisico: apuracao.totalNaoFisico,
+        inconsistencias: apuracao.inconsistencias,
+        avisos: apuracao.avisos,
         justificativa: justificativa || null,
       },
     });
@@ -385,11 +283,11 @@ export async function fecharCaixa(bruto: {
     revalidarCaixa();
     return {
       ok: true,
-      id: sessao.id,
-      numero: sessao.numero,
+      id: r.sessaoId,
+      numero: r.numero,
       aviso: conferencia.temDivergencia
-        ? `Caixa #${sessao.numero} fechado com divergência de ${moeda(conferencia.diferencaTotal)} devidamente justificada e auditada.`
-        : `Caixa #${sessao.numero} fechado sem divergências (${moeda(conferencia.totalInformado)}).`,
+        ? `Caixa #${r.numero} fechado com divergência de ${moeda(conferencia.diferencaTotal)} devidamente justificada e auditada.`
+        : `Caixa #${r.numero} fechado sem divergências (${moeda(conferencia.totalInformado)}).`,
     };
   } catch (e) {
     return comoErro(e);
@@ -516,12 +414,8 @@ export async function ajustarCaixaFechado(bruto: {
       return { ok: false, erro: "O ajuste de conferência aplica-se apenas a caixas já fechados." };
     }
 
-    const { vendasNorm, movsNorm } = await carregarInsumosSessao(empresaId, sessao.id);
-    const apuracao = calcularApuracaoCaixa({
-      saldoInicial: Number(sessao.saldoInicial),
-      vendas: vendasNorm,
-      movimentos: movsNorm,
-    });
+    // Ajuste explícito e auditado: recalcula pelo motor corrigido e registra esperados antes/depois
+    const apuracao = await apurarSessaoNoBanco(empresaId, sessao);
 
     const informadosNum: Record<string, number> = {};
     const mapaBruto = corpo<Record<string, unknown>>(input.valoresInformados);
@@ -567,8 +461,10 @@ export async function ajustarCaixaFechado(bruto: {
       resumo: `Conferência do Caixa #${sessao.numero} ajustada por ${usuario.nome} · nova dif. ${moeda(conferencia.diferencaTotal)}`,
       alteracoes: {
         antes: {
+          esperados: sessao.valoresEsperados,
           informados: sessao.valoresInformados,
           diferencas: sessao.diferencas,
+          totalEsperado: Number(sessao.totalEsperado),
           totalInformado: Number(sessao.totalInformado),
           diferencaTotal: Number(sessao.diferencaTotal),
         },

@@ -23,7 +23,8 @@ import {
   type EntradaRow,
 } from "@/db/schema";
 import type { CicloAssinatura, FormaAssinatura, StatusAssinatura, StatusFaturaAssinatura } from "@/lib/assinatura";
-import { calcularApuracaoCaixa, type ApuracaoCaixa, type MovimentoCaixaInput } from "@/lib/caixa";
+import { apurarSessaoCaixa, aplicarSnapshotFechamento, type ApuracaoSessaoCaixa, type MovimentoCaixaInput } from "@/lib/caixa";
+import { carregarInsumosSessoes } from "@/server/caixaCore";
 import { padNsu, type DfePainelDados } from "@/lib/dfe";
 import { diasAteTrial, planoById, round2, situacaoEstoque, soDigitos, validarCnpj, type SituacaoEstoque } from "@/lib/dominio";
 import type { ProvedorEmissorFiscal, StatusSefazVenda } from "@/lib/emissorFiscal";
@@ -1147,7 +1148,7 @@ export type CaixaSessaoDto = {
   operadorNome: string;
   status: "aberto" | "fechado";
   saldoInicial: number;
-  apuracao: ApuracaoCaixa;
+  apuracao: Omit<ApuracaoSessaoCaixa, "classificacoes">;
   movimentos: MovimentoCaixaInput[];
   valoresEsperados: Record<string, number>;
   valoresInformados: Record<string, number>;
@@ -1184,54 +1185,25 @@ export async function listarSessoesCaixa(
   if (sessoes.length === 0) return [];
 
   const ids = sessoes.map((s) => s.id);
-  const [vds, movs] = await Promise.all([
-    db
-      .select({
-        id: vendas.id,
-        caixaSessaoId: vendas.caixaSessaoId,
-        status: vendas.status,
-        total: vendas.total,
-        formaPagamento: vendas.formaPagamento,
-        pagamentos: vendas.pagamentos,
-      })
-      .from(vendas)
-      .where(and(eq(vendas.empresaId, empresaId), inArray(vendas.caixaSessaoId, ids), eq(vendas.tipo, "fiscal"))),
-    db
-      .select()
-      .from(caixaMovimentos)
-      .where(and(eq(caixaMovimentos.empresaId, empresaId), inArray(caixaMovimentos.sessaoId, ids)))
-      .orderBy(desc(caixaMovimentos.createdAt)),
-  ]);
+  // Regra única do motor: todas as vendas vinculadas à sessão (qualquer tipo/status); o predicado decide
+  const { vendasPorSessao, movsPorSessao } = await carregarInsumosSessoes(empresaId, ids);
 
   return sessoes.map((s) => {
-    const vendasSessao = vds
-      .filter((v) => v.caixaSessaoId === s.id)
-      .map((v) => ({
-        id: v.id,
-        status: v.status,
-        total: N(v.total),
-        formaPagamento: v.formaPagamento,
-        pagamentos: (v.pagamentos ?? []) as { forma: string; valor: number }[],
-      }));
+    const movsSessao: MovimentoCaixaInput[] = (movsPorSessao.get(s.id) ?? [])
+      .slice()
+      .sort((a, b) => (a.criadoEm < b.criadoEm ? 1 : a.criadoEm > b.criadoEm ? -1 : 0));
 
-    const movsSessao: MovimentoCaixaInput[] = movs
-      .filter((m) => m.sessaoId === s.id)
-      .map((m) => ({
-        id: m.id,
-        tipo: m.tipo as MovimentoCaixaInput["tipo"],
-        forma: m.forma,
-        valor: N(m.valor),
-        motivo: m.motivo,
-        vendaId: m.vendaId,
-        usuarioNome: m.usuarioNome,
-        criadoEm: m.createdAt ? new Date(m.createdAt).toISOString() : "",
-      }));
-
-    const apuracao = calcularApuracaoCaixa({
+    const apurada = apurarSessaoCaixa({
+      sessaoId: s.id,
+      empresaId,
       saldoInicial: N(s.saldoInicial),
-      vendas: vendasSessao,
+      vendas: vendasPorSessao.get(s.id) ?? [],
       movimentos: movsSessao,
     });
+    // sessão fechada: o esperado exibido é o snapshot do fechamento (não muda silenciosamente)
+    const { classificacoes, ...apuracao } =
+      s.status === "fechado" ? aplicarSnapshotFechamento(apurada, s.valoresEsperados as Record<string, number>) : apurada;
+    void classificacoes;
 
     const fechado = s.status === "fechado";
     const esperados = fechado && Object.keys(s.valoresEsperados ?? {}).length > 0

@@ -1,6 +1,6 @@
 # NKWAY — estado oficial Vercel + Supabase
 
-**Atualizado em:** 2026-10-31  
+**Atualizado em:** 2026-11-03 (rota de agendamento `/api/dfe/dist` restaurada no código; infraestrutura inalterada)  
 **Produção:** https://nkway.vercel.app  
 **Health confirmado:** `GET /api/health` → HTTP 200 `{"ok":true}`
 
@@ -85,3 +85,4 @@ Login demo (enquanto seed estiver ativo): `demo@nkway.com.br` / `nkway123`.
 - Variáveis opcionais de Assinatura (servidor Vercel, quando ativar cobrança `live`): `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`, `ASAAS_AMBIENTE` (`producao` ou `sandbox`) ou `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` / `BILLING_WEBHOOK_SECRET` (webhook em `/api/assinatura/webhook`; sem elas opera em Sandbox Homologação seguro).
 - Variáveis opcionais do Emissor Fiscal de Saída (`/emissor`, servidor Vercel quando ativar SEFAZ `live`): `EMISSOR_FISCAL_PROVIDER` (`focusnfe` | `nuvemfiscal` | `webhook_custom`), `EMISSOR_FISCAL_URL`, `EMISSOR_FISCAL_TOKEN`, `EMISSOR_WEBHOOK_SECRET` (webhook em `/api/fiscal/webhook`) e opcionalmente `EMISSOR_FISCAL_XML_URL`.
 - Variáveis opcionais do módulo `/dfe` (servidor Vercel, quando ativar SEFAZ `live`): `DFE_SECRET`, `DFE_SEFAZ_MODE` (`demo` ou `live`), `DFE_MTLS_WORKER_URL`, `DFE_MTLS_WORKER_SECRET`, `DFE_CRON_SECRET` (para `/api/dfe/dist`), e opcionalmente `DFE_STORAGE_URL` + `DFE_STORAGE_SERVICE_KEY` (bucket privado `certificados-a1`; sem eles o `.pfx` usa o cofre AES-256-GCM integrado). Nenhuma altera `DATABASE_URL`.
+- Agendamento DF-e (`GET`/`POST https://nkway.vercel.app/api/dfe/dist`, código em `src/app/api/dfe/dist/route.ts`): responde **401** enquanto `DFE_CRON_SECRET` (ou `CRON_SECRET`) não existir no Vercel — é o estado atual e é seguro. Para ligar: criar `DFE_CRON_SECRET` como Secret, redeploy, e agendar a cada 10 min por **um** caminho: pg_cron + pg_net no Supabase existente (`net.http_post` com header `x-dfe-cron-secret`), cron-job.org/GitHub Actions (`POST` com o mesmo header) ou Vercel Cron (envia `Authorization: Bearer CRON_SECRET`; no plano Hobby só 1 vez ao dia). Passo a passo em `supabase/DFE_ROTEIRO_CONFIG.md` → Fase 7 → Opção 0. Em modo demo a rota não fabrica documentos (só com `{"forcarDemo":true}`); em live processa apenas empresas ativas com A1. Nada disso toca `DATABASE_URL`, tabelas ou senha.

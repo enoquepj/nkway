@@ -2,13 +2,14 @@
  * NKWAY — Motor Server-Side de Distribuição DF-e e Cofre do Certificado A1.
  * Executa exclusivamente no Node.js (Server Components, Server Actions e Route Handlers).
  */
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import https from "node:https";
 import tls from "node:tls";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { empresas, type EmpresaRow } from "@/db/schema";
+import { registrarAuditoria } from "@/server/auditoria";
 import {
   MIN_INTERVALO_DFE_MS,
   NS_NFE,
@@ -770,5 +771,225 @@ export async function executarCapturaDfeEmpresa(
     novos: inseridos.length,
     ultNSU: proximoUltNsu,
     maxNSU: proximoMaxNsu,
+  };
+}
+
+/* ------------------------------------------ agendamento GET/POST /api/dfe/dist */
+
+/** Máximo de lotes `distNSU` por empresa a cada execução do agendamento */
+export const MAX_LOTES_CRON_POR_EMPRESA = 3;
+/** Máximo de empresas atendidas por execução (tick) do agendamento */
+export const MAX_EMPRESAS_CRON_POR_TICK = 20;
+/** Orçamento de tempo de um tick — abaixo do `maxDuration` da rota para nunca estourar a função serverless */
+const ORCAMENTO_CRON_MS = 45_000;
+
+function igualSeguro(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length > 0 && ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+/**
+ * Autoriza o disparo do agendamento (`GET`/`POST /api/dfe/dist`).
+ * Aceita `x-dfe-cron-secret: <segredo>` (pg_cron / cron-job.org / GitHub Actions)
+ * ou `Authorization: Bearer <segredo>` (Vercel Cron envia `CRON_SECRET` assim).
+ * Sem `DFE_CRON_SECRET`/`CRON_SECRET` configurado nega sempre — a rota nunca roda aberta.
+ */
+export function verificarAutenticacaoCronDfe(
+  params: { cronSecretHeader?: string | null; authorizationHeader?: string | null },
+  segredoEsperado: string = ambienteDfeServidor().cronSecret,
+): boolean {
+  const segredo = String(segredoEsperado || "").trim();
+  if (!segredo) return false;
+  const hdr = String(params.cronSecretHeader || "").trim();
+  if (hdr && igualSeguro(hdr, segredo)) return true;
+  const auth = String(params.authorizationHeader || "").trim();
+  const bearer = /^bearer\s+/i.test(auth) ? auth.replace(/^bearer\s+/i, "").trim() : "";
+  if (bearer && igualSeguro(bearer, segredo)) return true;
+  return false;
+}
+
+/** Empresa possui Certificado A1 utilizável (senha cifrada + .pfx no bucket ou no cofre)? */
+export function empresaTemCertificadoA1(fiscal: Record<string, unknown>): boolean {
+  return Boolean(fiscal.dfeSenhaCifrada && (fiscal.dfeCertPath || fiscal.dfePfxCifrado));
+}
+
+/**
+ * Decide se a empresa entra no ciclo automático.
+ * - `dfeAtivo === false` → pausada pelo usuário na tela /dfe.
+ * - sem modo live (DFE_SEFAZ_MODE + worker) ou sem A1 → nada a consultar na SEFAZ.
+ *   O modo demo só roda a pedido explícito (`forcarDemo`): o agendamento nunca fabrica documentos sozinho.
+ */
+export function elegibilidadeCronDfe(
+  fiscal: Record<string, unknown>,
+  opcoes: { forcarDemo?: boolean; modoLive: boolean },
+): { elegivel: true } | { elegivel: false; motivo: string } {
+  if (fiscal.dfeAtivo === false) return { elegivel: false, motivo: "captura automática pausada em /dfe" };
+  if (opcoes.forcarDemo) return { elegivel: true };
+  if (!opcoes.modoLive) return { elegivel: false, motivo: "modo live não configurado (DFE_SEFAZ_MODE + DFE_MTLS_WORKER_URL)" };
+  if (!empresaTemCertificadoA1(fiscal)) return { elegivel: false, motivo: "sem Certificado A1" };
+  return { elegivel: true };
+}
+
+export type ResultadoCronDfeEmpresa = {
+  empresaId: string;
+  empresa: string;
+  cnpj: string;
+  ok: boolean;
+  modo: "live" | "demo" | null;
+  lotes: number;
+  novos: number;
+  cStat: string;
+  xMotivo: string;
+  ultNSU: string;
+  maxNSU: string;
+  erro?: string;
+};
+
+export type ResultadoCronDfe = {
+  ok: true;
+  em: string;
+  modoServidor: "live" | "demo";
+  candidatas: number;
+  elegiveis: number;
+  processadas: number;
+  novos: number;
+  ignoradas: { empresaId: string; motivo: string }[];
+  resultados: ResultadoCronDfeEmpresa[];
+  duracaoMs: number;
+};
+
+function ultimaConsultaMs(e: EmpresaRow): number {
+  const iso = String(((e.fiscal ?? {}) as Record<string, unknown>).dfeUltimaConsultaEm ?? "");
+  const t = iso ? new Date(iso).getTime() : 0;
+  return Number.isFinite(t) ? t : 0;
+}
+
+async function processarEmpresaCron(
+  empresaInicial: EmpresaRow,
+  o: { forcarDemo?: boolean; lotesPorEmpresa: number; inicio: number },
+): Promise<ResultadoCronDfeEmpresa> {
+  let empresa = empresaInicial;
+  const fiscalInicial = (empresa.fiscal ?? {}) as Record<string, unknown>;
+  const base = { empresaId: empresa.id, empresa: empresa.nome, cnpj: soDigitos(empresa.cnpj) };
+  let lotes = 0;
+  let novos = 0;
+  let cStat = "";
+  let xMotivo = "";
+  let modo: "live" | "demo" | null = null;
+  let ultNSU = padNsu(String(fiscalInicial.dfeUltimoNsu ?? "0"));
+  let maxNSU = padNsu(String(fiscalInicial.dfeMaxNsu ?? ultNSU));
+
+  try {
+    while (lotes < o.lotesPorEmpresa) {
+      if (Date.now() - o.inicio > ORCAMENTO_CRON_MS) break;
+      const r = await executarCapturaDfeEmpresa(empresa, { forcarDemo: o.forcarDemo });
+      if (!r.ok) {
+        // trava de 60s (cStat 656) ou pré-requisito ausente: encerra a empresa neste ciclo
+        if (lotes === 0) return { ...base, ok: false, modo, lotes, novos, cStat, xMotivo, ultNSU, maxNSU, erro: r.erro };
+        break;
+      }
+      lotes += 1;
+      novos += r.novos;
+      cStat = r.cStat;
+      xMotivo = r.xMotivo;
+      modo = r.modo;
+      ultNSU = r.ultNSU;
+      maxNSU = r.maxNSU;
+      // 138 = documento(s) localizado(s); só pede o próximo lote enquanto houver NSU pendente
+      if (r.cStat !== "138" || Number(r.ultNSU) >= Number(r.maxNSU)) break;
+      const [atualizada] = await db.select().from(empresas).where(eq(empresas.id, empresa.id)).limit(1);
+      if (!atualizada) break;
+      empresa = atualizada;
+    }
+
+    if (novos > 0) {
+      await registrarAuditoria({
+        empresaId: empresa.id,
+        usuario: null,
+        acao: "dfe.captura_automatica",
+        entidade: "dfe",
+        registroId: ultNSU,
+        resumo: `Agendamento DF-e [${(modo ?? "demo").toUpperCase()}]: ${novos} documento(s) novo(s) em ${lotes} lote(s) · cStat ${cStat} · NSU ${ultNSU}/${maxNSU}`,
+        alteracoes: { lotes, novos, cStat, xMotivo, ultNSU, maxNSU },
+      });
+    }
+    return { ...base, ok: true, modo, lotes, novos, cStat, xMotivo, ultNSU, maxNSU };
+  } catch (e) {
+    const erro = e instanceof Error ? e.message : String(e);
+    try {
+      await registrarAuditoria({
+        empresaId: empresa.id,
+        usuario: null,
+        acao: "dfe.captura_automatica_erro",
+        entidade: "dfe",
+        registroId: ultNSU,
+        resumo: `Agendamento DF-e falhou após ${lotes} lote(s): ${erro}`,
+        alteracoes: { lotes, novos, erro },
+      });
+    } catch {
+      /* auditoria nunca derruba o ciclo */
+    }
+    return { ...base, ok: false, modo, lotes, novos, cStat, xMotivo, ultNSU, maxNSU, erro };
+  }
+}
+
+/**
+ * Um tick do agendamento: percorre as empresas elegíveis (quem consultou há mais tempo primeiro),
+ * puxa até `lotesPorEmpresa` lotes `distNSU` de cada uma e devolve um relatório serializável.
+ * Nunca lança: erro de uma empresa fica em `resultados[].erro` e as demais seguem.
+ */
+export async function executarCicloCronDfe(opcoes?: {
+  cnpj?: string;
+  forcarDemo?: boolean;
+  limiteEmpresas?: number;
+  lotesPorEmpresa?: number;
+}): Promise<ResultadoCronDfe> {
+  const inicio = Date.now();
+  const env = ambienteDfeServidor();
+  const modoLive = env.modoLiveSolicitado && (env.workerConfigurado || env.modoEnv === "direct");
+  const cnpjFiltro = soDigitos(opcoes?.cnpj ?? "");
+  const limiteEmpresas = Math.max(1, Math.min(Number(opcoes?.limiteEmpresas) || MAX_EMPRESAS_CRON_POR_TICK, 100));
+  const lotesPorEmpresa = Math.max(1, Math.min(Number(opcoes?.lotesPorEmpresa) || MAX_LOTES_CRON_POR_EMPRESA, 10));
+
+  const todas = await db.select().from(empresas);
+  const candidatas = todas
+    .filter((e) => !cnpjFiltro || soDigitos(e.cnpj) === cnpjFiltro)
+    .sort((a, b) => ultimaConsultaMs(a) - ultimaConsultaMs(b));
+
+  const ignoradas: { empresaId: string; motivo: string }[] = [];
+  const elegiveis: EmpresaRow[] = [];
+  for (const e of candidatas) {
+    const el = elegibilidadeCronDfe((e.fiscal ?? {}) as Record<string, unknown>, { forcarDemo: opcoes?.forcarDemo, modoLive });
+    if (el.elegivel) elegiveis.push(e);
+    else ignoradas.push({ empresaId: e.id, motivo: el.motivo });
+  }
+
+  const resultados: ResultadoCronDfeEmpresa[] = [];
+  let novos = 0;
+  for (const emp of elegiveis.slice(0, limiteEmpresas)) {
+    if (Date.now() - inicio > ORCAMENTO_CRON_MS) {
+      ignoradas.push({ empresaId: emp.id, motivo: "orçamento de tempo do tick esgotado — fica para o próximo ciclo" });
+      continue;
+    }
+    const r = await processarEmpresaCron(emp, { forcarDemo: opcoes?.forcarDemo, lotesPorEmpresa, inicio });
+    novos += r.novos;
+    resultados.push(r);
+  }
+  for (const emp of elegiveis.slice(limiteEmpresas)) {
+    ignoradas.push({ empresaId: emp.id, motivo: `acima do limite de ${limiteEmpresas} empresas por tick` });
+  }
+
+  return {
+    ok: true,
+    em: new Date().toISOString(),
+    modoServidor: modoLive ? "live" : "demo",
+    candidatas: candidatas.length,
+    elegiveis: elegiveis.length,
+    processadas: resultados.length,
+    novos,
+    ignoradas,
+    resultados,
+    duracaoMs: Date.now() - inicio,
   };
 }

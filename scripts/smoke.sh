@@ -89,6 +89,8 @@ else
 
   CRON_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/dfe/dist")
   [[ "$CRON_CODE" == "401" ]]; marca $? "GET /api/dfe/dist sem segredo = $CRON_CODE"
+  CRON_ERRADO=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/dfe/dist" -H "x-dfe-cron-secret: segredo-errado" -H "Authorization: Bearer segredo-errado" -H "Content-Type: application/json" --data '{"origem":"smoke"}')
+  [[ "$CRON_ERRADO" == "401" ]]; marca $? "POST /api/dfe/dist com segredo errado = $CRON_ERRADO"
 
   XML_ANON=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/documentos/xml" -H "Content-Type: application/json" --data '{"ids":[]}')
   [[ "$XML_ANON" == "401" ]]; marca $? "POST /api/documentos/xml sem sessão = $XML_ANON"

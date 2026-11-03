@@ -241,7 +241,34 @@ DFE_MTLS_WORKER_SECRET=a_mesma_senha_do_worker
 
 # FASE 7 — Agendar a cada 10 minutos (20–40 min)
 
-### Opção A — Schedule no Dashboard Supabase
+### Opção 0 — Produção Next.js (Vercel) · rota `/api/dfe/dist` (recomendada hoje)
+A versão Next em produção já tem a rota nativa `GET/POST https://nkway.vercel.app/api/dfe/dist` (código em `src/app/api/dfe/dist/route.ts` + `executarCicloCronDfe` em `src/server/dfeCore.ts`). Não precisa publicar Edge Function.
+
+1. No Vercel → Settings → Environment Variables, crie `DFE_CRON_SECRET` (texto aleatório longo, **Secret**, só servidor). Sem ela a rota responde **401** sempre.
+2. Agende o disparo por **um** destes caminhos:
+   - **pg_cron + pg_net no Supabase existente** (sem criar outro projeto):
+     ```sql
+     select cron.schedule(
+       'nkway-dfe-dist-10min',
+       '*/10 * * * *',
+       $$
+       select net.http_post(
+         url := 'https://nkway.vercel.app/api/dfe/dist',
+         headers := jsonb_build_object(
+           'Content-Type', 'application/json',
+           'x-dfe-cron-secret', 'DFE_CRON_SECRET_AQUI'
+         ),
+         body := '{"origem":"pg_cron"}'::jsonb
+       );
+       $$
+     );
+     ```
+   - **cron-job.org / GitHub Actions**: `POST` na mesma URL com o header `x-dfe-cron-secret`.
+   - **Vercel Cron** (apenas plano Pro para 10 min; Hobby permite 1 vez ao dia): a Vercel envia `Authorization: Bearer <CRON_SECRET>` sozinha — a rota aceita os dois formatos.
+3. O que a rota faz a cada tick: percorre as empresas **ativas** (`/dfe` → captura automática) que tenham **Certificado A1** e com o servidor em modo **live** (`DFE_SEFAZ_MODE=live` + `DFE_MTLS_WORKER_URL`), puxa até 3 lotes `distNSU` por empresa (até 20 empresas por tick, orçamento de 45 s), grava os documentos na caixa DF-e e registra em `nk_auditoria` (`dfe.captura_automatica`). Em modo demo o agendamento **não fabrica documento** sozinho — só se o corpo trouxer `{"forcarDemo":true}` (homologação).
+4. Teste manual pelo prompt de comando (troque o segredo): `curl -s -X POST https://nkway.vercel.app/api/dfe/dist -H "x-dfe-cron-secret: SEU_SEGREDO" -H "Content-Type: application/json" --data '{"origem":"teste"}'` → JSON com `candidatas`, `elegiveis`, `processadas`, `ignoradas[].motivo` e `resultados[]`.
+
+### Opção A — Schedule no Dashboard Supabase (Edge Function legada)
 **Edge Functions → dfe-dist → Schedules** (se disponível no seu plano): a cada 10 minutos, com headers de autorização.
 
 ### Opção B — pg_cron + pg_net

@@ -39,7 +39,15 @@ import {
   validarLinhaDigitavelBoleto,
   validarPayloadPixEmv,
 } from "@/lib/assinatura";
-import { calcularApuracaoCaixa, calcularConferenciaCaixa } from "@/lib/caixa";
+import {
+  aplicarSnapshotFechamento,
+  apurarSessaoCaixa,
+  calcularApuracaoCaixa,
+  calcularConferenciaCaixa,
+  ratearPagamentosDetalhado,
+  type VendaCaixaInput,
+} from "@/lib/caixa";
+import { fecharSessaoCaixaTransacional } from "@/server/caixaCore";
 import { normalizarPerfil, temPermissao } from "@/lib/permissoes";
 import { confereSenha, hashSenha } from "@/lib/session";
 import { extrairEntradasZip, gerarZipBuffer } from "@/lib/zip";
@@ -134,9 +142,11 @@ import { listarVendasPaginado, proximoNumeroFiscal } from "@/server/dados";
 import {
   cifrarSegredo,
   decifrarSegredo,
+  elegibilidadeCronDfe,
   extrairRetornoDist,
   gerarSoapDemoDist,
   lerDocumentosDfeFiscal,
+  verificarAutenticacaoCronDfe,
 } from "@/server/dfeCore";
 
 export type TesteResultado = {
@@ -1983,6 +1993,31 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("dfe-5", "DF-e", "Documentos DF-e possuem chave de 44 dígitos com DV válido", chavesDfeRuins === 0, chavesDfeRuins ? `${chavesDfeRuins} chave(s) inválida(s)` : `${qtd(docsDfe.length, "documento")} na caixa DF-e`, true);
   ok("dfe-6", "DF-e", "Documentos DF-e importados apontam para Entrada existente", dfeOrfaos === 0, dfeOrfaos ? `${dfeOrfaos} vínculo(s) órfão(ãos)` : "reconciliação DF-e × Entradas íntegra", true);
 
+  // Agendamento /api/dfe/dist: segredo obrigatório, comparação em tempo constante, Bearer e header próprio
+  const segredoCronTeste = "segredo-cron-dfe-teste-2026";
+  const cronNegaSemSegredo =
+    !verificarAutenticacaoCronDfe({ cronSecretHeader: "", authorizationHeader: "" }, "") &&
+    !verificarAutenticacaoCronDfe({ cronSecretHeader: "qualquer", authorizationHeader: "Bearer qualquer" }, "");
+  const cronNegaErrado =
+    !verificarAutenticacaoCronDfe({ cronSecretHeader: "errado", authorizationHeader: "" }, segredoCronTeste) &&
+    !verificarAutenticacaoCronDfe({ cronSecretHeader: "", authorizationHeader: `Bearer ${segredoCronTeste}x` }, segredoCronTeste) &&
+    !verificarAutenticacaoCronDfe({ cronSecretHeader: segredoCronTeste.slice(0, -1), authorizationHeader: "" }, segredoCronTeste);
+  const cronAceitaCerto =
+    verificarAutenticacaoCronDfe({ cronSecretHeader: segredoCronTeste, authorizationHeader: "" }, segredoCronTeste) &&
+    verificarAutenticacaoCronDfe({ cronSecretHeader: "", authorizationHeader: `Bearer ${segredoCronTeste}` }, segredoCronTeste);
+  const cronAuthOk = cronNegaSemSegredo && cronNegaErrado && cronAceitaCerto;
+
+  const elegPausada = elegibilidadeCronDfe({ dfeAtivo: false, dfeSenhaCifrada: "v1:x", dfePfxCifrado: "v1:y" }, { modoLive: true });
+  const elegSemA1 = elegibilidadeCronDfe({}, { modoLive: true });
+  const elegDemoSozinho = elegibilidadeCronDfe({ dfeSenhaCifrada: "v1:x", dfePfxCifrado: "v1:y" }, { modoLive: false });
+  const elegLiveComA1 = elegibilidadeCronDfe({ dfeSenhaCifrada: "v1:x", dfeCertPath: "bucket://certificados-a1/x.pfx" }, { modoLive: true });
+  const elegDemoPedido = elegibilidadeCronDfe({}, { modoLive: false, forcarDemo: true });
+  const cronElegOk =
+    !elegPausada.elegivel && !elegSemA1.elegivel && !elegDemoSozinho.elegivel && elegLiveComA1.elegivel && elegDemoPedido.elegivel;
+
+  ok("dfe-7", "DF-e", "Agendamento /api/dfe/dist exige segredo (x-dfe-cron-secret ou Bearer) e nega sem DFE_CRON_SECRET", cronAuthOk, cronAuthOk ? "401 sem segredo · 401 segredo errado · 200 segredo correto" : "autenticação do cron frouxa", true);
+  ok("dfe-8", "DF-e", "Ciclo automático só consulta empresas ativas com A1 em modo live (demo apenas a pedido)", cronElegOk, cronElegOk ? "pausada/sem A1/demo sozinho bloqueados · live+A1 e demo a pedido liberados" : "elegibilidade do cron incorreta", true);
+
   /* ----------------------------------- Fase 1: usuários, perfis e auditoria */
   const perfisOk =
     normalizarPerfil("owner") === "administrador" &&
@@ -2089,6 +2124,151 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("cx-3", "Caixa por Operador", "Permissões do caixa restringem reabertura e ajuste ao Administrador", acessoCaixaOk, "reabrir/ajustar bloqueados p/ operador e vendedor", true);
   ok("cx-4", "Caixa por Operador", "Índice único impede dois caixas abertos por operador e valida fechamentos", semDuplicidadeAberta && fechadosIntegros, `${qtd(sessoesCx.length, "sessão")} · índice parcial ativo`, true);
   ok("cx-5", "Caixa por Operador", "Movimentações de caixa vinculadas a sessões válidas do tenant", movsCxIntegros, `${qtd(movsCx.length, "movimentação")} auditável(is)`, true);
+
+  /* ------------------- Motor corrigido do caixa: predicado compoeCaixa + identidade econômica */
+  const SESS = "sessao-A";
+  const ctxCx = { empresaId, sessaoId: SESS };
+  const vendaCx = (
+    id: string,
+    tipo: string,
+    status: string,
+    total: number,
+    pagamentos: { forma: string; valor: number }[],
+    extra: Partial<VendaCaixaInput> = {},
+  ): VendaCaixaInput => ({
+    id,
+    tipo,
+    status,
+    total,
+    formaPagamento: pagamentos[0]?.forma ?? "dinheiro",
+    pagamentos,
+    empresaId,
+    caixaSessaoId: SESS,
+    davOrigemId: null,
+    ...extra,
+  });
+  const cenarioCx: VendaCaixaInput[] = [
+    vendaCx("fiscal", "fiscal", "faturado", 100, [{ forma: "pix", valor: 100 }]),
+    vendaCx("sem-nota", "sem_nota", "faturado", 80, [{ forma: "dinheiro", valor: 50 }, { forma: "credito", valor: 30 }]),
+    vendaCx("dav-orc", "dav", "aberto", 999, [], { caixaSessaoId: null }),
+    vendaCx("dav-pai", "dav", "faturado", 70, [], { caixaSessaoId: null }),
+    vendaCx("filha", "fiscal", "faturado", 70, [{ forma: "debito", valor: 70 }], { davOrigemId: "dav-pai", origem: "dav" }),
+    vendaCx("dav-concreto", "dav", "faturado", 40, [{ forma: "pix", valor: 40 }]),
+    vendaCx("nota-fiscaliza", "fiscal", "faturado", 40, [{ forma: "pix", valor: 40 }], { davOrigemId: "dav-concreto" }),
+    vendaCx("outra-sessao", "fiscal", "faturado", 500, [{ forma: "dinheiro", valor: 500 }], { caixaSessaoId: "sessao-B" }),
+    vendaCx("sem-sessao", "fiscal", "faturado", 500, [{ forma: "dinheiro", valor: 500 }], { caixaSessaoId: null }),
+    vendaCx("outra-empresa", "fiscal", "faturado", 500, [{ forma: "dinheiro", valor: 500 }], { empresaId: "00000000-0000-4000-8000-000000000099" }),
+    vendaCx("cancelada", "sem_nota", "cancelado", 30, [{ forma: "dinheiro", valor: 30 }]),
+  ];
+  const apCx = apurarSessaoCaixa({
+    sessaoId: SESS,
+    empresaId,
+    saldoInicial: 50,
+    vendas: cenarioCx,
+    movimentos: [
+      { id: "e1", tipo: "estorno", forma: "dinheiro", valor: 30, motivo: "Cancel", vendaId: "cancelada", usuarioNome: "Op", criadoEm: "" },
+      { id: "s1", tipo: "sangria", forma: "dinheiro", valor: 20, motivo: "Cofre", usuarioNome: "Op", criadoEm: "" },
+    ],
+  });
+  const clCx = new Map(apCx.classificacoes.map((c) => [c.vendaId, c]));
+  const cod = (id: string) => clCx.get(id)?.codigo ?? "?";
+  const entra = (id: string) => clCx.get(id)?.compoeCaixa === true;
+  // esperado: dinheiro 50 + 50 + 30(cancelada bruta) − 30(estorno explícito) − 20 = 80 · pix 100 + 40 = 140 · crédito 30 · débito 70 → 320
+  const esperadoCxOk =
+    apCx.esperadosMap.dinheiro === 80 && apCx.esperadosMap.pix === 140 && apCx.esperadosMap.credito === 30 &&
+    apCx.esperadosMap.debito === 70 && apCx.totalEsperado === 320 && apCx.totalEstornos === 30 &&
+    apCx.consideradas === 5 && apCx.qtdVendasAtivas === 4 && apCx.qtdVendasCanceladas === 1;
+
+  const rate = (total: number, pags: { forma: string; valor: number }[]) =>
+    ratearPagamentosDetalhado({ total, formaPagamento: "dinheiro", pagamentos: pags });
+  const r1 = rate(100, [{ forma: "dinheiro", valor: 60 }, { forma: "pix", valor: 40 }]);
+  const r2 = rate(100, [{ forma: "dinheiro", valor: 120 }]);
+  const r3 = rate(100, [{ forma: "dinheiro", valor: 30 }, { forma: "credito", valor: 70 }]);
+  const r4 = rate(100, [{ forma: "dinheiro", valor: 40 }, { forma: "pix", valor: 80 }]);
+  const r5 = rate(100, [{ forma: "pix", valor: 120 }]);
+  const r6 = ratearPagamentosDetalhado({ total: 100, formaPagamento: "debito", pagamentos: [] });
+  const r7 = rate(100, [{ forma: "pix", valor: 0 }, { forma: "credito", valor: -5 }, { forma: "debito", valor: Number.NaN }, { forma: "debito", valor: 100 }]);
+  const divididoOk =
+    r1.porForma.dinheiro === 60 && r1.porForma.pix === 40 && r1.troco === 0 && !r1.inconsistencia &&
+    r3.porForma.dinheiro === 30 && r3.porForma.credito === 70 && r3.troco === 0 &&
+    r7.porForma.debito === 100 && r7.parcelasIgnoradas === 3 && !r7.inconsistencia;
+  const trocoOk =
+    r2.porForma.dinheiro === 100 && r2.troco === 20 && !r2.inconsistencia &&
+    r4.porForma.dinheiro === 20 && r4.porForma.pix === 80 && r4.troco === 20 && !r4.inconsistencia;
+  const excessoOk = r5.porForma.pix === 120 && r5.troco === 0 && Boolean(r5.inconsistencia) && r5.porForma.dinheiro === 0;
+  const fallbackOk = r6.usouFallbackForma && r6.porForma.debito === 100 && r6.troco === 0 && Object.values(r6.porForma).reduce((s, v) => s + v, 0) === 100;
+
+  // cancelamento: com estorno explícito não duplica; sem estorno explícito, estorno implícito uma única vez
+  const apCancelImplicito = apurarSessaoCaixa({
+    sessaoId: SESS, empresaId, saldoInicial: 0, movimentos: [],
+    vendas: [vendaCx("c1", "fiscal", "cancelado", 30, [{ forma: "dinheiro", valor: 30 }])],
+  });
+  const cancelOk =
+    apCx.esperadosMap.dinheiro === 80 && apCancelImplicito.esperadosMap.dinheiro === 0 && apCancelImplicito.totalEstornos === 30 && apCancelImplicito.totalVendasBrutas === 30;
+
+  // sessão fechada: snapshot prevalece; divergência do recálculo fica visível
+  const apSnap = aplicarSnapshotFechamento(apCx, { dinheiro: 75, pix: 140, credito: 30, debito: 70, boleto: 0, prazo: 0 });
+  const snapshotOk = apSnap.snapshotAplicado && apSnap.esperadosMap.dinheiro === 75 && apSnap.totalEsperado === 315 && apSnap.divergenciaRecalculo === 5 && apCx.esperadosMap.dinheiro === 80;
+
+  ok("cx-6", "Caixa por Operador", "Venda fiscal da sessão compõe o caixa", entra("fiscal") && cod("fiscal") === "venda_concreta", "pix R$ 100,00 · venda_concreta", true);
+  ok("cx-7", "Caixa por Operador", "Venda sem nota concreta compõe o caixa (sem exigir chave/protocolo)", entra("sem-nota") && cod("sem-nota") === "venda_concreta" && apCx.esperadosMap.credito === 30, "dinheiro 50 + crédito 30 · venda_concreta", true);
+  ok("cx-8", "Caixa por Operador", "DAV orçamento/pré-venda não entra (aberto, sem recebimento, sem baixa)", !entra("dav-orc") && cod("dav-orc") === "dav_orcamento" && !entra("dav-pai") && cod("dav-pai") === "dav_orcamento", "DAV aberto e DAV pai faturado sem pagamento ficam fora", true);
+  ok("cx-9", "Caixa por Operador", "DAV comercial concreto entra uma única vez pelos pagamentos líquidos", entra("dav-concreto") && cod("dav-concreto") === "dav_concreto" && apCx.esperadosMap.pix === 140, "dav_concreto pix R$ 40,00", true);
+  ok("cx-10", "Caixa por Operador", "DAV orçamento + venda filha: conta somente a filha", entra("filha") && cod("filha") === "venda_concreta" && clCx.get("filha")?.operacaoEconomicaId === "filha" && !entra("dav-pai"), "débito R$ 70,00 uma vez", true);
+  ok("cx-11", "Caixa por Operador", "DAV concreto + nota que só fiscaliza: conta somente a operação original", !entra("nota-fiscaliza") && cod("nota-fiscaliza") === "duplicata_fiscal_de_dav" && clCx.get("nota-fiscaliza")?.operacaoEconomicaId === "dav-concreto" && clCx.get("nota-fiscaliza")?.registroFonteDoPagamento === "dav-concreto", "operacaoEconomicaId = DAV concreto", true);
+  ok("cx-12", "Caixa por Operador", "Venda de outra sessão/operador não entra, mesmo no mesmo tenant", !entra("outra-sessao") && cod("outra-sessao") === "outra_sessao", "sessao-B excluída", true);
+  ok("cx-13", "Caixa por Operador", "Venda sem caixaSessaoId não entra retroativamente", !entra("sem-sessao") && cod("sem-sessao") === "sem_sessao", "sem vínculo explícito", true);
+  ok("cx-14", "Caixa por Operador", "Pagamento dividido soma cada parcela na forma correspondente e ignora parcela inválida", divididoOk, "60/40 · 30/70 · zero/negativa/NaN ignoradas", true);
+  ok("cx-15", "Caixa por Operador", "Troco sai exclusivamente do dinheiro", trocoOk, "din 120→100 troco 20 · din 40+pix 80 → din 20/pix 80 troco 20", true);
+  ok("cx-16", "Caixa por Operador", "Excesso sem dinheiro é inconsistência, nunca troco em PIX/cartão", excessoOk, r5.inconsistencia ? "pix 120 p/ total 100 sinalizado" : "não sinalizou", true);
+  ok("cx-17", "Caixa por Operador", "Venda legada sem pagamentos[] usa formaPagamento como fallback", fallbackOk, "débito R$ 100,00 pelo fallback", true);
+  ok("cx-18", "Caixa por Operador", "Cancelamento: estorno explícito não duplica e implícito ocorre uma única vez", cancelOk, "líquido zero nos dois casos", true);
+  ok("cx-19", "Caixa por Operador", "Apuração completa da sessão: esperado por forma e deduplicação por operação econômica", esperadoCxOk, `R$ ${apCx.totalEsperado.toFixed(2)} · ${apCx.consideradas} consideradas · ${apCx.excluidas.length} excluídas`, true);
+  ok("cx-20", "Caixa por Operador", "Sessão fechada preserva snapshot e expõe divergência do recálculo", snapshotOk, `snapshot R$ 315,00 · recálculo R$ 320,00 · divergência R$ ${apSnap.divergenciaRecalculo.toFixed(2)}`, true);
+
+  // Fechamento real: transação + FOR UPDATE (simultâneo bloqueado), sessão do operador e isolamento entre empresas
+  let fechamentoConcorrenteOk = false;
+  let isolamentoFechamentoOk = false;
+  let detalheFechamento = "";
+  const probeOpId = randomUUID();
+  const probeSessId = randomUUID();
+  const probeVendaId = randomUUID();
+  try {
+    await db.insert(usuarios).values({ id: probeOpId, empresaId, nome: "Probe Caixa", email: `probe-caixa-${probeOpId.slice(0, 8)}@nkway.local`, senhaHash: "probe", papel: "operador", ativo: false });
+    await db.insert(caixaSessoes).values({ id: probeSessId, empresaId, numero: 990000 + Math.floor(Math.random() * 9999), terminal: "PROBE", operadorId: probeOpId, operadorNome: "Probe Caixa", status: "aberto", saldoInicial: 10 });
+    await db.insert(vendas).values({
+      id: probeVendaId, empresaId, numero: 990000 + Math.floor(Math.random() * 9999), clienteNome: "PROBE CAIXA", subtotal: 25, desconto: 0, total: 25,
+      formaPagamento: "dinheiro", pagamentos: [{ forma: "dinheiro", valor: 30 }], tipo: "sem_nota", status: "faturado",
+      operadorId: probeOpId, caixaSessaoId: probeSessId, origem: "pdv", data: new Date(),
+    });
+    const probeUsuario = { id: probeOpId, nome: "Probe Caixa", papel: "operador" };
+    const informados = { dinheiro: 35, pix: 0, credito: 0, debito: 0, boleto: 0, prazo: 0 }; // 10 inicial + 25 líquido (troco 5)
+    const outraEmpresa = await fecharSessaoCaixaTransacional({ empresaId: "00000000-0000-4000-8000-000000000099", sessaoId: probeSessId, usuario: probeUsuario, valoresInformados: informados, justificativa: "" });
+    const outroOperador = await fecharSessaoCaixaTransacional({ empresaId, sessaoId: probeSessId, usuario: { id: randomUUID(), nome: "Outro", papel: "operador" }, valoresInformados: informados, justificativa: "" });
+    const [f1, f2] = await Promise.all([
+      fecharSessaoCaixaTransacional({ empresaId, sessaoId: probeSessId, usuario: probeUsuario, valoresInformados: informados, justificativa: "" }),
+      fecharSessaoCaixaTransacional({ empresaId, sessaoId: probeSessId, usuario: probeUsuario, valoresInformados: informados, justificativa: "" }),
+    ]);
+    const f3 = await fecharSessaoCaixaTransacional({ empresaId, sessaoId: probeSessId, usuario: probeUsuario, valoresInformados: informados, justificativa: "" });
+    const [sessFechada] = await db.select().from(caixaSessoes).where(eq(caixaSessoes.id, probeSessId)).limit(1);
+    const oks = [f1, f2].filter((f) => f.ok).length;
+    const vencedor = [f1, f2].find((f) => f.ok);
+    fechamentoConcorrenteOk =
+      oks === 1 && !f3.ok && sessFechada?.status === "fechado" && Number(sessFechada?.totalEsperado) === 35 &&
+      Number((sessFechada?.valoresEsperados as Record<string, number>)?.dinheiro) === 35 && Number(sessFechada?.diferencaTotal) === 0 &&
+      vencedor?.ok === true && vencedor.apuracao.totalTroco === 5 && vencedor.apuracao.consideradas === 1;
+    isolamentoFechamentoOk = !outraEmpresa.ok && !outroOperador.ok && sessFechada?.fechadoPorId === probeOpId;
+    detalheFechamento = `${oks} de 2 simultâneos · retry negado · esperado R$ ${Number(sessFechada?.totalEsperado ?? 0).toFixed(2)}`;
+  } catch (e) {
+    detalheFechamento = e instanceof Error ? e.message : String(e);
+  } finally {
+    await db.delete(caixaMovimentos).where(eq(caixaMovimentos.sessaoId, probeSessId));
+    await db.delete(vendas).where(eq(vendas.id, probeVendaId));
+    await db.delete(caixaSessoes).where(eq(caixaSessoes.id, probeSessId));
+    await db.delete(usuarios).where(eq(usuarios.id, probeOpId));
+  }
+  ok("cx-21", "Caixa por Operador", "Fechamento simultâneo bloqueado por transação + FOR UPDATE, com snapshot recalculado no servidor", fechamentoConcorrenteOk, detalheFechamento, true);
+  ok("cx-22", "Caixa por Operador", "Fechamento isolado por empresa e restrito ao operador da sessão", isolamentoFechamentoOk, isolamentoFechamentoOk ? "outra empresa e outro operador negados" : detalheFechamento, true);
 
   /* ------------------------------------- Fase 3: exportação de XML vendas */
   const permXmlOk =
