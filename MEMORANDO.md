@@ -66,7 +66,7 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 ### 2.2 Módulos operacionais principais (ERP Next.js em produção)
 | O quê | Onde |
 |---|---|
-| PDV Frente de Caixa em Tela Cheia (`100dvh`, sem `<Shell />`, abertura em fullscreen pelo menu via `LinkPdv`/`abrirPdv.ts`, multiplicador `X + Qtd + Enter`, pagamento dividido + troco em dinheiro + crédito em `pagamentoPdv.ts`, consulta `F7` + espera `F9` + etiqueta balança `2…` em `balcaoPdv.ts`, bobina 80 mm `.print-area` + editar/cancelar em `F3` + gaveta `Alt+G` + inspetor de fila offline em `operacoesPdv.ts`, `← Voltar`, `ATALHOS_PDV`, `F10` 3 opções) | Rota `/pdv` · `src/app/(pdv)/layout.tsx`, `src/app/(pdv)/pdv/page.tsx`, `src/views/Pdv.tsx`, `src/components/LinkPdv.tsx`, `src/lib/abrirPdv.ts`, `src/lib/multiplicadorPdv.ts`, `src/lib/pagamentoPdv.ts`, `src/lib/balcaoPdv.ts`, `src/lib/operacoesPdv.ts`, `src/lib/atalhosPdv.ts`, `src/lib/situacaoFiscal.ts`, `src/server/acoes/pdv.ts` |
+| PDV Frente de Caixa em Tela Cheia (`100dvh`, sem `<Shell />`, abertura em fullscreen pelo menu via `LinkPdv`/`abrirPdv.ts`, multiplicador `X + Qtd + Enter`, pagamento dividido + troco em dinheiro + crédito em `pagamentoPdv.ts`, consulta `F7` + espera `F9` + etiqueta balança `2…` em `balcaoPdv.ts`, bobina 80 mm `.print-area` + editar/cancelar em `F3` + gaveta `Alt+G` + fila offline em `operacoesPdv.ts`, navegação 100% por setas no `F10` em `navegacaoFinalizarPdv.ts`, `← Voltar`, `ATALHOS_PDV`) | Rota `/pdv` · `src/app/(pdv)/layout.tsx`, `src/app/(pdv)/pdv/page.tsx`, `src/views/Pdv.tsx`, `src/components/LinkPdv.tsx`, `src/lib/abrirPdv.ts`, `src/lib/multiplicadorPdv.ts`, `src/lib/pagamentoPdv.ts`, `src/lib/balcaoPdv.ts`, `src/lib/operacoesPdv.ts`, `src/lib/navegacaoFinalizarPdv.ts`, `src/lib/atalhosPdv.ts`, `src/lib/situacaoFiscal.ts`, `src/server/acoes/pdv.ts` |
 | Entrada de mercadoria (XML, chave SEFAZ, manual, tratamento) | Rota `/entradas` · `src/views/Entradas.tsx` + `src/server/acoes/entradas.ts` + `src/lib/xmlNfe.ts` |
 | Emissor Fiscal SEFAZ 4.00, contingência e webhook | Rota `/emissor` + `/api/fiscal/webhook` · `src/views/EmissorFiscal.tsx` + `src/server/emissorFiscalCore.ts` |
 | Produtos e manutenção de preços | Rota `/produtos` · `src/views/Produtos.tsx` + `src/server/acoes/cadastros.ts` |
@@ -84,7 +84,7 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 |---|---|
 | `FILTROS.md` | Especificação de filtros por módulo |
 | `CHECKLIST.md` | QA antes de publicar |
-| `DEV.md` | Console do desenvolvedor (`/api/diagnostico` — 189 testes / 25 módulos) |
+| `DEV.md` | Console do desenvolvedor (`/api/diagnostico` — 195 testes / 25 módulos) |
 | `README.md` | Visão geral do produto |
 
 ---

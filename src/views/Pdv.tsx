@@ -52,6 +52,19 @@ import {
   type LinhaItemPdv,
 } from "@/lib/multiplicadorPdv";
 import {
+  MODELOS_FISCAIS_PDV,
+  avancarAposLancamentoParcelaPdv,
+  ciclarFormaPagamentoPdv,
+  ciclarModeloFiscalPdv,
+  criarEstadoInicialFinalizarPdv,
+  processarTeclaFinalizarPdv,
+  resolverOpcaoFechamentoValidaPdv,
+  type BotaoConfirmacaoFiscalPdv,
+  type EstadoNavegacaoFinalizarPdv,
+  type ModeloFiscalPdv,
+  type OpcaoFechamentoPdv,
+} from "@/lib/navegacaoFinalizarPdv";
+import {
   SUGESTOES_MOTIVO_GAVETA_PDV,
   carregarDavParaTelaPdv,
   converterReciboParaDocFiscalPdv,
@@ -215,15 +228,24 @@ export function PdvView({
   const [modalCancelarVenda, setModalCancelarVenda] = useState(false);
   const [abertoCliente, setAbertoCliente] = useState(false);
   const [buscaCliente, setBuscaCliente] = useState("");
+  const [cursorCliente, setCursorCliente] = useState(0);
+  const [retornarAoFinalizarAposCliente, setRetornarAoFinalizarAposCliente] = useState(false);
   const [modalFinalizar, setModalFinalizar] = useState(false);
   const [confirmandoEmissaoNfce, setConfirmandoEmissaoNfce] = useState(false);
 
-  // Complemento PDV 2 de 3 — Pagamento dividido guiado no F10, Consulta de Preço (F7), Espera (F9) e Etiqueta de Balança
+  // Complemento PDV 2 de 3 + Navegação 100% Teclado no F10
   const [formaAtivaModal, setFormaAtivaModal] = useState<string>("dinheiro");
   const [valorParcelaModal, setValorParcelaModal] = useState<string>("");
   const [msgPagamentoModal, setMsgPagamentoModal] = useState<{ tom: "ok" | "info" | "erro"; texto: string } | null>(
     null,
   );
+  const [navFinalizar, setNavFinalizar] = useState<EstadoNavegacaoFinalizarPdv>({
+    secao: "formas",
+    formaAtiva: "dinheiro",
+    modeloFiscal: "NFC-e",
+    opcaoFechamento: "emitir_nfce",
+    botaoConfirmacao: "confirmar",
+  });
   const [modalConsultaPreco, setModalConsultaPreco] = useState(false);
   const [buscaConsultaPreco, setBuscaConsultaPreco] = useState("");
   const [indiceConsultaPreco, setIndiceConsultaPreco] = useState(0);
@@ -258,6 +280,13 @@ export function PdvView({
   const buscaRef = useRef<HTMLInputElement>(null);
   const descontoRef = useRef<HTMLInputElement>(null);
   const valorParcelaModalRef = useRef<HTMLInputElement>(null);
+  const formasModalRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const modelosModalRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const opcoesModalRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const confirmacaoModalRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const formasLateralRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const modelosLateralRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const iniciouDigitacaoDiretaRef = useRef<boolean>(false);
   const linhasRef = useRef<Linha[]>([]);
   const multiplicadorRef = useRef<EstadoMultiplicadorPdv>(ESTADO_MULTIPLICADOR_INICIAL);
   const ultimoAutoScanRef = useRef<{ codigo: string; ts: number }>({ codigo: "", ts: 0 });
@@ -513,15 +542,38 @@ export function PdvView({
   const troco = resumoPagamento.troco;
   const unidadesBipadas = normalizarQtdPdv(linhas.reduce((s, l) => s + l.qtd, 0));
   const cliente = clientes.find((c) => c.id === clienteId) ?? null;
+  const pagamentosEfetivosPrevia = useMemo(
+    () =>
+      pagamentos.length > 0
+        ? pagamentos
+        : modalFinalizar && total > 0
+          ? [{ forma: formaAtivaModal, valor: total }]
+          : [],
+    [formaAtivaModal, modalFinalizar, pagamentos, total],
+  );
   const validacaoCredito = useMemo(
     () =>
       validarCreditoVendaPdv({
         modo: "sem_nota",
-        pagamentos,
+        pagamentos: pagamentosEfetivosPrevia,
         totalVenda: total,
         cliente,
       }),
-    [pagamentos, total, cliente],
+    [pagamentosEfetivosPrevia, total, cliente],
+  );
+  const podeOpcaoDavModal = !ocupado && podeCriarDav;
+  const podeOpcaoSemNotaModal =
+    !ocupado && podeVenderFiscal && !(pagamentos.length > 0 && falta > 0.01) && validacaoCredito.ok;
+  const podeOpcaoFiscalModal = podeOpcaoSemNotaModal;
+  const clientesFiltradosModal = useMemo(
+    () =>
+      clientes.filter(
+        (c) =>
+          !buscaCliente.trim() ||
+          c.nome.toLowerCase().includes(buscaCliente.toLowerCase()) ||
+          c.documento.includes(buscaCliente),
+      ),
+    [buscaCliente, clientes],
   );
   const cedulasSugeridas = useMemo(() => sugerirCedulasDinheiroPdv(falta), [falta]);
   const consultaPrecoDados = useMemo(
@@ -705,17 +757,18 @@ export function PdvView({
   );
 
   const selecionarFormaNoModalFinalizar = useCallback(
-    (novaForma: string) => {
+    (novaForma: string, manterSecaoValor = false) => {
       setFormaAtivaModal(novaForma);
       setMsgPagamentoModal(null);
       const lido = lerValorMonetarioPdv(valorParcelaModal);
       if (falta > 0 && (!Number.isFinite(lido) || lido <= 0 || (novaForma !== "dinheiro" && lido > falta))) {
         setValorParcelaModal(falta.toFixed(2).replace(".", ","));
       }
-      setTimeout(() => {
-        valorParcelaModalRef.current?.focus();
-        valorParcelaModalRef.current?.select();
-      }, 20);
+      setNavFinalizar((atual) => ({
+        ...atual,
+        formaAtiva: novaForma,
+        secao: manterSecaoValor && falta > 0 ? "valor" : "formas",
+      }));
     },
     [falta, valorParcelaModal],
   );
@@ -733,19 +786,28 @@ export function PdvView({
         return;
       }
       setPagamentos(r.pagamentos);
-      setValorParcelaModal(r.resumo.falta > 0 ? r.resumo.falta.toFixed(2).replace(".", ",") : "");
+      const aindaFalta = r.resumo.falta > 0.009;
+      setValorParcelaModal(aindaFalta ? r.resumo.falta.toFixed(2).replace(".", ",") : "");
       setMsgPagamentoModal({
-        tom: r.resumo.falta > 0 ? "info" : "ok",
+        tom: aindaFalta ? "info" : "ok",
         texto: r.mensagem,
       });
-      if (r.resumo.falta > 0) {
-        setTimeout(() => {
-          valorParcelaModalRef.current?.focus();
-          valorParcelaModalRef.current?.select();
-        }, 20);
-      }
+      const checkCredPos = validarCreditoVendaPdv({
+        modo: "sem_nota",
+        pagamentos: r.pagamentos,
+        totalVenda: total,
+        cliente,
+      });
+      const podeFinalizarPos = podeVenderFiscal && !aindaFalta && checkCredPos.ok;
+      setNavFinalizar((atual) =>
+        avancarAposLancamentoParcelaPdv(atual, aindaFalta, {
+          podeDav: podeCriarDav,
+          podeSemNota: podeFinalizarPos,
+          podeEmitirFiscal: podeFinalizarPos,
+        }),
+      );
     },
-    [formaAtivaModal, pagamentos, total, valorParcelaModal],
+    [cliente, formaAtivaModal, pagamentos, podeCriarDav, podeVenderFiscal, total, valorParcelaModal],
   );
 
   const abrirModalConsultaPreco = useCallback(() => {
@@ -899,12 +961,89 @@ export function PdvView({
       toast("Informe a quantidade/peso de todos os itens antes de finalizar.", "erro");
       return;
     }
+    const formaInicial = pagamentos[0]?.forma ?? "dinheiro";
+    const faltaSaldo = falta > 0.01;
+    const temParcelas = pagamentos.length > 0;
+    const checkCredIni = validarCreditoVendaPdv({
+      modo: "sem_nota",
+      pagamentos: temParcelas ? pagamentos : [{ forma: formaInicial, valor: total }],
+      totalVenda: total,
+      cliente,
+    });
+    const podeFinalizarIni = podeVenderFiscal && !(temParcelas && faltaSaldo) && checkCredIni.ok;
+
     setConfirmandoEmissaoNfce(false);
-    setFormaAtivaModal(pagamentos[0]?.forma ?? "dinheiro");
-    setValorParcelaModal(falta > 0 ? falta.toFixed(2).replace(".", ",") : "");
+    setFormaAtivaModal(formaInicial);
+    setValorParcelaModal(faltaSaldo ? falta.toFixed(2).replace(".", ",") : "");
     setMsgPagamentoModal(null);
+    setNavFinalizar(
+      criarEstadoInicialFinalizarPdv({
+        formaInicial,
+        modeloAtual: modelo,
+        ctx: {
+          temSaldoFaltando: faltaSaldo,
+          temParcelasLancadas: temParcelas,
+          podeDav: podeCriarDav,
+          podeSemNota: podeFinalizarIni,
+          podeEmitirFiscal: podeFinalizarIni,
+        },
+      }),
+    );
     setModalFinalizar(true);
-  }, [falta, linhas, pagamentos, toast]);
+  }, [cliente, falta, linhas, modelo, pagamentos, podeCriarDav, podeVenderFiscal, toast, total]);
+
+  // Sincroniza o foco real do DOM no modal F10 conforme a seção e item navegados pelas setas do teclado
+  useEffect(() => {
+    if (!modalFinalizar) return;
+    const idTimer = window.setTimeout(() => {
+      if (confirmandoEmissaoNfce || navFinalizar.secao === "confirmacao") {
+        confirmacaoModalRefs.current[navFinalizar.botaoConfirmacao]?.focus();
+        return;
+      }
+      if (navFinalizar.secao === "formas") {
+        formasModalRefs.current[formaAtivaModal]?.focus();
+        return;
+      }
+      if (navFinalizar.secao === "valor") {
+        const inp = valorParcelaModalRef.current;
+        if (inp) {
+          inp.focus();
+          if (iniciouDigitacaoDiretaRef.current) {
+            const len = inp.value.length;
+            inp.setSelectionRange(len, len);
+            iniciouDigitacaoDiretaRef.current = false;
+          } else if (document.activeElement === inp) {
+            inp.select();
+          }
+        }
+        return;
+      }
+      if (navFinalizar.secao === "modelo") {
+        modelosModalRefs.current[modelo]?.focus();
+        return;
+      }
+      if (navFinalizar.secao === "opcoes") {
+        const alvoValido = resolverOpcaoFechamentoValidaPdv(navFinalizar.opcaoFechamento, {
+          podeDav: podeOpcaoDavModal,
+          podeSemNota: podeOpcaoSemNotaModal,
+          podeEmitirFiscal: podeOpcaoFiscalModal,
+        });
+        opcoesModalRefs.current[alvoValido]?.focus();
+      }
+    }, 15);
+    return () => window.clearTimeout(idTimer);
+  }, [
+    confirmandoEmissaoNfce,
+    formaAtivaModal,
+    modalFinalizar,
+    modelo,
+    navFinalizar.botaoConfirmacao,
+    navFinalizar.opcaoFechamento,
+    navFinalizar.secao,
+    podeOpcaoDavModal,
+    podeOpcaoFiscalModal,
+    podeOpcaoSemNotaModal,
+  ]);
 
   // Etapa 8, Etapa 9 e Complemento 2 — Execução das 3 opções de fechamento com validação de crédito/pagamentos
   const executarFechamento = useCallback(
@@ -927,12 +1066,13 @@ export function PdvView({
         return toast("Caixa fechado: confirme a abertura do seu caixa para concluir a venda.", "info");
       }
 
+      const formaUnicaSelecionada = modalFinalizar ? formaAtivaModal : "dinheiro";
       const payloadPagamentos =
         modo === "dav"
           ? []
           : pagamentos.length > 0
             ? pagamentos
-            : [{ forma: "dinheiro", valor: total }];
+            : [{ forma: formaUnicaSelecionada, valor: total }];
 
       const somaPagamentos = round2(payloadPagamentos.reduce((s, p) => s + p.valor, 0));
       if (modo !== "dav" && somaPagamentos + 0.01 < total) {
@@ -1066,6 +1206,8 @@ export function PdvView({
       podeFaturarDav,
       davCarregado,
       sessaoCaixa,
+      modalFinalizar,
+      formaAtivaModal,
       pagamentos,
       subtotal,
       total,
@@ -1368,11 +1510,90 @@ export function PdvView({
         }
       }
 
-      if (modalFinalizar && !confirmandoEmissaoNfce && e.altKey && /^[1-6]$/.test(e.key)) {
-        e.preventDefault();
-        const itemForma = FORMAS_ATALHO_ALT.find((f) => f.digito === e.key);
-        if (itemForma) selecionarFormaNoModalFinalizar(itemForma.forma);
-        return;
+      // Navegação 100% por teclado dentro do modal Finalizar operação (F10)
+      if (modalFinalizar) {
+        const alvoDom = e.target as HTMLElement | null;
+        const ehBotaoSecundarioSemZona =
+          alvoDom?.tagName === "BUTTON" && !alvoDom.dataset?.f10Zona && (e.key === "Enter" || e.key === " ");
+        if (!ehBotaoSecundarioSemZona) {
+          const inpVal = valorParcelaModalRef.current;
+          const inputValorSelecionadoOuVazio = Boolean(
+            !inpVal ||
+              inpVal.value.length === 0 ||
+              (inpVal.selectionStart === 0 && inpVal.selectionEnd === inpVal.value.length),
+          );
+          const navSincronizada: EstadoNavegacaoFinalizarPdv = {
+            ...navFinalizar,
+            formaAtiva: formaAtivaModal,
+            modeloFiscal: modelo,
+          };
+          const resNav = processarTeclaFinalizarPdv(
+            navSincronizada,
+            {
+              key: e.key,
+              altKey: e.altKey,
+              ctrlKey: e.ctrlKey,
+              metaKey: e.metaKey,
+              shiftKey: e.shiftKey,
+            },
+            {
+              temSaldoFaltando: falta > 0.01,
+              temParcelasLancadas: pagamentos.length > 0,
+              podeDav: podeOpcaoDavModal,
+              podeSemNota: podeOpcaoSemNotaModal,
+              podeEmitirFiscal: podeOpcaoFiscalModal,
+              confirmandoEmissao: confirmandoEmissaoNfce,
+              ocupado,
+              inputValorSelecionadoOuVazio,
+            },
+          );
+          if (resNav.interceptado) {
+            e.preventDefault();
+            if (e.key === "Escape") e.stopPropagation();
+            setNavFinalizar(resNav.estado);
+
+            switch (resNav.acao.tipo) {
+              case "MUDAR_FORMA":
+                selecionarFormaNoModalFinalizar(resNav.acao.forma, resNav.estado.secao === "valor");
+                break;
+              case "INICIAR_DIGITACAO_VALOR":
+                iniciouDigitacaoDiretaRef.current = true;
+                setValorParcelaModal(resNav.acao.caractere);
+                setMsgPagamentoModal(null);
+                break;
+              case "LANCAR_PARCELA":
+                lancarParcelaNoModalFinalizar();
+                break;
+              case "TROCAR_FORMA_UNICA":
+                if (pagamentos.length <= 1) {
+                  setPagamentos([{ forma: resNav.acao.forma, valor: total }]);
+                }
+                break;
+              case "MUDAR_MODELO":
+                setModelo(resNav.acao.modelo);
+                break;
+              case "ABRIR_CLIENTE_F8":
+                setModalFinalizar(false);
+                setRetornarAoFinalizarAposCliente(true);
+                setBuscaCliente("");
+                setCursorCliente(0);
+                setAbertoCliente(true);
+                break;
+              case "ABRIR_CONFIRMACAO_FISCAL":
+                setConfirmandoEmissaoNfce(true);
+                break;
+              case "VOLTAR_OPCOES":
+                setConfirmandoEmissaoNfce(false);
+                break;
+              case "EXECUTAR_FECHAMENTO":
+                void executarFechamento(resNav.acao.modo);
+                break;
+              case "NENHUMA":
+                break;
+            }
+            return;
+          }
+        }
       }
 
       // Pós-venda: Enter no recibo térmico inicia imediatamente a próxima venda
@@ -1408,7 +1629,9 @@ export function PdvView({
         abrirModalConsultaPreco();
       } else if (e.key === "F8") {
         e.preventDefault();
+        setRetornarAoFinalizarAposCliente(false);
         setBuscaCliente("");
+        setCursorCliente(0);
         setAbertoCliente(true);
       } else if (e.key === "F9") {
         e.preventDefault();
@@ -1466,7 +1689,18 @@ export function PdvView({
     imprimindo,
     modalFinalizar,
     confirmandoEmissaoNfce,
+    navFinalizar,
+    formaAtivaModal,
+    modelo,
+    falta,
+    pagamentos.length,
+    podeOpcaoDavModal,
+    podeOpcaoSemNotaModal,
+    podeOpcaoFiscalModal,
+    ocupado,
     selecionarFormaNoModalFinalizar,
+    lancarParcelaNoModalFinalizar,
+    executarFechamento,
     abrirModalGaveta,
     solicitarSaidaPdv,
     alternarTelaCheia,
@@ -2316,22 +2550,36 @@ export function PdvView({
           </Card>
 
           <Card className="shrink-0">
-            <p className="micro mb-2 text-ink-400">Forma de pagamento · Alt+1 a Alt+6 (divisão aceita)</p>
-            <div className="grid grid-cols-3 gap-1.5">
+            <p className="micro mb-2 text-ink-400">Forma de pagamento · Alt+1 a Alt+6 ou setas ← →</p>
+            <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Formas de pagamento">
               {FORMAS_PAGAMENTO.map((f) => {
                 const usado = pagamentos.filter((p) => p.forma === f.id).reduce((s, p) => s + p.valor, 0);
                 const atalhoIdx = FORMAS_ATALHO_ALT.find((a) => a.forma === f.id)?.digito;
                 return (
                   <button
                     key={f.id}
+                    ref={(el) => {
+                      formasLateralRefs.current[f.id] = el;
+                    }}
                     type="button"
                     onClick={() =>
                       usado > 0
                         ? setPagamentos(pagamentos.filter((p) => p.forma !== f.id))
                         : definirPagamentoAutomatico(f.id)
                     }
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                        e.preventDefault();
+                        const prox = ciclarFormaPagamentoPdv(f.id, 1);
+                        formasLateralRefs.current[prox]?.focus();
+                      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                        e.preventDefault();
+                        const ant = ciclarFormaPagamentoPdv(f.id, -1);
+                        formasLateralRefs.current[ant]?.focus();
+                      }
+                    }}
                     className={cn(
-                      "rounded-lg px-2 py-2 text-[12px] font-semibold ring-1 ring-inset transition",
+                      "rounded-lg px-2 py-2 text-[12px] font-semibold ring-1 ring-inset transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-way-500",
                       usado > 0
                         ? "bg-way-600 text-white ring-way-600"
                         : "bg-white text-ink-600 ring-ink-200 hover:bg-ink-50",
@@ -2460,6 +2708,8 @@ export function PdvView({
             <button
               type="button"
               onClick={() => {
+                setRetornarAoFinalizarAposCliente(false);
+                setCursorCliente(0);
                 setAbertoCliente(true);
                 setBuscaCliente("");
               }}
@@ -2490,6 +2740,8 @@ export function PdvView({
                 <button
                   type="button"
                   onClick={() => {
+                    setRetornarAoFinalizarAposCliente(false);
+                    setCursorCliente(0);
                     setAbertoCliente(true);
                     setBuscaCliente("");
                   }}
@@ -2528,16 +2780,47 @@ export function PdvView({
             </div>
 
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <Campo rotulo="Documento fiscal">
-                <Select
-                  valor={modelo}
-                  aoMudar={(v) => setModelo(v as "NFC-e" | "NF-e" | "SAT")}
-                  opcoes={[
-                    { valor: "NFC-e", rotulo: "NFC-e (consumidor)" },
-                    { valor: "NF-e", rotulo: "NF-e (pessoa jurídica)" },
-                    { valor: "SAT", rotulo: "SAT / NFC-e Sat" },
-                  ]}
-                />
+              <Campo rotulo="Documento fiscal (← →)">
+                <div
+                  role="radiogroup"
+                  aria-label="Modelo de documento fiscal"
+                  className="grid grid-cols-3 gap-1 rounded-lg bg-ink-50 p-0.5 ring-1 ring-inset ring-ink-200"
+                >
+                  {MODELOS_FISCAIS_PDV.map((mod) => {
+                    const ativoMod = modelo === mod;
+                    return (
+                      <button
+                        key={mod}
+                        ref={(el) => {
+                          modelosLateralRefs.current[mod] = el;
+                        }}
+                        type="button"
+                        role="radio"
+                        aria-checked={ativoMod}
+                        onClick={() => setModelo(mod)}
+                        onKeyDown={(e) => {
+                          if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                            e.preventDefault();
+                            const prox = ciclarModeloFiscalPdv(mod, 1);
+                            setModelo(prox);
+                            modelosLateralRefs.current[prox]?.focus();
+                          } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                            e.preventDefault();
+                            const ant = ciclarModeloFiscalPdv(mod, -1);
+                            setModelo(ant);
+                            modelosLateralRefs.current[ant]?.focus();
+                          }
+                        }}
+                        className={cn(
+                          "rounded-md py-1.5 text-center text-[11px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-way-500",
+                          ativoMod ? "bg-ink-900 text-white shadow-sm" : "text-ink-500 hover:text-ink-900",
+                        )}
+                      >
+                        {mod}
+                      </button>
+                    );
+                  })}
+                </div>
               </Campo>
               <Campo rotulo="Validade do DAV">
                 <Input type="date" valor={validadeDav} aoMudar={setValidadeDav} />
@@ -2769,16 +3052,21 @@ export function PdvView({
         </p>
       </Modal>
 
-      {/* ETAPA 9 + COMPLEMENTO 2 — MODAL DE FINALIZAÇÃO COM PAGAMENTO DIVIDIDO GUIADO + 3 OPÇÕES */}
+      {/* ETAPA 9 + COMPLEMENTOS 2 E 3 — MODAL DE FINALIZAÇÃO 100% NAVEGÁVEL POR TECLADO (SETAS ← → ↑ ↓ + ENTER) */}
       <Modal
         aberto={modalFinalizar}
         aoFechar={() => {
+          if (confirmandoEmissaoNfce) {
+            setConfirmandoEmissaoNfce(false);
+            setNavFinalizar((at) => ({ ...at, secao: "opcoes", opcaoFechamento: "emitir_nfce" }));
+            return;
+          }
           setModalFinalizar(false);
           setConfirmandoEmissaoNfce(false);
           buscaRef.current?.focus();
         }}
         titulo="Finalizar operação (F10)"
-        descricao="Confira ou divida o pagamento e escolha como registrar este atendimento"
+        descricao="Use as setas ← → ↑ ↓ e Enter para escolher pagamento, modelo fiscal e tipo de fechamento sem mouse"
         largura="max-w-2xl"
       >
         <div className="space-y-3">
@@ -2806,11 +3094,28 @@ export function PdvView({
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-way-50/80 px-3 py-1.5 text-[11px] font-medium text-way-900 ring-1 ring-inset ring-way-200">
+            <span>
+              <strong>Teclado:</strong> <kbd className="rounded bg-white px-1 font-mono text-[10px]">←</kbd>{" "}
+              <kbd className="rounded bg-white px-1 font-mono text-[10px]">→</kbd> troca forma ou modelo fiscal ·{" "}
+              <kbd className="rounded bg-white px-1 font-mono text-[10px]">↑</kbd>{" "}
+              <kbd className="rounded bg-white px-1 font-mono text-[10px]">↓</kbd> navega até DAV / Sem nota / Emitir ·{" "}
+              <kbd className="rounded bg-white px-1 font-mono text-[10px]">Enter</kbd> confirma
+            </span>
+          </div>
+
           {!confirmandoEmissaoNfce && (
-            <div className="rounded-xl border border-ink-200 bg-ink-50/70 p-3">
+            <div
+              className={cn(
+                "rounded-xl border p-3 transition",
+                navFinalizar.secao === "formas" || navFinalizar.secao === "valor"
+                  ? "border-way-400 bg-way-50/35 ring-1 ring-inset ring-way-200"
+                  : "border-ink-200 bg-ink-50/70",
+              )}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="micro text-ink-500">
-                  Pagamento dividido (Alt+1..6 ou ↑↓ no valor · troco só em dinheiro)
+                <p className="micro text-ink-600">
+                  1. Forma de pagamento (← → escolhe · Enter lança · ↓ vai ao documento)
                 </p>
                 {pagamentos.length > 0 && (
                   <button
@@ -2819,6 +3124,7 @@ export function PdvView({
                       setPagamentos([]);
                       setValorParcelaModal(total.toFixed(2).replace(".", ","));
                       setMsgPagamentoModal(null);
+                      setNavFinalizar((at) => ({ ...at, secao: "formas" }));
                     }}
                     className="text-[11px] font-semibold text-rose-600 hover:underline"
                   >
@@ -2827,9 +3133,14 @@ export function PdvView({
                 )}
               </div>
 
-              <div className="mt-2 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+              <div
+                role="radiogroup"
+                aria-label="Forma de pagamento no fechamento"
+                className="mt-2 grid grid-cols-3 gap-1.5 sm:grid-cols-6"
+              >
                 {FORMAS_PAGAMENTO.map((f) => {
                   const selecionada = formaAtivaModal === f.id;
+                  const emFocoFormas = navFinalizar.secao === "formas" && selecionada;
                   const lancado = pagamentos
                     .filter((p) => p.forma === f.id)
                     .reduce((s, p) => round2(s + p.valor), 0);
@@ -2837,19 +3148,30 @@ export function PdvView({
                   return (
                     <button
                       key={f.id}
+                      ref={(el) => {
+                        formasModalRefs.current[f.id] = el;
+                      }}
+                      data-f10-zona="formas"
                       type="button"
+                      role="radio"
+                      aria-checked={selecionada}
+                      onFocus={() => {
+                        setFormaAtivaModal(f.id);
+                        setNavFinalizar((at) => ({ ...at, secao: "formas", formaAtiva: f.id }));
+                      }}
                       onClick={() => selecionarFormaNoModalFinalizar(f.id)}
                       className={cn(
-                        "rounded-lg px-2 py-1.5 text-center text-[11.5px] font-bold ring-1 ring-inset transition",
+                        "rounded-lg px-2 py-2 text-center text-[11.5px] font-bold ring-1 ring-inset transition outline-none",
                         selecionada
-                          ? "bg-way-600 text-white ring-way-600"
+                          ? "bg-way-600 text-white ring-way-700"
                           : lancado > 0
                             ? "bg-way-50 text-way-900 ring-way-300"
                             : "bg-white text-ink-700 ring-ink-200 hover:bg-ink-100",
+                        emFocoFormas && "ring-2 ring-ink-900 ring-offset-2",
                       )}
                     >
                       <span className="block truncate">
-                        {digito ? `${digito}. ` : ""}
+                        {selecionada ? "▶ " : digito ? `${digito}. ` : ""}
                         {f.label}
                       </span>
                       {lancado > 0 && (
@@ -2868,30 +3190,28 @@ export function PdvView({
                     </span>
                     <input
                       ref={valorParcelaModalRef}
+                      data-f10-zona="valor"
                       value={valorParcelaModal}
+                      onFocus={() => setNavFinalizar((at) => ({ ...at, secao: "valor" }))}
                       onChange={(e) => {
                         setValorParcelaModal(e.target.value.replace(/[^\d.,]/g, ""));
                         setMsgPagamentoModal(null);
                       }}
-                      onKeyDown={(e) => {
-                        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                          e.preventDefault();
-                          const idx = FORMAS_PAGAMENTO.findIndex((f) => f.id === formaAtivaModal);
-                          const delta = e.key === "ArrowDown" ? 1 : -1;
-                          const prox =
-                            FORMAS_PAGAMENTO[(idx + delta + FORMAS_PAGAMENTO.length) % FORMAS_PAGAMENTO.length];
-                          if (prox) selecionarFormaNoModalFinalizar(prox.id);
-                        } else if (e.key === "Enter") {
-                          e.preventDefault();
-                          lancarParcelaNoModalFinalizar();
-                        }
-                      }}
                       placeholder={falta.toFixed(2).replace(".", ",")}
                       aria-label={`Valor a lançar em ${rotuloForma(formaAtivaModal)}`}
-                      className="tabular w-full rounded-lg bg-white py-1.5 pl-8 pr-2.5 text-right text-[14px] font-extrabold text-ink-900 ring-1 ring-inset ring-ink-200 outline-none focus:ring-2 focus:ring-way-500"
+                      className={cn(
+                        "tabular w-full rounded-lg bg-white py-1.5 pl-8 pr-2.5 text-right text-[14px] font-extrabold text-ink-900 ring-1 ring-inset outline-none transition",
+                        navFinalizar.secao === "valor"
+                          ? "ring-2 ring-way-600"
+                          : "ring-ink-200 focus:ring-2 focus:ring-way-500",
+                      )}
                     />
                   </div>
-                  <Button tamanho="sm" onClick={() => lancarParcelaNoModalFinalizar()}>
+                  <Button
+                    tamanho="sm"
+                    data-f10-zona="valor"
+                    onClick={() => lancarParcelaNoModalFinalizar()}
+                  >
                     Lançar {rotuloForma(formaAtivaModal)} ↵
                   </Button>
                 </div>
@@ -2940,6 +3260,9 @@ export function PdvView({
                             setValorParcelaModal(
                               novoRes.falta > 0 ? novoRes.falta.toFixed(2).replace(".", ",") : "",
                             );
+                            if (novoRes.falta > 0) {
+                              setNavFinalizar((at) => ({ ...at, secao: "formas" }));
+                            }
                           }}
                           title="Remover parcela"
                           className="rounded p-0.5 text-ink-400 hover:bg-rose-50 hover:text-rose-600"
@@ -2980,13 +3303,15 @@ export function PdvView({
                 <strong>Pagamento efetivo:</strong>{" "}
                 {pagamentos.length > 0
                   ? pagamentos.map((p) => `${rotuloForma(p.forma)} (${moeda(p.valor)})`).join(" + ")
-                  : `Dinheiro (${moeda(total)})`}
+                  : `${rotuloForma(formaAtivaModal)} (${moeda(total)})`}
               </p>
             </div>
             <button
               type="button"
               onClick={() => {
                 setModalFinalizar(false);
+                setRetornarAoFinalizarAposCliente(true);
+                setCursorCliente(0);
                 setAbertoCliente(true);
                 setBuscaCliente("");
               }}
@@ -3006,51 +3331,184 @@ export function PdvView({
           )}
 
           {!confirmandoEmissaoNfce ? (
-            <div className="grid gap-2.5 pt-1">
-              <button
-                type="button"
-                disabled={ocupado || !podeCriarDav}
-                onClick={() => void executarFechamento("dav")}
-                className="flex items-center justify-between rounded-xl border border-ink-200 bg-white px-4 py-3 text-left transition hover:border-way-400 hover:bg-way-50/40 disabled:opacity-45"
+            <div className="space-y-2.5 pt-0.5">
+              {/* SELETOR POR TECLADO DO MODELO FISCAL (NFC-e / NF-e / SAT) */}
+              <div
+                className={cn(
+                  "rounded-xl border px-3 py-2 transition",
+                  navFinalizar.secao === "modelo"
+                    ? "border-way-500 bg-way-50/40 ring-1 ring-inset ring-way-300"
+                    : "border-ink-200 bg-white",
+                )}
               >
-                <div>
-                  <p className="text-[13.5px] font-bold text-ink-900">1. Salvar como DAV</p>
-                  <p className="text-[11.5px] text-ink-500">
-                    Pré-venda / orçamento sem chave fiscal e sem baixar estoque (validade {validadeDav}).
-                  </p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="micro text-ink-500">2. Modelo do documento fiscal (← → alterna)</span>
+                  <div
+                    role="radiogroup"
+                    aria-label="Modelo fiscal da nota"
+                    className="grid grid-cols-3 gap-1.5"
+                  >
+                    {(
+                      [
+                        { id: "NFC-e", rotulo: "NFC-e (65)" },
+                        { id: "NF-e", rotulo: "NF-e (55)" },
+                        { id: "SAT", rotulo: "SAT (59)" },
+                      ] as const
+                    ).map((m) => {
+                      const ativoM = modelo === m.id;
+                      const focadoM = navFinalizar.secao === "modelo" && ativoM;
+                      return (
+                        <button
+                          key={m.id}
+                          ref={(el) => {
+                            modelosModalRefs.current[m.id] = el;
+                          }}
+                          data-f10-zona="modelo"
+                          type="button"
+                          role="radio"
+                          aria-checked={ativoM}
+                          onFocus={() => {
+                            setModelo(m.id);
+                            setNavFinalizar((at) => ({ ...at, secao: "modelo", modeloFiscal: m.id }));
+                          }}
+                          onClick={() => {
+                            setModelo(m.id);
+                            setNavFinalizar((at) => ({ ...at, secao: "modelo", modeloFiscal: m.id }));
+                          }}
+                          className={cn(
+                            "rounded-lg px-2.5 py-1 text-[11.5px] font-bold ring-1 ring-inset transition outline-none",
+                            ativoM
+                              ? "bg-ink-900 text-white ring-ink-900"
+                              : "bg-ink-50 text-ink-600 ring-ink-200 hover:bg-ink-100",
+                            focadoM && "ring-2 ring-way-500 ring-offset-1",
+                          )}
+                        >
+                          {ativoM ? `▶ ${m.rotulo}` : m.rotulo}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <Badge tom="neutro">Sem baixa</Badge>
-              </button>
+              </div>
 
-              <button
-                type="button"
-                disabled={ocupado || !podeVenderFiscal || (pagamentos.length > 0 && falta > 0.01) || !validacaoCredito.ok}
-                onClick={() => void executarFechamento("sem_nota")}
-                className="flex items-center justify-between rounded-xl border border-ink-200 bg-white px-4 py-3 text-left transition hover:border-way-400 hover:bg-way-50/40 disabled:opacity-45"
-              >
-                <div>
-                  <p className="text-[13.5px] font-bold text-ink-900">2. Finalizar sem nota</p>
-                  <p className="text-[11.5px] text-ink-500">
-                    Conclui a venda no caixa e baixa o estoque agora. A nota pode ser emitida depois em Documentos (F3).
-                  </p>
-                </div>
-                <Badge tom="info">Baixa estoque</Badge>
-              </button>
+              {/* AS 3 OPÇÕES DE DOCUMENTO / REGISTRO NAVEGÁVEIS COM ↑ ↓ + ENTER (OU TECLAS 1, 2, 3) */}
+              {(() => {
+                const opcaoSelecionada = resolverOpcaoFechamentoValidaPdv(navFinalizar.opcaoFechamento, {
+                  podeDav: podeOpcaoDavModal,
+                  podeSemNota: podeOpcaoSemNotaModal,
+                  podeEmitirFiscal: podeOpcaoFiscalModal,
+                });
+                const focadoEmOpcoes = navFinalizar.secao === "opcoes";
 
-              <button
-                type="button"
-                disabled={ocupado || !podeVenderFiscal || (pagamentos.length > 0 && falta > 0.01) || !validacaoCredito.ok}
-                onClick={() => setConfirmandoEmissaoNfce(true)}
-                className="flex items-center justify-between rounded-xl border border-way-600 bg-way-600 px-4 py-3 text-left text-white transition hover:bg-way-700 disabled:opacity-45"
-              >
-                <div>
-                  <p className="text-[14px] font-bold">3. Finalizar e emitir {modelo}</p>
-                  <p className="text-[11.5px] text-way-100">
-                    Baixa o estoque, registra no caixa e solicita emissão fiscal ({empresa.ambiente === "1" ? "Produção" : "Homologação"}).
-                  </p>
-                </div>
-                <Icon name="seta" className="size-4 shrink-0" />
-              </button>
+                return (
+                  <div role="radiogroup" aria-label="Tipo de documento e fechamento" className="grid gap-2">
+                    <button
+                      ref={(el) => {
+                        opcoesModalRefs.current.dav = el;
+                      }}
+                      data-f10-zona="opcoes"
+                      type="button"
+                      role="radio"
+                      aria-checked={opcaoSelecionada === "dav"}
+                      disabled={!podeOpcaoDavModal}
+                      onFocus={() => setNavFinalizar((at) => ({ ...at, secao: "opcoes", opcaoFechamento: "dav" }))}
+                      onClick={() => void executarFechamento("dav")}
+                      className={cn(
+                        "flex items-center justify-between rounded-xl border px-4 py-3 text-left transition outline-none disabled:opacity-45",
+                        focadoEmOpcoes && opcaoSelecionada === "dav"
+                          ? "border-ink-900 bg-way-50/70 ring-2 ring-ink-900 ring-offset-1"
+                          : opcaoSelecionada === "dav"
+                            ? "border-way-400 bg-way-50/30"
+                            : "border-ink-200 bg-white hover:border-way-400 hover:bg-way-50/40",
+                      )}
+                    >
+                      <div>
+                        <p className="text-[13.5px] font-bold text-ink-900">
+                          {opcaoSelecionada === "dav" ? "▶ " : ""}1. Salvar como DAV
+                        </p>
+                        <p className="text-[11.5px] text-ink-500">
+                          Pré-venda / orçamento sem chave fiscal e sem baixar estoque (validade {validadeDav}).
+                        </p>
+                      </div>
+                      <Badge tom="neutro">Sem baixa</Badge>
+                    </button>
+
+                    <button
+                      ref={(el) => {
+                        opcoesModalRefs.current.sem_nota = el;
+                      }}
+                      data-f10-zona="opcoes"
+                      type="button"
+                      role="radio"
+                      aria-checked={opcaoSelecionada === "sem_nota"}
+                      disabled={!podeOpcaoSemNotaModal}
+                      onFocus={() =>
+                        setNavFinalizar((at) => ({ ...at, secao: "opcoes", opcaoFechamento: "sem_nota" }))
+                      }
+                      onClick={() => void executarFechamento("sem_nota")}
+                      className={cn(
+                        "flex items-center justify-between rounded-xl border px-4 py-3 text-left transition outline-none disabled:opacity-45",
+                        focadoEmOpcoes && opcaoSelecionada === "sem_nota"
+                          ? "border-ink-900 bg-way-50/70 ring-2 ring-ink-900 ring-offset-1"
+                          : opcaoSelecionada === "sem_nota"
+                            ? "border-way-400 bg-way-50/30"
+                            : "border-ink-200 bg-white hover:border-way-400 hover:bg-way-50/40",
+                      )}
+                    >
+                      <div>
+                        <p className="text-[13.5px] font-bold text-ink-900">
+                          {opcaoSelecionada === "sem_nota" ? "▶ " : ""}2. Finalizar sem nota
+                        </p>
+                        <p className="text-[11.5px] text-ink-500">
+                          Conclui a venda no caixa e baixa o estoque agora. A nota pode ser emitida depois em Documentos
+                          (F3).
+                        </p>
+                      </div>
+                      <Badge tom="info">Baixa estoque</Badge>
+                    </button>
+
+                    <button
+                      ref={(el) => {
+                        opcoesModalRefs.current.emitir_nfce = el;
+                      }}
+                      data-f10-zona="opcoes"
+                      type="button"
+                      role="radio"
+                      aria-checked={opcaoSelecionada === "emitir_nfce"}
+                      disabled={!podeOpcaoFiscalModal}
+                      onFocus={() =>
+                        setNavFinalizar((at) => ({ ...at, secao: "opcoes", opcaoFechamento: "emitir_nfce" }))
+                      }
+                      onClick={() => {
+                        setNavFinalizar((at) => ({
+                          ...at,
+                          secao: "confirmacao",
+                          opcaoFechamento: "emitir_nfce",
+                          botaoConfirmacao: "confirmar",
+                        }));
+                        setConfirmandoEmissaoNfce(true);
+                      }}
+                      className={cn(
+                        "flex items-center justify-between rounded-xl border border-way-600 bg-way-600 px-4 py-3 text-left text-white transition outline-none hover:bg-way-700 disabled:opacity-45",
+                        focadoEmOpcoes &&
+                          opcaoSelecionada === "emitir_nfce" &&
+                          "ring-2 ring-ink-900 ring-offset-2",
+                      )}
+                    >
+                      <div>
+                        <p className="text-[14px] font-bold">
+                          {opcaoSelecionada === "emitir_nfce" ? "▶ " : ""}3. Finalizar e emitir {modelo}
+                        </p>
+                        <p className="text-[11.5px] text-way-100">
+                          Baixa o estoque, registra no caixa e solicita emissão fiscal (
+                          {empresa.ambiente === "1" ? "Produção" : "Homologação"} · ← → troca NFC-e/NF-e/SAT).
+                        </p>
+                      </div>
+                      <Icon name="seta" className="size-4 shrink-0" />
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
@@ -3058,23 +3516,63 @@ export function PdvView({
                 Confirmar emissão de {modelo} no valor de {moeda(total)}?
               </p>
               <p className="mt-1 text-[12px] leading-relaxed text-ink-600">
-                Destinatário: <strong>{cliente?.nome ?? "CONSUMIDOR"}</strong> · Ambiente:{" "}
-                <strong>{empresa.ambiente === "1" ? "1 (Produção)" : "2 (Homologação)"}</strong>. Caso a integração
-                SEFAZ live não esteja ativa neste ambiente, o documento ficará com situação{" "}
+                Destinatário: <strong>{cliente?.nome ?? "CONSUMIDOR"}</strong> · Pagamento:{" "}
+                <strong>
+                  {pagamentos.length > 0
+                    ? pagamentos.map((p) => `${rotuloForma(p.forma)} (${moeda(p.valor)})`).join(" + ")
+                    : `${rotuloForma(formaAtivaModal)} (${moeda(total)})`}
+                </strong>{" "}
+                · Ambiente: <strong>{empresa.ambiente === "1" ? "1 (Produção)" : "2 (Homologação)"}</strong>. Caso a
+                integração SEFAZ live não esteja ativa neste ambiente, o documento ficará com situação{" "}
                 <strong>Pendente de transmissão</strong> (sem inventar protocolo ou autorização).
               </p>
-              <div className="mt-3 flex justify-end gap-2">
-                <Button variante="secundario" onClick={() => setConfirmandoEmissaoNfce(false)}>
-                  Voltar às opções
-                </Button>
-                <Button
-                  variante="primario"
-                  icone="check"
-                  disabled={ocupado}
-                  onClick={() => void executarFechamento("emitir_nfce")}
-                >
-                  {ocupado ? "Emitindo…" : `Confirmar e emitir ${modelo}`}
-                </Button>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-amber-800">
+                  ← → alterna · Enter confirma · Esc volta
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    ref={(el) => {
+                      confirmacaoModalRefs.current.voltar = el;
+                    }}
+                    data-f10-zona="confirmacao"
+                    type="button"
+                    onFocus={() => setNavFinalizar((at) => ({ ...at, secao: "confirmacao", botaoConfirmacao: "voltar" }))}
+                    onClick={() => {
+                      setConfirmandoEmissaoNfce(false);
+                      setNavFinalizar((at) => ({ ...at, secao: "opcoes", opcaoFechamento: "emitir_nfce" }));
+                    }}
+                    className={cn(
+                      "rounded-lg bg-white px-3.5 py-2 text-[12.5px] font-semibold text-ink-700 ring-1 ring-inset ring-ink-200 transition outline-none hover:bg-ink-50",
+                      navFinalizar.botaoConfirmacao === "voltar" && "ring-2 ring-ink-900 ring-offset-1",
+                    )}
+                  >
+                    {navFinalizar.botaoConfirmacao === "voltar" ? "▶ " : ""}Voltar às opções
+                  </button>
+                  <button
+                    ref={(el) => {
+                      confirmacaoModalRefs.current.confirmar = el;
+                    }}
+                    data-f10-zona="confirmacao"
+                    type="button"
+                    disabled={ocupado}
+                    onFocus={() =>
+                      setNavFinalizar((at) => ({ ...at, secao: "confirmacao", botaoConfirmacao: "confirmar" }))
+                    }
+                    onClick={() => void executarFechamento("emitir_nfce")}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg bg-way-600 px-4 py-2 text-[12.5px] font-bold text-white transition outline-none hover:bg-way-700 disabled:opacity-45",
+                      navFinalizar.botaoConfirmacao === "confirmar" && "ring-2 ring-ink-900 ring-offset-1",
+                    )}
+                  >
+                    <Icon name="check" className="size-4" />
+                    <span>
+                      {ocupado
+                        ? "Emitindo…"
+                        : `${navFinalizar.botaoConfirmacao === "confirmar" ? "▶ " : ""}Confirmar e emitir ${modelo}`}
+                    </span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -3199,15 +3697,20 @@ export function PdvView({
         />
       </Modal>
 
-      {/* SELEÇÃO DE CLIENTE (F8) */}
+      {/* SELEÇÃO DE CLIENTE (F8) COM NAVEGAÇÃO POR SETAS ↑ ↓ + ENTER */}
       <Modal
         aberto={abertoCliente}
         aoFechar={() => {
           setAbertoCliente(false);
-          buscaRef.current?.focus();
+          if (retornarAoFinalizarAposCliente) {
+            setRetornarAoFinalizarAposCliente(false);
+            setModalFinalizar(true);
+          } else {
+            buscaRef.current?.focus();
+          }
         }}
         titulo="Identificar cliente (F8)"
-        descricao="Busque por nome ou documento (CPF/CNPJ)"
+        descricao="Digite nome ou CPF/CNPJ · Setas ↑ ↓ escolhem · Enter confirma"
       >
         <div className="relative mb-3">
           <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-300">
@@ -3216,7 +3719,48 @@ export function PdvView({
           <input
             autoFocus
             value={buscaCliente}
-            onChange={(e) => setBuscaCliente(e.target.value)}
+            onChange={(e) => {
+              setBuscaCliente(e.target.value);
+              setCursorCliente(e.target.value.trim() ? 1 : 0);
+            }}
+            onKeyDown={(e) => {
+              const totalOpcoes = 1 + clientesFiltradosModal.length;
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setCursorCliente((at) => (at + 1) % totalOpcoes);
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setCursorCliente((at) => (at - 1 + totalOpcoes) % totalOpcoes);
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                const idxNormalizado = Math.min(cursorCliente, totalOpcoes - 1);
+                if (idxNormalizado <= 0) {
+                  setClienteId(null);
+                } else {
+                  const escolhido = clientesFiltradosModal[idxNormalizado - 1];
+                  if (escolhido) {
+                    setClienteId(escolhido.id);
+                    if (
+                      pagamentos.length === 0 &&
+                      (escolhido.condicaoPadrao === "30d" ||
+                        escolhido.condicaoPadrao === "14d" ||
+                        escolhido.condicaoPadrao === "7d" ||
+                        escolhido.condicaoPadrao === "60d")
+                    ) {
+                      setPagamentos([{ forma: "prazo", valor: total }]);
+                      setFormaAtivaModal("prazo");
+                    }
+                  }
+                }
+                setAbertoCliente(false);
+                if (retornarAoFinalizarAposCliente) {
+                  setRetornarAoFinalizarAposCliente(false);
+                  setModalFinalizar(true);
+                } else {
+                  buscaRef.current?.focus();
+                }
+              }
+            }}
             placeholder="nome, CPF ou CNPJ"
             className="w-full rounded-lg py-2 pl-9 pr-3 text-[13px] ring-1 ring-inset ring-ink-200 outline-none focus:ring-2 focus:ring-way-500"
           />
@@ -3225,44 +3769,65 @@ export function PdvView({
           <li>
             <button
               type="button"
+              onMouseEnter={() => setCursorCliente(0)}
               onClick={() => {
                 setClienteId(null);
                 setAbertoCliente(false);
-                buscaRef.current?.focus();
+                if (retornarAoFinalizarAposCliente) {
+                  setRetornarAoFinalizarAposCliente(false);
+                  setModalFinalizar(true);
+                } else {
+                  buscaRef.current?.focus();
+                }
               }}
-              className="w-full px-2 py-2.5 text-left text-[13px] font-semibold text-ink-600 hover:bg-way-50"
+              className={cn(
+                "w-full rounded-lg px-2.5 py-2.5 text-left text-[13px] font-semibold transition",
+                cursorCliente === 0
+                  ? "bg-way-50 text-way-900 ring-1 ring-inset ring-way-300"
+                  : "text-ink-600 hover:bg-way-50",
+              )}
             >
-              CONSUMIDOR (sem identificação)
+              {cursorCliente === 0 ? "▶ " : ""}CONSUMIDOR (sem identificação)
             </button>
           </li>
-          {clientes
-            .filter(
-              (c) =>
-                !buscaCliente.trim() ||
-                c.nome.toLowerCase().includes(buscaCliente.toLowerCase()) ||
-                c.documento.includes(buscaCliente),
-            )
-            .map((c) => (
+          {clientesFiltradosModal.map((c, idx) => {
+            const pos = idx + 1;
+            const destacado = cursorCliente === pos;
+            return (
               <li key={c.id}>
                 <button
                   type="button"
+                  onMouseEnter={() => setCursorCliente(pos)}
                   onClick={() => {
                     setClienteId(c.id);
                     setAbertoCliente(false);
                     if (
-                      c.condicaoPadrao === "30d" ||
-                      c.condicaoPadrao === "14d" ||
-                      c.condicaoPadrao === "7d" ||
-                      c.condicaoPadrao === "60d"
+                      pagamentos.length === 0 &&
+                      (c.condicaoPadrao === "30d" ||
+                        c.condicaoPadrao === "14d" ||
+                        c.condicaoPadrao === "7d" ||
+                        c.condicaoPadrao === "60d")
                     ) {
                       setPagamentos([{ forma: "prazo", valor: total }]);
+                      setFormaAtivaModal("prazo");
                     }
-                    buscaRef.current?.focus();
+                    if (retornarAoFinalizarAposCliente) {
+                      setRetornarAoFinalizarAposCliente(false);
+                      setModalFinalizar(true);
+                    } else {
+                      buscaRef.current?.focus();
+                    }
                   }}
-                  className="flex w-full items-center gap-3 px-2 py-2.5 text-left transition hover:bg-way-50"
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition",
+                    destacado ? "bg-way-50 ring-1 ring-inset ring-way-300" : "hover:bg-way-50",
+                  )}
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-semibold text-ink-800">{c.nome}</p>
+                    <p className="truncate text-[13px] font-semibold text-ink-800">
+                      {destacado ? "▶ " : ""}
+                      {c.nome}
+                    </p>
                     <p className="text-[11px] text-ink-400">
                       {c.documento || "sem documento"} · {c.condicaoPadrao}
                     </p>
@@ -3280,7 +3845,8 @@ export function PdvView({
                   </div>
                 </button>
               </li>
-            ))}
+            );
+          })}
         </ul>
       </Modal>
 

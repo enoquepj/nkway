@@ -86,6 +86,11 @@ import {
   validarTextoQuantidadeMultiplicador,
 } from "@/lib/multiplicadorPdv";
 import {
+  avancarAposLancamentoParcelaPdv,
+  criarEstadoInicialFinalizarPdv,
+  processarTeclaFinalizarPdv,
+} from "@/lib/navegacaoFinalizarPdv";
+import {
   carregarDavParaTelaPdv,
   converterReciboParaDocFiscalPdv,
   montarReciboDeFechamentoPdv,
@@ -1601,6 +1606,119 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("pdv-50", "PDV", "Fila offline (nkway.fila) sanitiza registros e calcula totais", teste50FilaSanitizacaoOk, "compatível com registros legados do navegador", true);
   ok("pdv-51", "PDV", "Inspetor da fila offline retém último erro sem descartar venda", teste51FilaResumoRetencaoErroOk, "permite corrigir caixa/estoque e reenviar", true);
   ok("pdv-52", "PDV", "ATALHOS_PDV integra Alt+G mantendo listener único e isolamento", teste52AtalhosEIntegridadeC3Ok, "F1, barra inferior e modais 100% sincronizados", true);
+
+  // Navegação 100% por teclado no F10 (Formas de pagamento + Modelo fiscal + DAV / Sem nota / NFC-e) — 6 verificações
+  const ctxPadraoF10 = {
+    temSaldoFaltando: true,
+    temParcelasLancadas: false,
+    podeDav: true,
+    podeSemNota: true,
+    podeEmitirFiscal: true,
+    confirmandoEmissao: false,
+    inputValorSelecionadoOuVazio: true,
+  };
+  let nav53 = criarEstadoInicialFinalizarPdv({
+    formaInicial: "dinheiro",
+    modeloAtual: "NFC-e",
+    ctx: ctxPadraoF10,
+  });
+  const sequenciaFormas: string[] = [nav53.formaAtiva];
+  for (let k = 0; k < 6; k++) {
+    const passo = processarTeclaFinalizarPdv(nav53, { key: "ArrowRight" }, ctxPadraoF10);
+    nav53 = passo.estado;
+    sequenciaFormas.push(nav53.formaAtiva);
+  }
+  const voltaEsquerda = processarTeclaFinalizarPdv(nav53, { key: "ArrowLeft" }, ctxPadraoF10);
+  const teste53SetasFormasF10Ok =
+    sequenciaFormas.join(",") === "dinheiro,pix,credito,debito,boleto,prazo,dinheiro" &&
+    voltaEsquerda.estado.formaAtiva === "prazo" &&
+    voltaEsquerda.acao.tipo === "MUDAR_FORMA";
+
+  // 54) Digitação numérica direta + Enter lança parcela e, ao quitar, avança direto para as opções de documento
+  const dig54 = processarTeclaFinalizarPdv(nav53, { key: "5" }, ctxPadraoF10);
+  const ent54 = processarTeclaFinalizarPdv(dig54.estado, { key: "Enter" }, ctxPadraoF10);
+  const posParcial54 = avancarAposLancamentoParcelaPdv(ent54.estado, true, ctxPadraoF10);
+  const posQuitado54 = avancarAposLancamentoParcelaPdv(ent54.estado, false, ctxPadraoF10);
+  const teste54ValorEAvancoOpcoesOk =
+    dig54.estado.secao === "valor" &&
+    dig54.acao.tipo === "INICIAR_DIGITACAO_VALOR" &&
+    ent54.acao.tipo === "LANCAR_PARCELA" &&
+    posParcial54.secao === "formas" &&
+    posQuitado54.secao === "opcoes";
+
+  // 55) Setas ← → alternam modelo fiscal (NFC-e ↔ NF-e ↔ SAT) tanto na seção modelo quanto sobre as opções
+  const emModelo55 = { ...posQuitado54, secao: "modelo" as const };
+  const m1 = processarTeclaFinalizarPdv(emModelo55, { key: "ArrowRight" }, { ...ctxPadraoF10, temSaldoFaltando: false });
+  const m2 = processarTeclaFinalizarPdv(m1.estado, { key: "ArrowRight" }, { ...ctxPadraoF10, temSaldoFaltando: false });
+  const m3 = processarTeclaFinalizarPdv(m2.estado, { key: "ArrowRight" }, { ...ctxPadraoF10, temSaldoFaltando: false });
+  const mEmOpcoes = processarTeclaFinalizarPdv(
+    { ...m3.estado, secao: "opcoes" },
+    { key: "ArrowRight" },
+    { ...ctxPadraoF10, temSaldoFaltando: false },
+  );
+  const teste55SetasModeloFiscalOk =
+    m1.estado.modeloFiscal === "NF-e" &&
+    m2.estado.modeloFiscal === "SAT" &&
+    m3.estado.modeloFiscal === "NFC-e" &&
+    mEmOpcoes.estado.modeloFiscal === "NF-e" &&
+    mEmOpcoes.acao.tipo === "MUDAR_MODELO";
+
+  // 56) Setas ↑ ↓ e teclas 1/2/3 selecionam DAV, Sem nota e Emitir fiscal e Enter executa sem mouse
+  const ctxQuitado56 = { ...ctxPadraoF10, temSaldoFaltando: false, temParcelasLancadas: true };
+  let op56 = criarEstadoInicialFinalizarPdv({
+    formaInicial: "pix",
+    modeloAtual: "NFC-e",
+    ctx: ctxQuitado56,
+  });
+  const paraSemNota = processarTeclaFinalizarPdv(op56, { key: "ArrowUp" }, ctxQuitado56);
+  const paraDav = processarTeclaFinalizarPdv(paraSemNota.estado, { key: "ArrowUp" }, ctxQuitado56);
+  const enterDav = processarTeclaFinalizarPdv(paraDav.estado, { key: "Enter" }, ctxQuitado56);
+  const atalho2 = processarTeclaFinalizarPdv(paraDav.estado, { key: "2" }, ctxQuitado56);
+  const enterSemNota = processarTeclaFinalizarPdv(atalho2.estado, { key: "Enter" }, ctxQuitado56);
+  const atalho3 = processarTeclaFinalizarPdv(atalho2.estado, { key: "3" }, ctxQuitado56);
+  const enterFiscal = processarTeclaFinalizarPdv(atalho3.estado, { key: "Enter" }, ctxQuitado56);
+  const teste56SetasOpcoesDocumentoOk =
+    op56.secao === "opcoes" &&
+    op56.opcaoFechamento === "emitir_nfce" &&
+    paraSemNota.estado.opcaoFechamento === "sem_nota" &&
+    paraDav.estado.opcaoFechamento === "dav" &&
+    enterDav.acao.tipo === "EXECUTAR_FECHAMENTO" &&
+    enterDav.acao.modo === "dav" &&
+    enterSemNota.acao.tipo === "EXECUTAR_FECHAMENTO" &&
+    enterSemNota.acao.modo === "sem_nota" &&
+    enterFiscal.acao.tipo === "ABRIR_CONFIRMACAO_FISCAL" &&
+    enterFiscal.estado.secao === "confirmacao";
+
+  // 57) Confirmação de emissão fiscal navega com ← → entre Voltar e Confirmar, Enter confirma e Esc volta às opções
+  const ctxConf57 = { ...ctxQuitado56, confirmandoEmissao: true };
+  const altBotao57 = processarTeclaFinalizarPdv(enterFiscal.estado, { key: "ArrowLeft" }, ctxConf57);
+  const voltaBotao57 = processarTeclaFinalizarPdv(altBotao57.estado, { key: "ArrowRight" }, ctxConf57);
+  const enterConf57 = processarTeclaFinalizarPdv(voltaBotao57.estado, { key: "Enter" }, ctxConf57);
+  const escConf57 = processarTeclaFinalizarPdv(voltaBotao57.estado, { key: "Escape" }, ctxConf57);
+  const teste57ConfirmacaoTecladoOk =
+    altBotao57.estado.botaoConfirmacao === "voltar" &&
+    voltaBotao57.estado.botaoConfirmacao === "confirmar" &&
+    enterConf57.acao.tipo === "EXECUTAR_FECHAMENTO" &&
+    enterConf57.acao.modo === "emitir_nfce" &&
+    escConf57.acao.tipo === "VOLTAR_OPCOES" &&
+    escConf57.estado.secao === "opcoes";
+
+  // 58) DOM de Pdv.tsx conectado às 5 zonas data-f10-zona mantendo listener único
+  const listenersPdvF10 = (pdvTxt.match(/window\.addEventListener\("keydown"/g) ?? []).length;
+  const teste58DomZonasF10Ok =
+    pdvTxt.includes('data-f10-zona="formas"') &&
+    pdvTxt.includes('data-f10-zona="valor"') &&
+    pdvTxt.includes('data-f10-zona="modelo"') &&
+    pdvTxt.includes('data-f10-zona="opcoes"') &&
+    pdvTxt.includes('data-f10-zona="confirmacao"') &&
+    listenersPdvF10 === 2;
+
+  ok("pdv-53", "PDV", "F10 navega pelas 6 formas de pagamento com setas ← → sem mouse", teste53SetasFormasF10Ok, "Dinheiro ↔ PIX ↔ Crédito ↔ Débito ↔ Boleto ↔ Prazo", true);
+  ok("pdv-54", "PDV", "F10 lança valor por Enter e avança direto às opções ao quitar", teste54ValorEAvancoOpcoesOk, "digitação direta + transição automática p/ documento", true);
+  ok("pdv-55", "PDV", "F10 alterna modelo fiscal (NFC-e / NF-e / SAT) com setas ← →", teste55SetasModeloFiscalOk, "funciona na barra de modelo e sobre a opção fiscal", true);
+  ok("pdv-56", "PDV", "F10 seleciona DAV, Sem nota e Emitir fiscal com ↑ ↓ / 1..3 + Enter", teste56SetasOpcoesDocumentoOk, "100% operável por teclado sem uso de mouse", true);
+  ok("pdv-57", "PDV", "Confirmação fiscal no F10 navega com setas, Enter confirma e Esc volta", teste57ConfirmacaoTecladoOk, "Voltar às opções ↔ Confirmar e emitir", true);
+  ok("pdv-58", "PDV", "Modal F10 possui foco real nas 5 zonas e listener global único", teste58DomZonasF10Ok, "formas, valor, modelo, opções e confirmação sincronizados", true);
 
   /* -------------------------------------------------------------- estoque */
   const ordemKardex = [...movs].sort((a, b) => new Date(a.data ?? 0).getTime() - new Date(b.data ?? 0).getTime());

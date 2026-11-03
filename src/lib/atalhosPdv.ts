@@ -130,9 +130,11 @@ export const ATALHOS_PDV: readonly AtalhoPdvItem[] = [
     id: "finalizar",
     tecla: "F10",
     rotuloCurto: "Finalizar",
-    descricao: "Abre a tela de finalização com as 3 opções (Salvar como DAV, Sem nota, Emitir NFC-e).",
+    descricao:
+      "Abre a finalização 100% por teclado: setas ← → ↑ ↓ e Enter escolhem pagamento, modelo (NFC-e/NF-e/SAT) e ação (1 DAV, 2 Sem nota, 3 Emitir).",
+    alternativaNavegador: "Teclas rápidas 1, 2 e 3 selecionam DAV, Sem nota ou Emissão fiscal; Alt+1..6 escolhem a forma",
     exibirNaBarra: true,
-    roteiroTeste: "Com itens na venda, pressionar F10 e conferir as 3 opções de fechamento.",
+    roteiroTeste: "Pressionar F10, navegar só com setas ← → ↑ ↓ entre formas de pagamento e DAV/Sem nota/NFC-e e confirmar com Enter.",
   },
   {
     id: "remover_ultimo",

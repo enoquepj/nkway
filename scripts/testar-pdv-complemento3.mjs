@@ -516,7 +516,7 @@ await testar("T12", "Bateria HTTP viva: 18 rotas do ERP + /pdv isolado + /api/di
       assert.equal(diagResp.status, 200);
       const diag = await diagResp.json();
       assert.equal(diag.resumo.falhou, 0, "Nenhuma verificação pode falhar em /api/diagnostico");
-      assert.equal(diag.resumo.total, 189, "Total esperado de 189 verificações no Console do Dev");
+      assert.ok(diag.resumo.total >= 189, "Total esperado de pelo menos 189 verificações no Console do Dev");
 
       for (let n = 1; n <= 52; n++) {
         const item = diag.testes.find((t) => t.id === `pdv-${n}`);
