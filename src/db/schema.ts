@@ -188,6 +188,12 @@ export const vendas = pgTable(
     origem: text("origem").default("pdv"),
     /** DAV que originou esta nota */
     davOrigemId: uuid("dav_origem_id"),
+    /**
+     * Confirmação comercial explícita do motor de caixa: `orcamento` | `concretizado`.
+     * NULL = legado preservado (nunca convertido automaticamente); a decisão é inferida
+     * pelos campos reais em `src/lib/caixa.ts` (`compoeCaixa` / `classificarVendaCaixa`).
+     */
+    statusComercial: text("status_comercial"),
     data: timestamp("data", { withTimezone: true }).defaultNow(),
   },
   (t) => [
@@ -459,6 +465,11 @@ export const caixaSessoes = pgTable(
     reabertoEm: timestamp("reaberto_em", { withTimezone: true }),
     reabertoPorNome: text("reaberto_por_nome").default(""),
     justificativaReabertura: text("justificativa_reabertura").default(""),
+    /** null | pendente | homologado — aprovação de quebra no fechamento às cegas */
+    statusAprovacao: text("status_aprovacao"),
+    homologadoPorUsuarioId: uuid("homologado_por_usuario_id"),
+    /** fundo de troco provisionado para a próxima abertura (R$ 100,00 por padrão) */
+    fundoTroco: numeric("fundo_troco", { precision: 12, scale: 2, mode: "number" }),
   },
   (t) => [
     index("nk_caixa_sessao_empresa_idx").on(t.empresaId, t.abertoEm),
@@ -488,6 +499,33 @@ export const caixaMovimentos = pgTable(
     index("nk_caixa_mov_empresa_idx").on(t.empresaId),
   ],
 );
+
+/**
+ * Log de quebra de caixa (fechamento às cegas).
+ * `SOBRA` quando Valor_Informado > Valor_Esperado; `FALTA` no caso contrário.
+ * `homologadoPorUsuarioId` só é preenchido por usuário com `caixa.homologar`.
+ */
+export const caixaQuebraLogs = pgTable(
+  "nk_caixa_quebra_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    sessaoId: uuid("sessao_id").notNull().references(() => caixaSessoes.id, { onDelete: "cascade" }),
+    usuarioId: uuid("usuario_id").references(() => usuarios.id),
+    valorDiferenca: numeric("valor_diferenca", { precision: 12, scale: 2, mode: "number" }).notNull().default(0),
+    tipo: text("tipo").notNull().default("FALTA"),
+    justificativa: text("justificativa").notNull().default(""),
+    homologadoPorUsuarioId: uuid("homologado_por_usuario_id"),
+    homologadoEm: timestamp("homologado_em", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("nk_caixa_quebra_sessao_idx").on(t.sessaoId),
+    index("nk_caixa_quebra_empresa_idx").on(t.empresaId, t.createdAt),
+  ],
+);
+
+export type CaixaQuebraLogRow = typeof caixaQuebraLogs.$inferSelect;
 
 export type DevolucaoItem = {
   produtoId: string | null;

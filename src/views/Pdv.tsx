@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Impressao, type AlvoImpresso } from "@/components/Impressao";
+import { ModalFechamentoCego } from "@/components/ModalFechamentoCego";
 import { Tabela, type Coluna } from "@/components/Tabela";
 import {
   Badge,
@@ -138,6 +139,13 @@ const EMITENTE_PADRAO: Emitente = {
   codMunicipio: "",
 };
 
+/** Rótulos do estado lógico da gaveta — nenhum valor monetário aparece ao operador. */
+const ROTULO_ESTADO_GAVETA: Record<"normal" | "alerta" | "bloqueado", string> = {
+  normal: "Gaveta normal",
+  alerta: "Limite de segurança atingido · realize uma sangria",
+  bloqueado: "Sangria obrigatória · venda em dinheiro bloqueada",
+};
+
 export function PdvView({
   produtos,
   clientes,
@@ -161,16 +169,26 @@ export function PdvView({
   emitente?: Emitente;
   cscId?: string;
   usuario?: { nome: string; papel: PerfilUsuario };
+  /** Blind balance: só o estado lógico chega ao cliente, nunca valores esperados. */
   sessaoCaixa?: {
     id: string;
     numero: number;
     terminal: string;
-    saldoDinheiro: number;
-    totalEsperado: number;
+    estadoGaveta: "normal" | "alerta" | "bloqueado";
+    bloquearVendaDinheiro: boolean;
   } | null;
 }) {
   const toast = useToast();
   const router = useRouter();
+
+  // Alerta de segurança da gaveta: o servidor envia só o estado, nunca o valor.
+  const estadoGaveta = sessaoCaixa?.estadoGaveta ?? "normal";
+  useEffect(() => {
+    if (estadoGaveta === "alerta") toast("Limite de segurança atingido. Realize uma sangria.", "info");
+    if (estadoGaveta === "bloqueado") {
+      toast("Gaveta acima de 120% do limite. Venda em dinheiro bloqueada até a sangria.", "erro");
+    }
+  }, [estadoGaveta, toast]);
 
   const emitenteFinal: Emitente = emitente ?? {
     ...EMITENTE_PADRAO,
@@ -186,6 +204,7 @@ export function PdvView({
   const podeFaturarDav = temPermissao(usuario.papel, "dav.faturar");
   const podeAbrirCaixa = temPermissao(usuario.papel, "caixa.abrir");
   const podeMovimentarCaixa = temPermissao(usuario.papel, "caixa.movimentar");
+  const podeFecharCaixa = temPermissao(usuario.papel, "caixa.fechar");
   const podeCancelarVenda = temPermissao(usuario.papel, "venda.cancelar");
 
   const [modalAbrirCaixa, setModalAbrirCaixa] = useState(false);
@@ -208,6 +227,8 @@ export function PdvView({
   const [modelo, setModelo] = useState<"NFC-e" | "NF-e" | "SAT">("NFC-e");
   const [validadeDav, setValidadeDav] = useState(somaDias(hojeISO(), 3));
   const [cupom, setCupom] = useState<ReciboTermicoPdv | null>(null);
+  /** Etapa 3 — fechamento às cegas direto na tela de vendas */
+  const [modalFechamentoCego, setModalFechamentoCego] = useState(false);
 
   // Complemento PDV 3 de 3 — DAV carregado no caixa, Gaveta rápida (Alt+G), Cancelamento em F3 e Inspetor de Fila Offline
   const [davCarregado, setDavCarregado] = useState<{ id: string; numero: number } | null>(null);
@@ -1073,6 +1094,16 @@ export function PdvView({
           : pagamentos.length > 0
             ? pagamentos
             : [{ forma: formaUnicaSelecionada, valor: total }];
+
+      // Bloqueio nativo: 120% do limite da gaveta impede concluir venda em dinheiro
+      // até que uma sangria seja registrada com sucesso no banco.
+      if (
+        modo !== "dav" &&
+        sessaoCaixa?.bloquearVendaDinheiro &&
+        payloadPagamentos.some((p) => String(p.forma).toLowerCase() === "dinheiro")
+      ) {
+        return toast("Limite de segurança da gaveta atingido. Realize uma sangria antes de finalizar em dinheiro.", "erro");
+      }
 
       const somaPagamentos = round2(payloadPagamentos.reduce((s, p) => s + p.valor, 0));
       if (modo !== "dav" && somaPagamentos + 0.01 < total) {
@@ -2039,8 +2070,19 @@ export function PdvView({
                 <span>
                   Caixa #{sessaoCaixa.numero} ({sessaoCaixa.terminal})
                 </span>
-                <span className="tabular font-bold text-white">· {moeda(sessaoCaixa.saldoDinheiro)}</span>
+                <span className="font-semibold text-way-200">· {ROTULO_ESTADO_GAVETA[sessaoCaixa.estadoGaveta]}</span>
               </button>
+              {podeFecharCaixa && (
+                <button
+                  type="button"
+                  onClick={() => setModalFechamentoCego(true)}
+                  title="Encerrar o turno com fechamento às cegas, sem sair do PDV"
+                  className="inline-flex items-center gap-1 rounded-lg bg-ink-800 px-2 py-1 text-[11.5px] font-semibold text-ink-100 ring-1 ring-inset ring-ink-700 transition hover:bg-ink-700 hover:text-white"
+                >
+                  <Icon name="cadeado" className="size-3.5" />
+                  <span>Encerrar Turno</span>
+                </button>
+              )}
               {podeMovimentarCaixa && (
                 <button
                   type="button"
@@ -4384,7 +4426,7 @@ export function PdvView({
         }
         descricao={
           sessaoCaixa
-            ? `Saldo atual em dinheiro na gaveta: ${moeda(sessaoCaixa.saldoDinheiro)}`
+            ? `Estado da gaveta: ${ROTULO_ESTADO_GAVETA[sessaoCaixa.estadoGaveta]}`
             : "Abra o caixa antes de registrar suprimento ou sangria"
         }
         largura="max-w-md"
@@ -4725,6 +4767,17 @@ export function PdvView({
           </ul>
         )}
       </Modal>
+
+      <ModalFechamentoCego
+        aberto={modalFechamentoCego}
+        aoFechar={() => setModalFechamentoCego(false)}
+        aoConcluir={() => router.refresh()}
+        sessao={
+          sessaoCaixa
+            ? { id: sessaoCaixa.id, numero: sessaoCaixa.numero, terminal: sessaoCaixa.terminal }
+            : null
+        }
+      />
     </div>
   );
 }

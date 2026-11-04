@@ -157,6 +157,7 @@ export function UsuariosView({
   const ativosCount = usuarios.filter((u) => u.ativo).length;
   const inativosCount = usuarios.length - ativosCount;
   const adminsCount = usuarios.filter((u) => u.ativo && u.papel === "administrador").length;
+  const gerentesCount = usuarios.filter((u) => u.ativo && u.papel === "gerente").length;
   const operadoresCount = usuarios.filter((u) => u.ativo && u.papel === "operador").length;
   const vendedoresCount = usuarios.filter((u) => u.ativo && u.papel === "vendedor").length;
 
@@ -365,9 +366,9 @@ export function UsuariosView({
           icone="cadeado"
         />
         <Kpi
-          rotulo="Operadores e Vendedores"
-          valor={`${operadoresCount} op · ${vendedoresCount} vend`}
-          detalhe="frente de caixa e pré-venda"
+          rotulo="Equipe operacional"
+          valor={`${gerentesCount} ger · ${operadoresCount} op · ${vendedoresCount} vend`}
+          detalhe="gerência, frente de caixa e pré-venda"
           tom="info"
           icone="caixa"
         />

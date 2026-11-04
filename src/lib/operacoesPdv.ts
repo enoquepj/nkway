@@ -712,7 +712,10 @@ export type ValidacaoMovimentoGavetaPdv =
  * - Bloqueia sangria em dinheiro acima do saldo em dinheiro disponível na gaveta.
  */
 export function validarMovimentoGavetaPdv(params: {
-  sessaoAberta: { id: string; numero: number; terminal: string; saldoDinheiro: number } | null;
+  /** `saldoDinheiro` é opcional: o PDV não recebe valores esperados (blind balance),
+   *  e a validação de saldo insuficiente é feita no servidor. Testes legados ainda
+   *  podem informar o saldo explicitamente. */
+  sessaoAberta: { id: string; numero: number; terminal: string; saldoDinheiro?: number } | null;
   tipo: string;
   forma: string;
   valorInformado: number | string;
@@ -763,7 +766,9 @@ export function validarMovimentoGavetaPdv(params: {
   }
 
   const saldoAtual = round2(Math.max(0, Number(params.sessaoAberta.saldoDinheiro) || 0));
-  if (tipo === "sangria" && forma === "dinheiro" && valor > saldoAtual + 0.01) {
+  const saldoConhecido = typeof params.sessaoAberta.saldoDinheiro === "number";
+  // Sem saldo conhecido (PDV blind balance), a trava é aplicada pela Server Action.
+  if (saldoConhecido && tipo === "sangria" && forma === "dinheiro" && valor > saldoAtual + 0.01) {
     return {
       ok: false,
       codigo: "saldo_insuficiente",

@@ -68,7 +68,7 @@ console.log("nkway.sessao="+p+"."+s);await c.end();})();' 2>/dev/null)
 if [[ -z "$COOKIE" ]]; then
   echo "  aviso: sem usuário no banco — rode build_and_start (ou npm run build + start) para o seed criar a empresa demo"
 else
-  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /config; do
+  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /prontidao /dashboard/auditoria-caixa /config; do
     code=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" "$BASE$p")
     [[ "$code" == "200" ]]; marca $? "GET $p = $code"
   done
@@ -87,10 +87,29 @@ else
     marca 1 "/documentos continua com Shell"
   fi
 
+  ROOT_HTML=$(curl -s -H "Cookie: $COOKIE" "$BASE/")
+  if echo "$ROOT_HTML" | grep -q "Starter template"; then
+    marca 1 "/ mostra o Dashboard (não o template inicial)"
+  else
+    marca 0 "/ mostra o Dashboard (não o template inicial)"
+  fi
+
   CRON_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/dfe/dist")
   [[ "$CRON_CODE" == "401" ]]; marca $? "GET /api/dfe/dist sem segredo = $CRON_CODE"
   CRON_ERRADO=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/dfe/dist" -H "x-dfe-cron-secret: segredo-errado" -H "Authorization: Bearer segredo-errado" -H "Content-Type: application/json" --data '{"origem":"smoke"}')
   [[ "$CRON_ERRADO" == "401" ]]; marca $? "POST /api/dfe/dist com segredo errado = $CRON_ERRADO"
+
+  PRON_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/prontidao")
+  [[ "$PRON_ANON" == "401" ]]; marca $? "GET /api/prontidao sem sessão = $PRON_ANON"
+
+  PRON_JSON=$(curl -s -H "Cookie: $COOKIE" "$BASE/api/prontidao" 2>/dev/null)
+  PRON_OK=$(node -e '
+    const j=JSON.parse(process.argv[1]||"{}");
+    const blocos=Array.isArray(j.blocos)?j.blocos.length:0;
+    const chavesProibidas=/DATABASE_URL|ASAAS_API_KEY|STRIPE_SECRET_KEY|pfx|senha|token/i.test(JSON.stringify(j));
+    console.log(j.ok===true && blocos>=5 && j.resumo?.total>0 && !chavesProibidas ? "ok" : "falha");
+  ' "$PRON_JSON" 2>/dev/null)
+  [[ "$PRON_OK" == "ok" ]]; marca $? "GET /api/prontidao com sessão (blocos + sem segredos)"
 
   XML_ANON=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/documentos/xml" -H "Content-Type: application/json" --data '{"ids":[]}')
   [[ "$XML_ANON" == "401" ]]; marca $? "POST /api/documentos/xml sem sessão = $XML_ANON"
@@ -116,6 +135,12 @@ else
         console.log(`         ${t.critico?"FALHA":"atenção"} ${t.id} ${t.nome} — ${t.detalhe}`);
     ' "$DIAG"
   fi
+
+  echo "→ motor de caixa unificado (16 cenários)"
+  node scripts/testar-caixa-motor.mjs > /tmp/nk-caixa-motor.log 2>&1
+  MOTOR=$?
+  marca $MOTOR "motor de caixa unificado (16 cenários)"
+  if [[ $MOTOR -ne 0 ]]; then tail -25 /tmp/nk-caixa-motor.log; fi
 fi
 
 echo

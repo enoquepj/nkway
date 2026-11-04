@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { normalizarPerfil } from "@/lib/permissoes";
 import { contexto } from "@/lib/session";
 import type { Emitente } from "@/lib/danfe";
-import { listarClientes, listarProdutos, obterSessaoCaixaOperador } from "@/server/dados";
+import { listarClientes, listarProdutos } from "@/server/dados";
+import { obterEstadoGavetaSessao } from "@/server/caixaCore";
 import { PdvView } from "@/views/Pdv";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +12,12 @@ export default async function PdvPage() {
   const c = await contexto();
   if (!c) redirect("/login");
   const papel = normalizarPerfil(c.usuario.papel);
-  const [produtos, clientes, sessaoCaixa] = await Promise.all([
+  const [produtos, clientes, estadoGaveta] = await Promise.all([
     listarProdutos(c.empresaId, true),
     listarClientes(c.empresaId),
-    obterSessaoCaixaOperador(c.empresaId, c.usuario.id, papel),
+    // Blind balance: o PDV recebe SOMENTE o estado lógico da gaveta e o boolean
+    // de bloqueio. Nenhum valor esperado ou saldo em dinheiro sai do servidor.
+    obterEstadoGavetaSessao(c.empresaId, c.usuario.id),
   ]);
   const fiscal = (c.empresa.fiscal ?? {}) as Record<string, unknown>;
   return (
@@ -56,13 +59,13 @@ export default async function PdvPage() {
         papel,
       }}
       sessaoCaixa={
-        sessaoCaixa
+        estadoGaveta
           ? {
-              id: sessaoCaixa.id,
-              numero: sessaoCaixa.numero,
-              terminal: sessaoCaixa.terminal,
-              saldoDinheiro: sessaoCaixa.apuracao.esperadosMap.dinheiro ?? 0,
-              totalEsperado: sessaoCaixa.apuracao.totalEsperado,
+              id: estadoGaveta.sessaoId,
+              numero: estadoGaveta.numero,
+              terminal: estadoGaveta.terminal,
+              estadoGaveta: estadoGaveta.estadoGaveta,
+              bloquearVendaDinheiro: estadoGaveta.bloquearVendaDinheiro,
             }
           : null
       }

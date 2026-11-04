@@ -4,9 +4,9 @@
  * `apurarSessaoCaixa` e fechar a sessão dentro de transação com trava de linha.
  * Reutilizado por `src/server/acoes/caixa.ts`, `src/server/dados.ts` e pela bateria de testes.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { caixaMovimentos, caixaSessoes, vendas } from "@/db/schema";
+import { caixaMovimentos, caixaQuebraLogs, caixaSessoes, vendas } from "@/db/schema";
 import {
   apurarSessaoCaixa,
   calcularConferenciaCaixa,
@@ -264,4 +264,113 @@ export async function fecharSessaoCaixaTransacional(params: {
       justificativa,
     };
   });
+}
+
+/**
+ * Estado lógico da gaveta para o PDV (Etapa 2/2026).
+ * REGRA: devolve APENAS o estado e o boolean de bloqueio — nenhum valor esperado
+ * ou saldo em dinheiro sai do servidor para a tela do operador (blind balance).
+ */
+export async function obterEstadoGavetaSessao(empresaId: string, usuarioId: string) {
+  const [sessao] = await db
+    .select({
+      id: caixaSessoes.id,
+      numero: caixaSessoes.numero,
+      terminal: caixaSessoes.terminal,
+      saldoInicial: caixaSessoes.saldoInicial,
+    })
+    .from(caixaSessoes)
+    .where(
+      and(
+        eq(caixaSessoes.empresaId, empresaId),
+        eq(caixaSessoes.operadorId, usuarioId),
+        eq(caixaSessoes.status, "aberto"),
+      ),
+    )
+    .limit(1);
+  if (!sessao) return null;
+
+  const apuracao = await apurarSessaoNoBanco(empresaId, sessao);
+  return {
+    sessaoId: sessao.id,
+    numero: sessao.numero,
+    terminal: sessao.terminal,
+    estadoGaveta: apuracao.estadoGaveta,
+    bloquearVendaDinheiro: apuracao.bloquearVendaDinheiro,
+  };
+}
+
+export type LinhaAuditoriaCaixa = {
+  sessaoId: string;
+  numero: number;
+  terminal: string;
+  operadorNome: string;
+  status: string;
+  statusAprovacao: string | null;
+  abertoEm: string;
+  fechadoEm: string;
+  valoresEsperados: Record<string, number>;
+  valoresInformados: Record<string, number>;
+  diferencas: Record<string, number>;
+  totalEsperado: number;
+  totalInformado: number;
+  diferencaTotal: number;
+  justificativaFechamento: string;
+  quebras: {
+    id: string;
+    valorDiferenca: number;
+    tipo: string;
+    justificativa: string;
+    homologadoPorUsuarioId: string | null;
+    homologadoEm: string | null;
+  }[];
+};
+
+/** Join `nk_caixa_sessao` × `nk_caixa_quebra_log` para `/dashboard/auditoria-caixa` (somente gerentes). */
+export async function listarAuditoriaCaixa(empresaId: string, limite = 100): Promise<LinhaAuditoriaCaixa[]> {
+  const sessoes = await db
+    .select()
+    .from(caixaSessoes)
+    .where(and(eq(caixaSessoes.empresaId, empresaId), eq(caixaSessoes.status, "fechado")))
+    .orderBy(desc(caixaSessoes.fechadoEm))
+    .limit(Math.min(500, Math.max(1, limite)));
+  if (sessoes.length === 0) return [];
+
+  const ids = sessoes.map((s) => s.id);
+  const logs = await db
+    .select()
+    .from(caixaQuebraLogs)
+    .where(and(eq(caixaQuebraLogs.empresaId, empresaId), inArray(caixaQuebraLogs.sessaoId, ids)));
+  const porSessao = new Map<string, typeof logs>();
+  for (const log of logs) {
+    const lista = porSessao.get(log.sessaoId) ?? [];
+    lista.push(log);
+    porSessao.set(log.sessaoId, lista);
+  }
+
+  return sessoes.map((s) => ({
+    sessaoId: s.id,
+    numero: s.numero,
+    terminal: s.terminal,
+    operadorNome: s.operadorNome,
+    status: s.status,
+    statusAprovacao: s.statusAprovacao ?? null,
+    abertoEm: s.abertoEm ? new Date(s.abertoEm).toISOString() : "",
+    fechadoEm: s.fechadoEm ? new Date(s.fechadoEm).toISOString() : "",
+    valoresEsperados: (s.valoresEsperados ?? {}) as Record<string, number>,
+    valoresInformados: (s.valoresInformados ?? {}) as Record<string, number>,
+    diferencas: (s.diferencas ?? {}) as Record<string, number>,
+    totalEsperado: N(s.totalEsperado),
+    totalInformado: N(s.totalInformado),
+    diferencaTotal: N(s.diferencaTotal),
+    justificativaFechamento: s.justificativaFechamento ?? "",
+    quebras: (porSessao.get(s.id) ?? []).map((q) => ({
+      id: q.id,
+      valorDiferenca: N(q.valorDiferenca),
+      tipo: q.tipo,
+      justificativa: q.justificativa,
+      homologadoPorUsuarioId: q.homologadoPorUsuarioId ?? null,
+      homologadoEm: q.homologadoEm ? new Date(q.homologadoEm).toISOString() : null,
+    })),
+  }));
 }

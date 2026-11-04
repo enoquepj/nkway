@@ -3,7 +3,7 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Atualizado em:** 2026-11-03 (produção Next.js no Vercel + Supabase funcionando; rota de agendamento DF-e `/api/dfe/dist` restaurada; motor de apuração/fechamento de caixa corrigido)
+**Atualizado em:** 2026-10-31 (produção Next.js no Vercel + Supabase funcionando)
 
 ---
 
@@ -38,6 +38,7 @@
 | Tabelas | legado sem prefixo preservado + Next `nk_*` em produção (assistente somente-leitura em `/migracao`) |
 | RLS `nk_*` | desativado por enquanto; tenant server-side por `empresa_id` |
 | Guia | `VERCEL_SUPABASE.md` |
+| Motor de caixa e regras de `compoeCaixa` / `operacaoEconomicaId` | `CONTEXTO_ARENA.md` → seção 6c (matriz, exemplos de troco e roteiro manual) |
 
 Regras: não criar outro Supabase, não recomendar Neon, não redefinir senha, não recriar tabelas e não alterar Vercel/banco se `/api/health` estiver ok. Nunca registrar segredo em documentação ou print.
 
@@ -71,8 +72,13 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 | Emissor Fiscal SEFAZ 4.00, contingência e webhook | Rota `/emissor` + `/api/fiscal/webhook` · `src/views/EmissorFiscal.tsx` + `src/server/emissorFiscalCore.ts` |
 | Produtos e manutenção de preços | Rota `/produtos` · `src/views/Produtos.tsx` + `src/server/acoes/cadastros.ts` |
 | Script consolidado aditivo de tabelas/colunas `nk_*` | `ATUALIZAR_SUPABASE_AGORA.sql` + `src/db/migracao.ts` |
-| Agendamento DF-e a cada 10 min (cron/webhook; 401 sem `DFE_CRON_SECRET`/`CRON_SECRET`; só empresas ativas com A1 em modo live; demo apenas a pedido) | `GET`/`POST /api/dfe/dist` · `src/app/api/dfe/dist/route.ts` + `executarCicloCronDfe` / `verificarAutenticacaoCronDfe` em `src/server/dfeCore.ts` · como agendar: `supabase/DFE_ROTEIRO_CONFIG.md` → Fase 7 → Opção 0 |
-| Motor de apuração e fechamento de caixa (sessão real do operador; todas as vendas concretas — fiscal, sem nota, DAV concreto; DAV orçamento fora; DAV + nota sem duplicidade; pagamento dividido com troco só em dinheiro; fechamento em transação com `FOR UPDATE` e snapshot) | `src/lib/caixa.ts` (`compoeCaixa`, `apurarSessaoCaixa`, `ratearPagamentosDetalhado`) + `src/server/caixaCore.ts` (`fecharSessaoCaixaTransacional`) + `src/server/acoes/caixa.ts` · testes `cx-6`…`cx-22` e `node scripts/testar-caixa-motor.mjs` · detalhes em `CONTEXTO_ARENA.md` §6 item 13 e §4 itens 33–38 |
+| Central de prontidão (o que está pronto e o que falta por chave externa, sem expor valores) | Rota `/prontidao` + `GET /api/prontidao` · `src/lib/prontidao.ts` + `src/server/prontidaoCore.ts` + `src/views/Prontidao.tsx` |
+| Captura automática de DF-e por cron (restaurada no baseline; 401 sem segredo) | `GET|POST /api/dfe/dist` · `src/app/api/dfe/dist/route.ts` + `DFE_CRON_SECRET` / `CRON_SECRET` |
+| Perfil Gerente e quebra de caixa (Etapa 1) | `src/lib/permissoes.ts` (`gerente`, `caixa.homologar`, `caixa.auditoria`) · `src/db/schema.ts` (`nk_caixa_quebra_log` + 3 colunas em `nk_caixa_sessao`) · `src/db/migracao.ts` · `src/lib/migracaoLegado.ts` · `supabase/migrations/20261106_caixa_quebra_aprovacao.sql` · `usr-6` / `cx-23` no diagnóstico |
+| Gaveta, blind balance e fechamento às cegas (Etapa 2) | `src/lib/caixa.ts` (constantes + `estadoGavetaPorSaldo` + `"cofre"`) · `src/server/caixaCore.ts` (`obterEstadoGavetaSessao`, `listarAuditoriaCaixa`) · `src/server/acoes/caixa.ts` (`fecharTurnoCego`, `homologarQuebraCaixa`, fundo automático) · `src/app/(pdv)/pdv/page.tsx` · `src/views/Pdv.tsx` · `src/views/Caixa.tsx` · `src/lib/operacoesPdv.ts` · `cx-24` / `cx-25` |
+| UI de fechamento e auditoria (Etapa 3) | `src/components/ModalFechamentoCego.tsx` · `src/views/Pdv.tsx` (botão Encerrar Turno) · `src/app/(painel)/dashboard/auditoria-caixa/page.tsx` · `src/views/AuditoriaCaixa.tsx` · link no `src/components/shell.tsx` · `cx-26` |
+| Motor de apuração/fechamento de caixa (alinhado ao `main` `ffa115c`, sem módulo paralelo) | `src/lib/caixa.ts` (puro: `compoeCaixa`, `classificarVendaCaixa`, `apurarSessaoCaixa`, `idsEquivalentes`, `totalTroco`) + `src/server/caixaCore.ts` (`carregarInsumosSessao`, `apurarSessaoNoBanco`, `fecharSessaoCaixaTransacional`) + `src/server/acoes/caixa.ts` + `src/server/dados.ts` + `src/server/diagnostico.ts` (`cx-1..cx-26`, 219 verificações) + `scripts/testar-caixa-motor.mjs` (16 cenários) |
+| Migração aditiva mínima do motor de caixa | `supabase/migrations/20261105_caixa_operacao_economica.sql` + `src/db/migracao.ts` + `src/lib/migracaoLegado.ts` — coluna `nk_venda.status_comercial text` anulável, sem default, legado preservado |
 
 ### 2.3 Publicar código no GitHub (seu PC)
 | O quê | Onde |

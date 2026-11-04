@@ -179,6 +179,30 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
                 Migração legado
               </Link>
             )}
+            {temPermissao(dados.usuarioPapel, "config.gerenciar") && (
+              <Link
+                href="/prontidao"
+                className={cn(
+                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition",
+                  ativo("/prontidao") ? "bg-way-600/15 text-white ring-1 ring-inset ring-way-500/35" : "text-ink-300 hover:bg-ink-800 hover:text-white",
+                )}
+              >
+                <Icon name="grafico" className="size-4" />
+                Central de prontidão
+              </Link>
+            )}
+            {temPermissao(dados.usuarioPapel, "caixa.auditoria") && (
+              <Link
+                href="/dashboard/auditoria-caixa"
+                className={cn(
+                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition",
+                  ativo("/dashboard/auditoria-caixa") ? "bg-way-600/15 text-white ring-1 ring-inset ring-way-500/35" : "text-ink-300 hover:bg-ink-800 hover:text-white",
+                )}
+              >
+                <Icon name="carteira" className="size-4" />
+                Auditoria de caixa
+              </Link>
+            )}
             <Link
               href="/config"
               className={cn(

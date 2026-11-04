@@ -15,6 +15,25 @@ export type FormaCaixaId = (typeof FORMAS_PAGAMENTO)[number]["id"];
 /** Formas que não representam dinheiro em gaveta: entram no esperado da própria forma e viram contas a receber. */
 export const FORMAS_NAO_FISICAS: readonly string[] = ["boleto", "prazo"];
 
+/** Parâmetros globais de segurança da gaveta (Etapa 2/2026). */
+export const LIMITE_DINHEIRO_GAVETA = 800;
+export const PERCENTUAL_BLOQUEIO_GAVETA = 1.2;
+export const LIMITE_BLOQUEIO_GAVETA = round2(LIMITE_DINHEIRO_GAVETA * PERCENTUAL_BLOQUEIO_GAVETA);
+export const FUNDO_TROCO_PADRAO = 100;
+
+export type EstadoGaveta = "normal" | "alerta" | "bloqueado";
+
+/** Estado lógico da gaveta — nunca expõe o valor ao operador, só o estado. */
+export function estadoGavetaPorSaldo(saldoDinheiro: number): {
+  estado: EstadoGaveta;
+  bloquearVendaDinheiro: boolean;
+} {
+  const saldo = round2(Math.max(0, Number(saldoDinheiro) || 0));
+  if (saldo >= LIMITE_BLOQUEIO_GAVETA) return { estado: "bloqueado", bloquearVendaDinheiro: true };
+  if (saldo >= LIMITE_DINHEIRO_GAVETA) return { estado: "alerta", bloquearVendaDinheiro: false };
+  return { estado: "normal", bloquearVendaDinheiro: false };
+}
+
 export type VendaCaixaInput = {
   id: string;
   status: string;
@@ -37,7 +56,8 @@ export type VendaCaixaInput = {
 
 export type MovimentoCaixaInput = {
   id: string;
-  tipo: "suprimento" | "sangria" | "estorno" | "ajuste";
+  /** `cofre` = recolhimento do saldo líquido no fechamento; ignorado pela apuração (não altera snapshot) */
+  tipo: "suprimento" | "sangria" | "estorno" | "ajuste" | "cofre";
   forma: string;
   valor: number;
   motivo: string;
@@ -502,6 +522,14 @@ export type ApuracaoSessaoCaixa = ApuracaoCaixa & {
   snapshotAplicado: boolean;
   /** diferença entre o recálculo atual e o snapshot (0 quando não há snapshot) */
   divergenciaRecalculo: number;
+  /** saldo acumulado em espécie na gaveta (fundo + vendas + suprimentos − sangrias − estornos) */
+  saldoDinheiroGaveta: number;
+  /** `normal` | `alerta` (≥ R$ 800) | `bloqueado` (≥ 120% do limite) */
+  estadoGaveta: EstadoGaveta;
+  /** boolean consumido pelo client component do PDV para desabilitar conclusão em dinheiro */
+  bloquearVendaDinheiro: boolean;
+  limiteDinheiroGaveta: number;
+  fundoTrocoPadrao: number;
 };
 
 /**
@@ -522,6 +550,10 @@ export function apurarSessaoCaixa(params: {
     vendas: selecionadas,
     movimentos: params.movimentos,
   });
+  // Saldo em espécie da gaveta: usa o esperado em dinheiro já apurado pelo motor
+  // (fundo + vendas em dinheiro + suprimentos − sangrias − estornos), sem duplicar regra.
+  const saldoDinheiroGaveta = round2(apuracao.esperadoEmEspecie);
+  const gaveta = estadoGavetaPorSaldo(saldoDinheiroGaveta);
   return {
     ...apuracao,
     sessaoId: params.sessaoId,
@@ -532,6 +564,11 @@ export function apurarSessaoCaixa(params: {
       .map((c) => ({ vendaId: c.vendaId, codigo: c.codigo, motivo: c.motivo })),
     snapshotAplicado: false,
     divergenciaRecalculo: 0,
+    saldoDinheiroGaveta,
+    estadoGaveta: gaveta.estado,
+    bloquearVendaDinheiro: gaveta.bloquearVendaDinheiro,
+    limiteDinheiroGaveta: LIMITE_DINHEIRO_GAVETA,
+    fundoTrocoPadrao: FUNDO_TROCO_PADRAO,
   };
 }
 

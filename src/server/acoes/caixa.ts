@@ -1,19 +1,20 @@
 "use server";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { caixaMovimentos, caixaSessoes } from "@/db/schema";
-import { calcularConferenciaCaixa } from "@/lib/caixa";
+import { caixaMovimentos, caixaQuebraLogs, caixaSessoes, usuarios } from "@/db/schema";
+import { calcularConferenciaCaixa, FUNDO_TROCO_PADRAO, LIMITE_DINHEIRO_GAVETA } from "@/lib/caixa";
 import { FORMAS_PAGAMENTO, moeda, round2 } from "@/lib/dominio";
 import { temPermissao } from "@/lib/permissoes";
+import { confereSenha } from "@/lib/session";
 import { registrarAuditoria } from "@/server/auditoria";
-import { apurarSessaoNoBanco, fecharSessaoCaixaTransacional } from "@/server/caixaCore";
+import { apurarSessaoNoBanco, fecharSessaoCaixaTransacional, lerInformados } from "@/server/caixaCore";
 import { comoErro, corpo, exigirPermissao, logico, numero, texto } from "@/server/tenant";
 
 export type ResultadoCaixa =
   | { ok: true; id?: string; numero?: number; aviso?: string }
-  | { ok: false; erro: string };
+  | { ok: false; erro: string; requerHomologacao?: boolean };
 
 function revalidarCaixa() {
   ["/caixa", "/pdv", "/", "/relatorios", "/usuarios"].forEach((p) => revalidatePath(p));
@@ -27,7 +28,20 @@ export async function abrirCaixa(bruto: {
   try {
     const { empresaId, usuario } = await exigirPermissao("caixa.abrir");
     const input = corpo<{ saldoInicial?: number | string; terminal?: string; observacao?: string }>(bruto);
-    const saldoInicial = round2(numero(input.saldoInicial));
+    const brutoSaldo = input.saldoInicial;
+    const informouSaldo = brutoSaldo !== undefined && brutoSaldo !== null && String(brutoSaldo).trim() !== "";
+    let saldoInicial = informouSaldo ? round2(numero(brutoSaldo)) : 0;
+    // Fundo de troco automático: se o operador não digitar, herda o provisionamento
+    // do último turno encerrado (ou R$ 100,00 na primeira abertura).
+    if (!informouSaldo) {
+      const [ultima] = await db
+        .select({ fundoTroco: caixaSessoes.fundoTroco })
+        .from(caixaSessoes)
+        .where(and(eq(caixaSessoes.empresaId, empresaId), eq(caixaSessoes.status, "fechado")))
+        .orderBy(desc(caixaSessoes.fechadoEm))
+        .limit(1);
+      saldoInicial = round2(Number(ultima?.fundoTroco) || FUNDO_TROCO_PADRAO);
+    }
     const terminal = (texto(input.terminal) || "CAIXA 1").toUpperCase().slice(0, 40);
     const observacao = texto(input.observacao).slice(0, 240);
 
@@ -70,6 +84,7 @@ export async function abrirCaixa(bruto: {
           operadorNome: usuario.nome,
           status: "aberto",
           saldoInicial,
+          fundoTroco: FUNDO_TROCO_PADRAO,
           observacaoAbertura: observacao,
           abertoEm: new Date(),
         })
@@ -90,7 +105,7 @@ export async function abrirCaixa(bruto: {
       entidade: "caixa_sessao",
       registroId: criada.id,
       resumo: `Caixa #${criada.numero} (${terminal}) aberto por ${usuario.nome} com saldo inicial de ${moeda(saldoInicial)}`,
-      alteracoes: { numero: criada.numero, terminal, saldoInicial, observacao },
+      alteracoes: { numero: criada.numero, terminal, saldoInicial, fundoTroco: FUNDO_TROCO_PADRAO, observacao },
     });
 
     revalidarCaixa();
@@ -485,6 +500,219 @@ export async function ajustarCaixaFechado(bruto: {
       numero: sessao.numero,
       aviso: `Conferência do Caixa #${sessao.numero} ajustada e auditada com sucesso.`,
     };
+  } catch (e) {
+    return comoErro(e);
+  }
+}
+
+/**
+ * FECHAMENTO ÀS CEGAS (blind balance) — usado pelo modal do PDV.
+ * O cliente envia SOMENTE o que contou fisicamente; inputs do modal iniciam vazios.
+ * Os esperados são recalculados no servidor e NUNCA voltam na resposta.
+ * Com diferença: justificativa obrigatória + homologação por gerente (`caixa.homologar`),
+ * log em `nk_caixa_quebra_log`, recolhimento líquido ao cofre e provisionamento do fundo.
+ */
+export async function fecharTurnoCego(bruto: {
+  sessaoId?: string;
+  valoresInformados?: Record<string, number | string>;
+  justificativa?: string;
+  gerenteEmail?: string;
+  gerenteSenha?: string;
+}): Promise<ResultadoCaixa> {
+  try {
+    const { empresaId, usuario } = await exigirPermissao("caixa.fechar");
+    const input = corpo<{
+      sessaoId?: string;
+      valoresInformados?: Record<string, number | string>;
+      justificativa?: string;
+      gerenteEmail?: string;
+      gerenteSenha?: string;
+    }>(bruto);
+    const sessaoId = texto(input.sessaoId);
+    if (!sessaoId) return { ok: false, erro: "Informe a sessão de caixa a ser encerrada." };
+
+    const informados = lerInformados(corpo<Record<string, unknown>>(input.valoresInformados));
+    if (!informados.ok) return informados;
+
+    const [sessao] = await db
+      .select()
+      .from(caixaSessoes)
+      .where(and(eq(caixaSessoes.id, sessaoId), eq(caixaSessoes.empresaId, empresaId)))
+      .limit(1);
+    if (!sessao) return { ok: false, erro: "Sessão de caixa não encontrada." };
+    if (sessao.status !== "aberto") return { ok: false, erro: "Este turno já foi encerrado." };
+    if (sessao.operadorId !== usuario.id && !temPermissao(usuario.papel, "caixa.relatorio_todos")) {
+      return { ok: false, erro: "Você só pode encerrar a sua própria sessão de caixa." };
+    }
+
+    const apuracao = await apurarSessaoNoBanco(empresaId, sessao);
+    const conferencia = calcularConferenciaCaixa(apuracao.esperadosMap, informados.valores);
+    const diferenca = round2(conferencia.diferencaTotal);
+    const temQuebra = Math.abs(diferenca) >= 0.01;
+    const justificativa = texto(input.justificativa);
+    if (temQuebra && justificativa.length < 10) {
+      return {
+        ok: false,
+        erro: "Há quebra de caixa. Informe a justificativa e o PIN/senha de um gerente para homologar.",
+        requerHomologacao: true,
+      };
+    }
+
+    let gerenteId: string | null = null;
+    if (temQuebra) {
+      const email = texto(input.gerenteEmail).toLowerCase();
+      const senha = String(input.gerenteSenha ?? "");
+      if (!email || !senha) {
+        return {
+          ok: false,
+          erro: "Quebra de caixa: informe o e-mail e o PIN/senha de um gerente para homologar.",
+          requerHomologacao: true,
+        };
+      }
+      const [gerente] = await db
+        .select()
+        .from(usuarios)
+        .where(and(eq(usuarios.empresaId, empresaId), eq(usuarios.email, email), eq(usuarios.ativo, true)))
+        .limit(1);
+      if (!gerente || !temPermissao(gerente.papel, "caixa.homologar") || !confereSenha(senha, gerente.senhaHash)) {
+        return {
+          ok: false,
+          erro: "Homologação negada: credencial inválida ou usuário sem caixa.homologar.",
+          requerHomologacao: true,
+        };
+      }
+      gerenteId = gerente.id;
+    }
+
+    const r = await fecharSessaoCaixaTransacional({
+      empresaId,
+      sessaoId,
+      usuario,
+      valoresInformados: informados.valores,
+      justificativa,
+    });
+    if (!r.ok) return r;
+
+    // Pós-fechamento: não altera o snapshot gravado.
+    const dinheiroContado = round2(informados.valores.dinheiro ?? 0);
+    const recolhido = round2(Math.max(0, dinheiroContado - FUNDO_TROCO_PADRAO));
+    await db
+      .update(caixaSessoes)
+      .set({
+        fundoTroco: FUNDO_TROCO_PADRAO,
+        statusAprovacao: temQuebra ? "homologado" : null,
+        homologadoPorUsuarioId: gerenteId,
+      })
+      .where(and(eq(caixaSessoes.id, sessaoId), eq(caixaSessoes.empresaId, empresaId)));
+
+    if (recolhido > 0) {
+      await db.insert(caixaMovimentos).values({
+        empresaId,
+        sessaoId,
+        tipo: "cofre",
+        forma: "dinheiro",
+        valor: recolhido,
+        motivo: `Recolhimento líquido ao cofre · fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado`,
+        usuarioId: usuario.id,
+        usuarioNome: usuario.nome,
+      });
+    }
+
+    if (temQuebra) {
+      await db.insert(caixaQuebraLogs).values({
+        empresaId,
+        sessaoId,
+        usuarioId: usuario.id,
+        valorDiferenca: Math.abs(diferenca),
+        tipo: diferenca > 0 ? "SOBRA" : "FALTA",
+        justificativa,
+        homologadoPorUsuarioId: gerenteId,
+        homologadoEm: new Date(),
+      });
+    }
+
+    await registrarAuditoria({
+      empresaId,
+      usuario,
+      acao: "caixa.fechamento_cego",
+      entidade: "caixa_sessao",
+      registroId: sessaoId,
+      resumo: `Turno #${r.numero} encerrado às cegas · ${temQuebra ? `quebra ${diferenca > 0 ? "SOBRA" : "FALTA"} homologada` : "sem quebra"} · cofre ${moeda(recolhido)}`,
+      alteracoes: {
+        numero: r.numero,
+        operador: r.operadorNome,
+        esperados: apuracao.esperadosMap,
+        informados: conferencia.informados,
+        diferencaTotal: diferenca,
+        tipoQuebra: temQuebra ? (diferenca > 0 ? "SOBRA" : "FALTA") : null,
+        justificativa: justificativa || null,
+        homologadoPorUsuarioId: gerenteId,
+        fundoTroco: FUNDO_TROCO_PADRAO,
+        recolhidoCofre: recolhido,
+        limiteGaveta: LIMITE_DINHEIRO_GAVETA,
+        estadoGaveta: apuracao.estadoGaveta,
+      },
+    });
+
+    revalidarCaixa();
+    return {
+      ok: true,
+      id: sessaoId,
+      numero: r.numero,
+      aviso: temQuebra
+        ? `Turno #${r.numero} encerrado com quebra homologada. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`
+        : `Turno #${r.numero} encerrado sem quebras. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`,
+    };
+  } catch (e) {
+    return comoErro(e);
+  }
+}
+
+/** Homologação remota de quebra pendente (rota /dashboard/auditoria-caixa). */
+export async function homologarQuebraCaixa(bruto: {
+  quebraId?: string;
+  senha?: string;
+}): Promise<ResultadoCaixa> {
+  try {
+    const { empresaId, usuario } = await exigirPermissao("caixa.homologar");
+    const input = corpo<{ quebraId?: string; senha?: string }>(bruto);
+    const quebraId = texto(input.quebraId);
+    if (!quebraId) return { ok: false, erro: "Informe o registro de quebra." };
+
+    const senha = String(input.senha ?? "");
+    if (!confereSenha(senha, usuario.senhaHash)) {
+      return { ok: false, erro: "PIN/senha do gerente inválido." };
+    }
+
+    const [log] = await db
+      .select()
+      .from(caixaQuebraLogs)
+      .where(and(eq(caixaQuebraLogs.id, quebraId), eq(caixaQuebraLogs.empresaId, empresaId)))
+      .limit(1);
+    if (!log) return { ok: false, erro: "Registro de quebra não encontrado." };
+    if (log.homologadoPorUsuarioId) return { ok: false, erro: "Esta quebra já foi homologada." };
+
+    await db
+      .update(caixaQuebraLogs)
+      .set({ homologadoPorUsuarioId: usuario.id, homologadoEm: new Date() })
+      .where(and(eq(caixaQuebraLogs.id, quebraId), eq(caixaQuebraLogs.empresaId, empresaId)));
+    await db
+      .update(caixaSessoes)
+      .set({ statusAprovacao: "homologado", homologadoPorUsuarioId: usuario.id })
+      .where(and(eq(caixaSessoes.id, log.sessaoId), eq(caixaSessoes.empresaId, empresaId)));
+
+    await registrarAuditoria({
+      empresaId,
+      usuario,
+      acao: "caixa.homologar_quebra",
+      entidade: "caixa_quebra_log",
+      registroId: quebraId,
+      resumo: `Quebra ${log.tipo} de ${moeda(Number(log.valorDiferenca))} homologada pelo gerente ${usuario.nome}`,
+      alteracoes: { sessaoId: log.sessaoId, tipo: log.tipo, valorDiferenca: Number(log.valorDiferenca) },
+    });
+
+    revalidarCaixa();
+    return { ok: true, id: quebraId, aviso: "Quebra homologada com sucesso." };
   } catch (e) {
     return comoErro(e);
   }

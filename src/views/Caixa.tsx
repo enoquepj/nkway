@@ -25,7 +25,6 @@ import {
   useToast,
 } from "@/components/ui";
 import { Tabela, type Coluna } from "@/components/Tabela";
-import { calcularConferenciaCaixa } from "@/lib/caixa";
 import { FORMAS_PAGAMENTO, dataHoraBR, moeda, round2, rotuloForma } from "@/lib/dominio";
 import { alternarItem, casaTexto, emPeriodo, type Periodo } from "@/lib/filtros";
 import { temPermissao, type PerfilUsuario } from "@/lib/permissoes";
@@ -112,33 +111,31 @@ export function CaixaView({
   const [confirmadoFechar, setConfirmadoFechar] = useState(false);
   const [justificativaFechar, setJustificativaFechar] = useState("");
 
-  function abrirModalFechamento(s: CaixaSessaoDto) {
+  function abrirModalFechamento(_s: CaixaSessaoDto) {
+    // Blind balance: inputs começam VAZIOS. Nenhum valor esperado é enviado ou
+    // exibido ao operador antes da submissão; o servidor recalcula o esperado.
     const inicial: Record<string, string> = {};
-    for (const fp of FORMAS_PAGAMENTO) {
-      const esp = round2(s.apuracao.esperadosMap[fp.id] ?? 0);
-      inicial[fp.id] = esp.toFixed(2).replace(".", ",");
-    }
+    for (const fp of FORMAS_PAGAMENTO) inicial[fp.id] = "";
     setInformadosStr(inicial);
     setConfirmadoFechar(false);
     setJustificativaFechar("");
     setModalFechar(true);
   }
 
-  const conferenciaAoVivo = useMemo(() => {
-    if (!sessaoAtual) return null;
+  // Apenas a leitura do que o operador contou — sem conferência ao vivo contra
+  // os esperados (isso vazaria o valor esperado antes do fechamento).
+  const informadosNum = useMemo(() => {
     const nums: Record<string, number> = {};
-    for (const fp of FORMAS_PAGAMENTO) {
-      nums[fp.id] = parseValorInput(informadosStr[fp.id]);
-    }
-    return calcularConferenciaCaixa(sessaoAtual.apuracao.esperadosMap, nums);
-  }, [sessaoAtual, informadosStr]);
+    for (const fp of FORMAS_PAGAMENTO) nums[fp.id] = parseValorInput(informadosStr[fp.id]);
+    return nums;
+  }, [informadosStr]);
 
   async function confirmarFechamento() {
-    if (!sessaoAtual || !conferenciaAoVivo) return;
+    if (!sessaoAtual) return;
     setOcupado(true);
     const r = await fecharCaixa({
       sessaoId: sessaoAtual.id,
-      valoresInformados: conferenciaAoVivo.informados,
+      valoresInformados: informadosNum,
       confirmado: confirmadoFechar,
       justificativa: justificativaFechar,
     });
@@ -771,86 +768,46 @@ export function CaixaView({
           </div>
         }
       >
-        {sessaoAtual && conferenciaAoVivo && (
+        {sessaoAtual && (
           <div className="space-y-4">
+            <p className="rounded-xl border border-sky-100 bg-sky-50/70 p-3 text-[12px] leading-snug text-sky-900">
+              Fechamento às cegas: digite apenas o valor físico contado em cada forma. Os campos
+              começam vazios e o esperado é calculado no servidor, sem exibir valores ao operador.
+            </p>
             <div className="overflow-x-auto rounded-xl border border-ink-100">
               <table className="w-full text-left text-[12.5px]">
                 <thead className="bg-ink-50 text-[11px] uppercase text-ink-400">
                   <tr>
                     <th className="px-3.5 py-2.5">Forma de pagamento</th>
-                    <th className="px-3.5 py-2.5 text-right">Esperado</th>
                     <th className="w-40 px-3.5 py-2.5 text-right">Informado (R$)</th>
-                    <th className="px-3.5 py-2.5 text-right">Diferença</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-ink-50">
-                  {FORMAS_PAGAMENTO.map((fp) => {
-                    const esp = round2(sessaoAtual.apuracao.esperadosMap[fp.id] ?? 0);
-                    const dif = round2(conferenciaAoVivo.diferencas[fp.id] ?? 0);
-                    return (
-                      <tr key={fp.id}>
-                        <td className="px-3.5 py-2 font-semibold text-ink-800">{fp.label}</td>
-                        <td className="tabular px-3.5 py-2 text-right text-ink-600">{moeda(esp)}</td>
-                        <td className="px-3.5 py-1.5">
-                          <Input
-                            dinheiro
-                            valor={informadosStr[fp.id] ?? "0,00"}
-                            aoMudar={(v) => setInformadosStr({ ...informadosStr, [fp.id]: v })}
-                            className="text-right font-mono"
-                          />
-                        </td>
-                        <td className="tabular px-3.5 py-2 text-right font-bold">
-                          {Math.abs(dif) < 0.01 ? (
-                            <span className="text-way-700">R$ 0,00</span>
-                          ) : (
-                            <span className={dif < 0 ? "text-rose-700" : "text-amber-700"}>
-                              {dif > 0 ? `+${moeda(dif)}` : moeda(dif)}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {FORMAS_PAGAMENTO.map((fp) => (
+                    <tr key={fp.id}>
+                      <td className="px-3.5 py-2 font-semibold text-ink-800">{fp.label}</td>
+                      <td className="px-3.5 py-1.5">
+                        <Input
+                          dinheiro
+                          valor={informadosStr[fp.id] ?? ""}
+                          aoMudar={(v) => setInformadosStr({ ...informadosStr, [fp.id]: v })}
+                          placeholder="0,00"
+                          className="text-right font-mono"
+                        />
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
-                <tfoot className="border-t border-ink-200 bg-ink-50 font-bold text-ink-900">
-                  <tr>
-                    <td className="px-3.5 py-2.5">Total da conferência</td>
-                    <td className="tabular px-3.5 py-2.5 text-right">{moeda(conferenciaAoVivo.totalEsperado)}</td>
-                    <td className="tabular px-3.5 py-2.5 text-right">{moeda(conferenciaAoVivo.totalInformado)}</td>
-                    <td className="tabular px-3.5 py-2.5 text-right">
-                      <span
-                        className={
-                          Math.abs(conferenciaAoVivo.diferencaTotal) < 0.01
-                            ? "text-way-700"
-                            : conferenciaAoVivo.diferencaTotal < 0
-                              ? "text-rose-700"
-                              : "text-amber-700"
-                        }
-                      >
-                        {conferenciaAoVivo.diferencaTotal > 0
-                          ? `+${moeda(conferenciaAoVivo.diferencaTotal)}`
-                          : moeda(conferenciaAoVivo.diferencaTotal)}
-                      </span>
-                    </td>
-                  </tr>
-                </tfoot>
               </table>
             </div>
 
-            {conferenciaAoVivo.temDivergencia && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3">
-                <p className="mb-2 text-[12px] font-semibold text-amber-900">
-                  Divergência identificada ({moeda(conferenciaAoVivo.diferencaTotal)}). A justificativa é obrigatória para o fechamento e ficará registrada na auditoria.
-                </p>
-                <Area
-                  rotulo="Justificativa da divergência (mín. 10 caracteres)"
-                  valor={justificativaFechar}
-                  aoMudar={setJustificativaFechar}
-                  linhas={2}
-                  placeholder="Explique o motivo da sobra ou falta identificada na contagem..."
-                />
-              </div>
-            )}
+            <Area
+              rotulo="Justificativa (obrigatória se houver divergência · mín. 10 caracteres)"
+              valor={justificativaFechar}
+              aoMudar={setJustificativaFechar}
+              linhas={2}
+              placeholder="Se houver sobra ou falta, descreva o motivo para registro na auditoria..."
+            />
 
             <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-ink-100 bg-ink-50/50 px-3.5 py-2.5 text-[12.5px] font-medium text-ink-800">
               <input

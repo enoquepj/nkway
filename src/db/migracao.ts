@@ -44,7 +44,8 @@ export async function garantirMigracoesNk() {
       add column if not exists motivo_sefaz text default '',
       add column if not exists emissor_provedor text default 'local',
       add column if not exists situacao_fiscal text,
-      add column if not exists protocolo_origem text
+      add column if not exists protocolo_origem text,
+      add column if not exists status_comercial text
   `);
   await db.execute(sql`create index if not exists nk_venda_status_sefaz_idx on nk_venda (empresa_id, status_sefaz)`);
   await db.execute(sql`create index if not exists nk_venda_situacao_fiscal_idx on nk_venda (empresa_id, situacao_fiscal)`);
@@ -157,5 +158,29 @@ export async function garantirMigracoesNk() {
   await db.execute(sql`create index if not exists nk_ass_fatura_empresa_idx on nk_assinatura_fatura (empresa_id, created_at)`);
   await db.execute(sql`create index if not exists nk_ass_fatura_ass_idx on nk_assinatura_fatura (assinatura_id)`);
   await db.execute(sql`create index if not exists nk_ass_fatura_gw_pay_idx on nk_assinatura_fatura (gateway_payment_id)`);
+
+  // Etapa 1 (2026) — quebra de caixa e homologação: ADITIVO, sem RLS, sem tocar no legado.
+  await db.execute(sql`
+    alter table nk_caixa_sessao
+      add column if not exists status_aprovacao text,
+      add column if not exists homologado_por_usuario_id uuid,
+      add column if not exists fundo_troco numeric(12, 2)
+  `);
+  await db.execute(sql`
+    create table if not exists nk_caixa_quebra_log (
+      id uuid primary key default gen_random_uuid(),
+      empresa_id uuid not null references nk_empresa (id) on delete cascade,
+      sessao_id uuid not null references nk_caixa_sessao (id) on delete cascade,
+      usuario_id uuid references nk_usuario (id),
+      valor_diferenca numeric(12, 2) not null default 0,
+      tipo text not null default 'FALTA',
+      justificativa text not null default '',
+      homologado_por_usuario_id uuid,
+      homologado_em timestamptz,
+      created_at timestamptz default now()
+    )
+  `);
+  await db.execute(sql`create index if not exists nk_caixa_quebra_sessao_idx on nk_caixa_quebra_log (sessao_id)`);
+  await db.execute(sql`create index if not exists nk_caixa_quebra_empresa_idx on nk_caixa_quebra_log (empresa_id, created_at)`);
   aplicado = true;
 }

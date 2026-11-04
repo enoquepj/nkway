@@ -1163,6 +1163,10 @@ export type CaixaSessaoDto = {
   fechadoPorNome: string;
   reabertoEm: string;
   reabertoPorNome: string;
+  /** Etapa 1: aprovação de quebra e fundo de troco (opcionais para sessões antigas) */
+  statusAprovacao?: string | null;
+  homologadoPorUsuarioId?: string | null;
+  fundoTroco?: number | null;
   justificativaReabertura: string;
 };
 
@@ -1234,6 +1238,9 @@ export async function listarSessoesCaixa(
       reabertoEm: s.reabertoEm ? new Date(s.reabertoEm).toISOString() : "",
       reabertoPorNome: s.reabertoPorNome ?? "",
       justificativaReabertura: s.justificativaReabertura ?? "",
+      statusAprovacao: s.statusAprovacao ?? null,
+      homologadoPorUsuarioId: s.homologadoPorUsuarioId ?? null,
+      fundoTroco: s.fundoTroco === null || s.fundoTroco === undefined ? null : N(s.fundoTroco),
     };
   });
 }

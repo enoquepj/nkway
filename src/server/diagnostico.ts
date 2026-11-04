@@ -44,11 +44,15 @@ import {
   apurarSessaoCaixa,
   calcularApuracaoCaixa,
   calcularConferenciaCaixa,
+  estadoGavetaPorSaldo,
+  FUNDO_TROCO_PADRAO,
+  LIMITE_BLOQUEIO_GAVETA,
+  LIMITE_DINHEIRO_GAVETA,
   ratearPagamentosDetalhado,
   type VendaCaixaInput,
 } from "@/lib/caixa";
 import { fecharSessaoCaixaTransacional } from "@/server/caixaCore";
-import { normalizarPerfil, temPermissao } from "@/lib/permissoes";
+import { normalizarPerfil, perfilValido, temPermissao } from "@/lib/permissoes";
 import { confereSenha, hashSenha } from "@/lib/session";
 import { extrairEntradasZip, gerarZipBuffer } from "@/lib/zip";
 import {
@@ -2055,6 +2059,18 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("usr-4", "Usuários e Auditoria", "Empresa mantém ao menos um Administrador ativo", adminsAtivos >= 1, `${qtd(adminsAtivos, "administrador")} ativo(s)`, true);
   ok("usr-5", "Usuários e Auditoria", "Trilha de auditoria multi-tenant ativa e sanitizada", audSemVazamento, `${qtd(auds.length, "evento")} registrado(s) em nk_auditoria`, true);
 
+  const perfilGerenteOk =
+    normalizarPerfil("gerente") === "gerente" &&
+    normalizarPerfil("manager") === "gerente" &&
+    perfilValido("gerente") &&
+    temPermissao("gerente", "caixa.homologar") &&
+    temPermissao("gerente", "caixa.auditoria") &&
+    temPermissao("administrador", "caixa.homologar") &&
+    !temPermissao("operador", "caixa.homologar") &&
+    !temPermissao("vendedor", "caixa.auditoria") &&
+    !temPermissao("gerente", "usuarios.gerenciar");
+  ok("usr-6", "Usuários e Auditoria", "Perfil Gerente normalizado, com homologação/auditoria e sem rebaixamento para Operador", perfilGerenteOk, "caixa.homologar · caixa.auditoria · sem usuarios.gerenciar", true);
+
   /* ---------------------------------- Fase 2: fechamento de caixa operador */
   const apuracaoProbe = calcularApuracaoCaixa({
     saldoInicial: 100,
@@ -2269,6 +2285,58 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   }
   ok("cx-21", "Caixa por Operador", "Fechamento simultâneo bloqueado por transação + FOR UPDATE, com snapshot recalculado no servidor", fechamentoConcorrenteOk, detalheFechamento, true);
   ok("cx-22", "Caixa por Operador", "Fechamento isolado por empresa e restrito ao operador da sessão", isolamentoFechamentoOk, isolamentoFechamentoOk ? "outra empresa e outro operador negados" : detalheFechamento, true);
+
+  const [quebraTabela, quebraColunas] = await Promise.all([
+    db.execute<{ n: number }>(
+      sql`select count(*)::int as n from information_schema.tables where table_schema='public' and table_name='nk_caixa_quebra_log'`,
+    ),
+    db.execute<{ n: number }>(
+      sql`select count(*)::int as n from information_schema.columns where table_schema='public' and table_name='nk_caixa_sessao' and column_name in ('status_aprovacao','homologado_por_usuario_id','fundo_troco')`,
+    ),
+  ]);
+  const quebraSchemaOk =
+    Number(quebraTabela.rows[0]?.n ?? 0) === 1 && Number(quebraColunas.rows[0]?.n ?? 0) === 3;
+  ok("cx-23", "Caixa por Operador", "Migração aditiva da quebra/homologação aplicada (tabela + 3 colunas, sem RLS)", quebraSchemaOk, "nk_caixa_quebra_log · status_aprovacao · homologado_por_usuario_id · fundo_troco", true);
+
+  const gNormal = estadoGavetaPorSaldo(LIMITE_DINHEIRO_GAVETA - 0.01);
+  const gAlerta = estadoGavetaPorSaldo(LIMITE_DINHEIRO_GAVETA);
+  const gBloqueado = estadoGavetaPorSaldo(LIMITE_BLOQUEIO_GAVETA);
+  const estadoGavetaOk =
+    LIMITE_DINHEIRO_GAVETA === 800 && FUNDO_TROCO_PADRAO === 100 &&
+    LIMITE_BLOQUEIO_GAVETA === 960 &&
+    gNormal.estado === "normal" && !gNormal.bloquearVendaDinheiro &&
+    gAlerta.estado === "alerta" && !gAlerta.bloquearVendaDinheiro &&
+    gBloqueado.estado === "bloqueado" && gBloqueado.bloquearVendaDinheiro &&
+    typeof apCx.estadoGaveta === "string" && typeof apCx.bloquearVendaDinheiro === "boolean" &&
+    apCx.fundoTrocoPadrao === FUNDO_TROCO_PADRAO && apCx.limiteDinheiroGaveta === LIMITE_DINHEIRO_GAVETA;
+  ok("cx-24", "Caixa por Operador", "Estado lógico da gaveta: alerta em R$ 800 e bloqueio boolean em 120%", estadoGavetaOk, `normal → alerta → bloqueado (${LIMITE_BLOQUEIO_GAVETA}) · fundo R$ ${FUNDO_TROCO_PADRAO}`, true);
+
+  const arqPdvPage = path.join(raizProj, "src/app/(pdv)/pdv/page.tsx");
+  const pdvPageTxt = fs.existsSync(arqPdvPage) ? fs.readFileSync(arqPdvPage, "utf8") : "";
+  const blindBalanceOk =
+    !pdvPageTxt.includes("totalEsperado") &&
+    !pdvPageTxt.includes("saldoDinheiro") &&
+    pdvPageTxt.includes("obterEstadoGavetaSessao") &&
+    !caixaTxt.includes("conferenciaAoVivo") &&
+    !caixaTxt.includes("esp.toFixed(2)") &&
+    caixaTxt.includes("inicial[fp.id] = \"\"") &&
+    caixaTxt.includes("Fechamento às cegas");
+  ok("cx-25", "Caixa por Operador", "Blind balance: PDV recebe só estado/boolean e inputs iniciam vazios", blindBalanceOk, "sem totalEsperado, sem saldoDinheiro, sem conferência ao vivo", true);
+
+  const arqModalCego = path.join(raizProj, "src/components/ModalFechamentoCego.tsx");
+  const arqAuditoria = path.join(raizProj, "src/app/(painel)/dashboard/auditoria-caixa/page.tsx");
+  const modalCegoTxt = fs.existsSync(arqModalCego) ? fs.readFileSync(arqModalCego, "utf8") : "";
+  const auditoriaTxt = fs.existsSync(arqAuditoria) ? fs.readFileSync(arqAuditoria, "utf8") : "";
+  const etapa3UiOk =
+    modalCegoTxt.includes("useState") &&
+    modalCegoTxt.includes("Fechamento às cegas") &&
+    modalCegoTxt.includes('valores[fp.id] ?? ""') &&
+    modalCegoTxt.includes("requerHomologacao") &&
+    !modalCegoTxt.includes("esperadosMap") &&
+    auditoriaTxt.includes('"caixa.auditoria"') &&
+    auditoriaTxt.includes("listarAuditoriaCaixa") &&
+    shellTxt.includes("/dashboard/auditoria-caixa");
+  ok("cx-26", "Caixa por Operador", "Modal cego no PDV e auditoria restrita por caixa.auditoria", etapa3UiOk, "inputs vazios · PIN do gerente · rota gated", true);
 
   /* ------------------------------------- Fase 3: exportação de XML vendas */
   const permXmlOk =

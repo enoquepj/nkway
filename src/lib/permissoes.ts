@@ -1,9 +1,13 @@
 /**
- * NKWAY — Perfis de acesso e matriz de permissões por ação (Fase 1).
+ * NKWAY — Perfis de acesso e matriz de permissões por ação (Fase 1 + Etapa 1/2026).
  * Módulo puro (sem dependências Node), compartilhado entre Server Actions e interface.
+ *
+ * Checagem server-side: `exigirPermissao()` nas Server Actions (`src/server/tenant.ts`);
+ * `temPermissao()` no núcleo `src/server/caixaCore.ts`. Nunca há RLS/JWT client-side:
+ * o app conecta com o usuário PostgreSQL único `nkway_app` e filtra por `empresa_id`.
  */
 
-export const PERFIS_USUARIO = ["administrador", "operador", "vendedor"] as const;
+export const PERFIS_USUARIO = ["administrador", "gerente", "operador", "vendedor"] as const;
 export type PerfilUsuario = (typeof PERFIS_USUARIO)[number];
 
 export const ROTULO_PERFIL: Record<PerfilUsuario, { nome: string; descricao: string; tom: "ok" | "info" | "roxo" }> = {
@@ -11,6 +15,11 @@ export const ROTULO_PERFIL: Record<PerfilUsuario, { nome: string; descricao: str
     nome: "Administrador",
     descricao: "Acesso total à empresa, usuários, permissões, auditoria, reabertura de caixa e configurações fiscais.",
     tom: "ok",
+  },
+  gerente: {
+    nome: "Gerente",
+    descricao: "Supervisão do caixa: auditoria de turnos, homologação de quebras, reabertura/ajuste e consulta de todos os operadores. Não gerencia usuários nem configurações fiscais.",
+    tom: "roxo",
   },
   operador: {
     nome: "Operador",
@@ -39,6 +48,8 @@ export const PERMISSOES_ACAO = [
   "caixa.reabrir",
   "caixa.ajustar",
   "caixa.relatorio_todos",
+  "caixa.homologar",
+  "caixa.auditoria",
   "documentos.ver",
   "documentos.exportar_xml",
   "fiscal.eventos",
@@ -69,6 +80,8 @@ export const CATALOGO_PERMISSOES: {
   { acao: "caixa.reabrir", grupo: "Caixa", rotulo: "Reabrir sessão de caixa fechada (com justificativa)" },
   { acao: "caixa.ajustar", grupo: "Caixa", rotulo: "Ajustar conferência de caixa fechado (com justificativa)" },
   { acao: "caixa.relatorio_todos", grupo: "Caixa", rotulo: "Consultar histórico de caixa de todos os operadores" },
+  { acao: "caixa.homologar", grupo: "Caixa", rotulo: "Homologar quebra de caixa com PIN/senha de gerente" },
+  { acao: "caixa.auditoria", grupo: "Caixa", rotulo: "Acessar /dashboard/auditoria-caixa e cruzar esperado × declarado" },
   { acao: "documentos.ver", grupo: "Documentos Fiscais", rotulo: "Consultar documentos de venda e DANFE" },
   { acao: "documentos.exportar_xml", grupo: "Documentos Fiscais", rotulo: "Exportar XML fiscal (individual e lote ZIP)" },
   { acao: "fiscal.eventos", grupo: "Documentos Fiscais", rotulo: "Inutilização, carta de correção, MDF-e e DF-e" },
@@ -80,6 +93,28 @@ export const CATALOGO_PERMISSOES: {
 
 const MATRIZ: Record<PerfilUsuario, readonly PermissaoAcao[]> = {
   administrador: PERMISSOES_ACAO,
+  gerente: [
+    "usuarios.ver",
+    "auditoria.ver",
+    "pdv.vender",
+    "dav.criar",
+    "dav.faturar",
+    "venda.cancelar",
+    "caixa.abrir",
+    "caixa.movimentar",
+    "caixa.fechar",
+    "caixa.reabrir",
+    "caixa.ajustar",
+    "caixa.relatorio_todos",
+    "caixa.homologar",
+    "caixa.auditoria",
+    "documentos.ver",
+    "documentos.exportar_xml",
+    "fiscal.eventos",
+    "cadastros.clientes",
+    "estoque.ajustar",
+    "financeiro.gerenciar",
+  ],
   operador: [
     "pdv.vender",
     "dav.criar",
@@ -101,10 +136,15 @@ const MATRIZ: Record<PerfilUsuario, readonly PermissaoAcao[]> = {
   ],
 };
 
-/** Normaliza papéis legados ("owner" → "administrador") sem perder compatibilidade */
+/**
+ * Normaliza papéis legados sem perder compatibilidade.
+ * `gerente` precisa de mapeamento EXPLÍCITO: sem ele, cairia em `operador` e
+ * `caixa.homologar` nunca seria concedido.
+ */
 export function normalizarPerfil(papel: string | null | undefined): PerfilUsuario {
   const p = String(papel ?? "").trim().toLowerCase();
   if (p === "owner" || p === "admin" || p === "administrador") return "administrador";
+  if (p === "gerente" || p === "manager") return "gerente";
   if (p === "vendedor") return "vendedor";
   return "operador";
 }
