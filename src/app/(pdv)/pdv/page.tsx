@@ -64,6 +64,7 @@ export default async function PdvPage() {
               id: estadoGaveta.sessaoId,
               numero: estadoGaveta.numero,
               terminal: estadoGaveta.terminal,
+              operadorNome: estadoGaveta.operadorNome,
               estadoGaveta: estadoGaveta.estadoGaveta,
               bloquearVendaDinheiro: estadoGaveta.bloquearVendaDinheiro,
             }

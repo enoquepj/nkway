@@ -440,16 +440,22 @@ export async function ajustarCaixaFechado(bruto: {
       informadosNum[fp.id] = round2(v);
     }
 
-    const conferencia = calcularConferenciaCaixa(apuracao.esperadosMap, informadosNum);
-    const deltaAjuste = round2(conferencia.totalInformado - Number(sessao.totalInformado));
+    // Diferença entre o que foi informado agora e o que estava informado antes
+    const informadosAntigos: Record<string, number> = {};
+    for (const fp of FORMAS_PAGAMENTO) {
+      informadosAntigos[fp.id] = round2(Number(sessao.valoresInformados?.[fp.id] ?? 0));
+    }
+    const conferenciaAntiga = calcularConferenciaCaixa(sessao.valoresEsperados ?? {}, informadosAntigos);
+    const conferencia = calcularConferenciaCaixa(sessao.valoresEsperados ?? {}, informadosNum);
+    const deltaAjuste = round2(conferencia.totalInformado - conferenciaAntiga.totalInformado);
 
     await db
       .update(caixaSessoes)
       .set({
-        valoresEsperados: apuracao.esperadosMap,
+        // valoresEsperados NUNCA muda: snapshot original do fechamento
         valoresInformados: conferencia.informados,
         diferencas: conferencia.diferencas,
-        totalEsperado: conferencia.totalEsperado,
+        totalEsperado: sessao.totalEsperado,
         totalInformado: conferencia.totalInformado,
         diferencaTotal: conferencia.diferencaTotal,
         justificativaFechamento: `${sessao.justificativaFechamento ? `${sessao.justificativaFechamento} | ` : ""}Ajuste (${usuario.nome}): ${justificativa}`,

@@ -278,6 +278,7 @@ export async function obterEstadoGavetaSessao(empresaId: string, usuarioId: stri
       numero: caixaSessoes.numero,
       terminal: caixaSessoes.terminal,
       saldoInicial: caixaSessoes.saldoInicial,
+      operadorNome: caixaSessoes.operadorNome,
     })
     .from(caixaSessoes)
     .where(
@@ -295,6 +296,7 @@ export async function obterEstadoGavetaSessao(empresaId: string, usuarioId: stri
     sessaoId: sessao.id,
     numero: sessao.numero,
     terminal: sessao.terminal,
+    operadorNome: sessao.operadorNome,
     estadoGaveta: apuracao.estadoGaveta,
     bloquearVendaDinheiro: apuracao.bloquearVendaDinheiro,
   };

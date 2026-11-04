@@ -174,6 +174,7 @@ export function PdvView({
     id: string;
     numero: number;
     terminal: string;
+    operadorNome: string;
     estadoGaveta: "normal" | "alerta" | "bloqueado";
     bloquearVendaDinheiro: boolean;
   } | null;
@@ -2068,7 +2069,7 @@ export function PdvView({
               >
                 <Icon name="carteira" className="size-3.5 text-way-300" />
                 <span>
-                  Caixa #{sessaoCaixa.numero} ({sessaoCaixa.terminal})
+                  Caixa #{sessaoCaixa.numero} ({sessaoCaixa.terminal}) · {sessaoCaixa.operadorNome}
                 </span>
                 <span className="font-semibold text-way-200">· {ROTULO_ESTADO_GAVETA[sessaoCaixa.estadoGaveta]}</span>
               </button>
