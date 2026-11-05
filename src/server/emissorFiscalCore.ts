@@ -17,6 +17,8 @@ import {
   type StatusSefazVenda,
 } from "@/lib/emissorFiscal";
 import { registrarAuditoria } from "@/server/auditoria";
+import { obterComplementosTributarios } from "@/server/tributacaoCore";
+import { crtSugeridoParaRegime, type ParametrosTributarios } from "@/lib/tributacao";
 import { xmlFiscalArmazenadoValido } from "@/server/exportacaoXmlCore";
 
 export function diagnosticoEmissorServidor(): {
@@ -83,6 +85,10 @@ export async function montarInsumoFiscalDaVenda(
         .where(and(eq(produtos.empresaId, empresaId), inArray(produtos.id, prodIds)))
     : [];
   const prodPorId = new Map(prodsRows.map((p) => [p.id, p]));
+  let complementos = new Map<string, ParametrosTributarios>();
+  let complementosIndisponiveis = false;
+  try { complementos = await obterComplementosTributarios(empresaId, prodIds); }
+  catch (e) { complementosIndisponiveis = true; console.error("[emissor] Complementos fiscais indisponíveis:", e instanceof Error ? e.name : "erro inesperado"); }
 
   const fiscalCfg = (emp.fiscal ?? {}) as Record<string, unknown>;
   const ambiente = (Number(fiscalCfg.ambiente ?? venda.ambiente ?? 2) === 1 ? 1 : 2) as 1 | 2;
@@ -119,7 +125,7 @@ export async function montarInsumoFiscalDaVenda(
       numero: emp.numero || "",
       bairro: emp.bairro || "",
       cep: emp.cep || "",
-      crt: Number(fiscalCfg.crt ?? (emp.regime === "mei" ? 4 : 1)),
+      crt: Number(fiscalCfg.crt ?? crtSugeridoParaRegime(emp.regime) ?? 1),
       cscId: String(fiscalCfg.cscId ?? ""),
       cscToken: String(fiscalCfg.cscToken ?? ""),
       certificadoValidade: String(fiscalCfg.certificadoValidade ?? ""),
@@ -138,12 +144,15 @@ export async function montarInsumoFiscalDaVenda(
     },
     itens: itensVenda.map((it, idx) => {
       const p = it.produtoId ? prodPorId.get(it.produtoId) : undefined;
+      const salvo = p ? complementos.get(p.id) : undefined;
+      const tributacao = salvo && p ? { ...salvo, ncm: p.ncm, cest: p.cest, cfop: p.cfop, csosn: p.csosn, icmsAliq: String(p.icmsAliq), pisAliq: String(p.pisAliq), cofinsAliq: String(p.cofinsAliq), ibsAliq: String(p.ibsAliq), cbsAliq: String(p.cbsAliq) } : null;
+      const interestadual = modelo === "NF-e" && Boolean(cliRow?.uf) && String(cliRow?.uf).toUpperCase() !== emp.uf.toUpperCase();
       return {
         numeroItem: idx + 1,
         sku: p?.sku || `IT${idx + 1}`,
         nome: it.nome,
         ncm: p?.ncm || "00000000",
-        cfop: p?.cfop || "5102",
+        cfop: interestadual && tributacao?.cfopInterestadual ? tributacao.cfopInterestadual : (p?.cfop || "5102"),
         csosn: p?.csosn || "102",
         gtin: it.gtin || p?.gtin || "SEM GTIN",
         unidade: it.unidade || p?.unidade || "UN",
@@ -155,6 +164,7 @@ export async function montarInsumoFiscalDaVenda(
         cofinsAliq: Number(p?.cofinsAliq ?? 0),
         ibsAliq: Number(p?.ibsAliq ?? 0.1),
         cbsAliq: Number(p?.cbsAliq ?? 0.9),
+        tributacao,
       };
     }),
     totais: {
@@ -167,6 +177,11 @@ export async function montarInsumoFiscalDaVenda(
   };
 
   const validacao = diagnosticarPreValidacaoFiscal(insumo);
+  if (complementosIndisponiveis) {
+    const achado = { codigoSefaz: "NKWAY-TABELA", severidade: ambiente === 1 ? "bloqueio" as const : "alerta" as const, campo: "tributacao.produto", mensagem: "Não foi possível carregar a parametrização fiscal complementar dos produtos. Verifique a migração antes da operação fiscal." };
+    if (ambiente === 1) { validacao.bloqueios.push(achado); validacao.aprovada = false; }
+    else validacao.alertas.push(achado);
+  }
   const payload = montarPayloadEmissaoFiscal(insumo, venda.id);
 
   return { venda, empresa: emp, insumo, validacao, payload };

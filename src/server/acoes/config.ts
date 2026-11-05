@@ -88,6 +88,7 @@ export async function salvarFiscal(input: {
   try {
     const { empresa, usuario } = await exigirPermissao("config.gerenciar");
     input = corpo(input);
+    if (![1, 2, 3, 4].includes(Number(input.crt))) return { ok: false, erro: "Selecione um CRT válido entre 1 e 4." };
     const anterior = (empresa.fiscal ?? {}) as Record<string, unknown>;
     await db
       .update(empresas)

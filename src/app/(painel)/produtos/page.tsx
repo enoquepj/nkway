@@ -3,6 +3,7 @@ import { contexto } from "@/lib/session";
 import { listarCategorias, listarProdutos } from "@/server/dados";
 import { ProdutosView } from "@/views/Produtos";
 import { planoById } from "@/lib/dominio";
+import { temPermissao } from "@/lib/permissoes";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export default async function ProdutosPage() {
     <ProdutosView
       produtos={produtos}
       categorias={categorias}
+      podeFiscal={temPermissao(c.usuario.papel, "config.gerenciar")}
       plano={{ nome: planoById(c.empresa.plano).nome, limite: planoById(c.empresa.plano).limiteProdutos, atuais: produtos.filter((p) => p.ativo).length }}
     />
   );

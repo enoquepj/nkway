@@ -15,6 +15,7 @@ import {
   validarCnpj,
   validarGtin,
 } from "@/lib/dominio";
+import { CST_ICMS_FISCAIS, validarParametrosTributarios, validarRegimeTributario, type ParametrosTributarios } from "@/lib/tributacao";
 
 export type ProvedorEmissorFiscal = "local" | "focusnfe" | "nuvemfiscal" | "webhook_custom";
 
@@ -104,6 +105,8 @@ export type InsumoPreValidacaoFiscal = {
     cofinsAliq: number;
     ibsAliq: number;
     cbsAliq: number;
+    /** Complemento opcional, explicitamente cadastrado para o produto. */
+    tributacao?: ParametrosTributarios | null;
   }[];
   totais: {
     subtotal: number;
@@ -261,9 +264,22 @@ export function diagnosticarPreValidacaoFiscal(input: InsumoPreValidacaoFiscal):
       );
     }
 
-    if ((input.emitente.crt === 1 || input.emitente.crt === 4) && !CSOSN_VALIDOS.has(String(it.csosn || ""))) {
+    const complemento = it.tributacao;
+    const usaCst = complemento?.tipoIcms === "cst";
+    if (complemento) {
+      const formato = validarParametrosTributarios(complemento);
+      if (!formato.ok) add("NKWAY-PARAM", "bloqueio", `det[${it.numeroItem}].imposto`, `Item "${it.nome}": ${formato.erro}`);
+      const incompatibilidade = validarRegimeTributario(complemento, input.emitente.crt);
+      if (incompatibilidade) add("NKWAY-CRT", "bloqueio", `det[${it.numeroItem}].ICMS`, `Item "${it.nome}": ${incompatibilidade}`);
+      if (Boolean(complemento.cstIbsCbs) !== Boolean(complemento.classTrib)) add("NKWAY-IBSCBS", emProducao ? "bloqueio" : "alerta", `det[${it.numeroItem}].IBSCBS`, `Item "${it.nome}": informe e revise CST IBS/CBS e cClassTrib em conjunto.`);
+    }
+    if (usaCst && !(CST_ICMS_FISCAIS as readonly string[]).includes(complemento?.cstIcms ?? "")) add("NKWAY-CST", "bloqueio", `det[${it.numeroItem}].ICMS`, `Item "${it.nome}": CST ICMS não reconhecido.`);
+    if ((input.emitente.crt === 1 || input.emitente.crt === 4) && !usaCst && !CSOSN_VALIDOS.has(String(it.csosn || ""))) {
       add("590", "bloqueio", `det[${it.numeroItem}].CSOSN`, `Item "${it.nome}": CSOSN "${it.csosn}" inválido para Simples Nacional / MEI.`);
     }
+    if ([2, 3].includes(input.emitente.crt) && (!usaCst || !complemento?.cstIcms)) add("NKWAY-CST", emProducao ? "bloqueio" : "alerta", `det[${it.numeroItem}].ICMS`, `Item "${it.nome}": CST ICMS não parametrizado para o CRT informado. Revise o produto antes da operação fiscal.`);
+    if (input.emitente.crt === 3 && !complemento?.cstIbsCbs && !complemento?.classTrib) add("NKWAY-IBSCBS-AUSENTE", "alerta", `det[${it.numeroItem}].IBSCBS`, `Item "${it.nome}": CST IBS/CBS e cClassTrib não informados. Verifique a obrigatoriedade e a configuração com a contabilidade.`);
+    if (!complemento?.origem) add("NKWAY-ORIGEM", "alerta", `det[${it.numeroItem}].orig`, `Item "${it.nome}": origem não cadastrada; o contrato legado utiliza origem 0. Revise antes da operação fiscal.`);
 
     if (it.gtin && it.gtin !== "SEM GTIN" && !validarGtin(it.gtin)) {
       add("883", "bloqueio", `det[${it.numeroItem}].cEAN`, `Item "${it.nome}": GTIN "${it.gtin}" possui dígito verificador inválido.`);
@@ -359,18 +375,28 @@ export function montarPayloadEmissaoFiscal(input: InsumoPreValidacaoFiscal, refe
           : it.nome,
       codigoBarrasGtin: it.gtin || "SEM GTIN",
       ncm: soDigitos(it.ncm).padEnd(8, "0").slice(0, 8),
+      ...(it.tributacao?.cest ? { cest: it.tributacao.cest } : {}),
       cfop: soDigitos(it.cfop).padEnd(4, "5102").slice(0, 4),
       unidadeComercial: it.unidade || "UN",
       quantidadeComercial: round2(it.qtd * 1000) / 1000,
       valorUnitarioComercial: round2(it.precoUnit),
       valorBruto: round2(it.qtd * it.precoUnit),
       impostos: {
-        origem: 0,
-        csosn: it.csosn || "102",
+        origem: it.tributacao?.origem && /^[0-8]$/.test(it.tributacao.origem) ? Number(it.tributacao.origem) : 0,
+        ...(it.tributacao?.tipoIcms === "cst" && it.tributacao.cstIcms ? { cstIcms: it.tributacao.cstIcms } : { csosn: it.csosn || "102" }),
         icmsAliquota: round2(it.icmsAliq),
         pisAliquota: round2(it.pisAliq),
         cofinsAliquota: round2(it.cofinsAliq),
+        ...(it.tributacao?.cstPis ? { cstPis: it.tributacao.cstPis } : {}),
+        ...(it.tributacao?.cstCofins ? { cstCofins: it.tributacao.cstCofins } : {}),
+        ...(it.tributacao?.cstIpi ? { cstIpi: it.tributacao.cstIpi } : {}),
+        ...(it.tributacao?.ipiAliq ? { ipiAliquota: Number(it.tributacao.ipiAliq) } : {}),
+        ...(it.tributacao?.icmsStAliq ? { icmsStAliquota: Number(it.tributacao.icmsStAliq) } : {}),
+        ...(it.tributacao?.fcpAliq ? { fcpAliquota: Number(it.tributacao.fcpAliq) } : {}),
+        ...(it.tributacao?.beneficioFiscal ? { beneficioFiscal: it.tributacao.beneficioFiscal } : {}),
         reformaTributaria2026: {
+          ...(it.tributacao?.cstIbsCbs ? { cst: it.tributacao.cstIbsCbs } : {}),
+          ...(it.tributacao?.classTrib ? { cClassTrib: it.tributacao.classTrib } : {}),
           ibsAliquotaTeste: round2(it.ibsAliq),
           cbsAliquotaTeste: round2(it.cbsAliq),
           valorIbsEstimado: round2((it.total * it.ibsAliq) / 100),

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { usuarios } from "@/db/schema";
 import { contexto } from "@/lib/session";
 import { planoById } from "@/lib/dominio";
+import { crtSugeridoParaRegime } from "@/lib/tributacao";
 import { normalizarPerfil } from "@/lib/permissoes";
 import { ConfigView } from "@/views/Config";
 import { listarContas, listarEntradas, listarProdutos, listarVendas, obterPainelAssinatura, painel } from "@/server/dados";
@@ -49,7 +50,7 @@ export default async function ConfigPage() {
         ambiente: Number(fiscal.ambiente ?? 2) as 1 | 2,
         cscId: String(fiscal.cscId ?? ""),
         cscToken: String(fiscal.cscToken ?? ""),
-        crt: Number(fiscal.crt ?? 1),
+        crt: Number(fiscal.crt ?? crtSugeridoParaRegime(c.empresa.regime) ?? 1),
         certificadoNome: String(fiscal.certificadoNome ?? ""),
         certificadoValidade: String(fiscal.certificadoValidade ?? ""),
         certificadoSerial: String(fiscal.certificadoSerial ?? ""),

@@ -182,5 +182,36 @@ export async function garantirMigracoesNk() {
   `);
   await db.execute(sql`create index if not exists nk_caixa_quebra_sessao_idx on nk_caixa_quebra_log (sessao_id)`);
   await db.execute(sql`create index if not exists nk_caixa_quebra_empresa_idx on nk_caixa_quebra_log (empresa_id, created_at)`);
+
+  // Parametrização fiscal de produtos: somente tabelas novas, sem reescrever cadastros legados.
+  await db.execute(sql`
+    create table if not exists nk_fiscal_parametro (
+      id uuid primary key default gen_random_uuid(),
+      empresa_id uuid not null references nk_empresa(id) on delete cascade,
+      tipo text not null,
+      codigo text not null default '',
+      nome text not null,
+      regime text not null default 'todos',
+      dados jsonb not null default '{}'::jsonb,
+      ativo boolean not null default true,
+      criado_em timestamptz not null default now(),
+      atualizado_em timestamptz not null default now()
+    )
+  `);
+  await db.execute(sql`create index if not exists nk_fiscal_parametro_empresa_tipo_idx on nk_fiscal_parametro(empresa_id, tipo)`);
+  await db.execute(sql`create unique index if not exists nk_fiscal_codigo_empresa_tipo_uidx on nk_fiscal_parametro(empresa_id, tipo, codigo) where tipo <> 'perfil'`);
+  await db.execute(sql`create unique index if not exists nk_fiscal_perfil_empresa_nome_uidx on nk_fiscal_parametro(empresa_id, lower(nome)) where tipo = 'perfil'`);
+  await db.execute(sql`
+    create table if not exists nk_produto_tributacao (
+      id uuid primary key default gen_random_uuid(),
+      empresa_id uuid not null references nk_empresa(id) on delete cascade,
+      produto_id uuid not null references nk_produto(id) on delete cascade,
+      perfil_id uuid references nk_fiscal_parametro(id) on delete set null,
+      dados jsonb not null default '{}'::jsonb,
+      atualizado_em timestamptz not null default now()
+    )
+  `);
+  await db.execute(sql`create unique index if not exists nk_produto_tributacao_produto_uidx on nk_produto_tributacao(produto_id)`);
+  await db.execute(sql`create index if not exists nk_produto_tributacao_empresa_idx on nk_produto_tributacao(empresa_id)`);
   aplicado = true;
 }

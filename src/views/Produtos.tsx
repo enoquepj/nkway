@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Badge,
   BarraFiltros,
@@ -65,10 +66,12 @@ export function ProdutosView({
   produtos,
   categorias,
   plano,
+  podeFiscal = false,
 }: {
   produtos: ProdutoDto[];
   categorias: string[];
   plano: { nome: string; limite: number; atuais: number };
+  podeFiscal?: boolean;
 }) {
   const toast = useToast();
   const [busca, setBusca] = useState("");
@@ -256,6 +259,7 @@ export function ProdutosView({
       ocultoNoCsv: true,
       render: (p) => (
         <div className="flex justify-end gap-1">
+          {podeFiscal && <Link href={`/config/fiscal/produtos?produto=${encodeURIComponent(p.id)}`} title="Parametrizar impostos" aria-label={`Parametrizar impostos de ${p.nome}`} className="rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-way-700"><Icon name="documento" className="size-4" /></Link>}
           <button type="button" title="Editar" onClick={() => setEditando({ ...p })} className="rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-800">
             <Icon name="etiqueta" className="size-4" />
           </button>
@@ -293,6 +297,7 @@ export function ProdutosView({
         subtitulo={`Cadastro com margem, custo médio e tributação · plano ${plano.nome} (${plano.atuais}/${plano.limite} ativos)`}
         acao={
           <>
+            {podeFiscal && <Link href="/config/fiscal/produtos" className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-[12px] font-semibold text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50"><Icon name="documento" className="size-4" /> Tributação fiscal</Link>}
             <Button variante="secundario" icone="etiqueta" onClick={() => setManutencao(true)}>
               Manutenção de preços
             </Button>

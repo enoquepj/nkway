@@ -9,8 +9,11 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import type { ParametrosTributarios } from "@/lib/tributacao";
 
 /** Plano comercial — freemium com trial de 14 dias */
 export const PLANOS = ["start", "me", "loja_mais"] as const;
@@ -95,6 +98,45 @@ export const produtos = pgTable(
     index("nk_produto_empresa_idx").on(t.empresaId),
     index("nk_produto_sku_idx").on(t.sku),
     index("nk_produto_gtin_idx").on(t.gtin),
+  ],
+);
+
+/** Códigos mantidos pela empresa e perfis fiscais reutilizáveis; não é tabela oficial. */
+export const parametrosFiscais = pgTable(
+  "nk_fiscal_parametro",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    tipo: text("tipo").notNull(),
+    codigo: text("codigo").notNull().default(""),
+    nome: text("nome").notNull(),
+    regime: text("regime").notNull().default("todos"),
+    dados: jsonb("dados").$type<Partial<ParametrosTributarios>>().notNull().default({}),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm: timestamp("criado_em", { withTimezone: true }).notNull().defaultNow(),
+    atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("nk_fiscal_parametro_empresa_tipo_idx").on(t.empresaId, t.tipo),
+    uniqueIndex("nk_fiscal_codigo_empresa_tipo_uidx").on(t.empresaId, t.tipo, t.codigo).where(sql`${t.tipo} <> 'perfil'`),
+    uniqueIndex("nk_fiscal_perfil_empresa_nome_uidx").on(t.empresaId, sql`lower(${t.nome})`).where(sql`${t.tipo} = 'perfil'`),
+  ],
+);
+
+/** Complemento fiscal opcional; não altera a estrutura ou os valores de nk_produto legado. */
+export const produtoTributacoes = pgTable(
+  "nk_produto_tributacao",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id").notNull().references(() => empresas.id, { onDelete: "cascade" }),
+    produtoId: uuid("produto_id").notNull().references(() => produtos.id, { onDelete: "cascade" }),
+    perfilId: uuid("perfil_id").references(() => parametrosFiscais.id, { onDelete: "set null" }),
+    dados: jsonb("dados").$type<Partial<ParametrosTributarios>>().notNull().default({}),
+    atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("nk_produto_tributacao_produto_uidx").on(t.produtoId),
+    index("nk_produto_tributacao_empresa_idx").on(t.empresaId),
   ],
 );
 

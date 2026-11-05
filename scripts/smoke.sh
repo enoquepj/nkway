@@ -60,6 +60,8 @@ PDV_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/pdv")
 [[ "$PDV_ANON" == "307" ]]; marca $? "GET /pdv sem sessão = $PDV_ANON"
 IMPRESSAO_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/dashboard/relatorios/pdv/imprimir")
 [[ "$IMPRESSAO_ANON" == "307" ]]; marca $? "GET impressão PDV sem sessão = $IMPRESSAO_ANON"
+TRIBUTACAO_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/config/fiscal/produtos")
+[[ "$TRIBUTACAO_ANON" == "307" ]]; marca $? "GET parametrização fiscal sem sessão = $TRIBUTACAO_ANON"
 
 echo "→ rotas autenticadas"
 COOKIE=$(node -e '
@@ -76,7 +78,7 @@ console.log("nkway.sessao="+p+"."+s);await c.end();})();' 2>/dev/null)
 if [[ -z "$COOKIE" ]]; then
   echo "  aviso: sem usuário no banco — rode build_and_start (ou npm run build + start) para o seed criar a empresa demo"
 else
-  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /prontidao /dashboard/auditoria-caixa /dashboard/relatorios/pdv /dashboard/relatorios/pdv/imprimir /config; do
+  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /prontidao /dashboard/auditoria-caixa /dashboard/relatorios/pdv /dashboard/relatorios/pdv/imprimir /config /config/fiscal/produtos; do
     code=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" "$BASE$p")
     [[ "$code" == "200" ]]; marca $? "GET $p = $code"
   done
@@ -171,6 +173,12 @@ else
   FECHAMENTO=$?
   marca $FECHAMENTO "fechamento cego (48 cenários locais)"
   if [[ $FECHAMENTO -ne 0 ]]; then tail -40 /tmp/nk-fechamento-cego.log; fi
+
+  echo "→ parametrização fiscal de produtos"
+  BASE="$BASE" node scripts/testar-tributacao-produtos.mjs > /tmp/nk-tributacao-produtos.log 2>&1
+  TRIBUTACAO=$?
+  marca $TRIBUTACAO "cadastros, regimes, tenant e emissor fiscal"
+  if [[ $TRIBUTACAO -ne 0 ]]; then tail -45 /tmp/nk-tributacao-produtos.log; fi
 fi
 
 echo

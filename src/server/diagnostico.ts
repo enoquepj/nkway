@@ -52,6 +52,7 @@ import {
   type VendaCaixaInput,
 } from "@/lib/caixa";
 import { fecharSessaoCaixaTransacional } from "@/server/caixaCore";
+import { aplicarPerfilTributario, crtSugeridoParaRegime, PARAMETROS_TRIBUTARIOS_VAZIOS, validarCodigoFiscal, validarParametrosTributarios, validarRegimeTributario } from "@/lib/tributacao";
 import { normalizarPerfil, perfilValido, temPermissao } from "@/lib/permissoes";
 import { confereSenha, hashSenha } from "@/lib/session";
 import { extrairEntradasZip, gerarZipBuffer } from "@/lib/zip";
@@ -1940,6 +1941,21 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("fis-6", "Fiscal", "Código IBGE do município com 7 dígitos", /^\d{7}$/.test(String(empresa?.codMunicipio ?? "")), String(empresa?.codMunicipio ?? "—"), true);
   ok("fis-7", "Fiscal", "Sem número de nota repetido na mesma série", !notaDuplicada, notaDuplicada ? "duplicidade detectada" : `${notasPorSerie.size} combinação(ões) série/número`);
   ok("fis-8", "Fiscal", "CSC do NFC-e presente quando há cupom emitido", fiscais.filter((v) => v.modelo === "65").length === 0 || !!fiscal.cscId, fiscal.cscId ? `CSC id ${fiscal.cscId}` : "sem NFC-e emitida");
+
+  const codigosFiscaisOk = validarCodigoFiscal("ncm", "1006.30.21").ok && validarCodigoFiscal("cfop", "5.102").ok && !validarCodigoFiscal("ncm", "123").ok && !validarCodigoFiscal("csosn", "999").ok;
+  const cstMono = { ...PARAMETROS_TRIBUTARIOS_VAZIOS, tipoIcms: "cst", cstIcms: "61" };
+  const cstComum = { ...PARAMETROS_TRIBUTARIOS_VAZIOS, tipoIcms: "cst", cstIcms: "00" };
+  const regimesFiscaisOk = crtSugeridoParaRegime("mei") === 4 && crtSugeridoParaRegime("simples") === 1 && crtSugeridoParaRegime("simples_excedente") === 2 && crtSugeridoParaRegime("real") === 3 && !validarRegimeTributario(cstMono, 1) && Boolean(validarRegimeTributario(cstComum, 1)) && !validarRegimeTributario(cstComum, 3);
+  const perfilBase = { ...PARAMETROS_TRIBUTARIOS_VAZIOS, ncm: "10063021", cfop: "5102" };
+  const perfilAplicado = aplicarPerfilTributario(perfilBase, { ...PARAMETROS_TRIBUTARIOS_VAZIOS, cfop: "5405" });
+  const perfilCopiaOk = perfilAplicado.ncm === "10063021" && perfilAplicado.cfop === "5405" && perfilBase.cfop === "5102";
+  const tabelasFiscais = await db.execute<{ n: number }>(sql`select count(*)::int as n from information_schema.tables where table_schema='public' and table_name in ('nk_fiscal_parametro','nk_produto_tributacao')`);
+  ok("fis-9", "Fiscal", "Códigos fiscais têm formato validado sem presumir vigência oficial", codigosFiscaisOk, "NCM · CFOP · CSOSN", true);
+  ok("fis-10", "Fiscal", "CRT e CST/CSOSN respeitam os regimes e a exceção monofásica", regimesFiscaisOk, "MEI 4 · Simples 1 · excesso 2 · normal 3", true);
+  ok("fis-11", "Fiscal", "Perfil fiscal aplica somente campos preenchidos sem alterar o original", perfilCopiaOk, "cópia explícita · sem propagação automática", true);
+  ok("fis-12", "Fiscal", "Tabelas fiscais complementares estão disponíveis", Number(tabelasFiscais.rows[0]?.n ?? 0) === 2, "nk_fiscal_parametro · nk_produto_tributacao", true);
+  const classificacaoIbsOk = validarParametrosTributarios({ cstIbsCbs: "000", classTrib: "000001" }).ok && !validarParametrosTributarios({ cstIbsCbs: "200", classTrib: "000001" }).ok;
+  ok("fis-13", "Fiscal", "CST IBS/CBS e cClassTrib mantêm o mesmo prefixo", classificacaoIbsOk, "verificação estrutural; vigência deve ser confirmada em tabela oficial", true);
 
   /* ---------------------------------------- DF-e / Certificado A1 / SEFAZ */
   const soapTeste = buildSoapDistNsu(empresa?.cnpj ?? "23567891000174", "42", 2);

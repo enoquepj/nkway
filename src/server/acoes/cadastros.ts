@@ -81,12 +81,13 @@ export async function salvarProduto(input: ProdutoInput): Promise<Resultado> {
     };
 
     if (input.id) {
-      const [atual] = await db.select({ estoque: produtos.estoque }).from(produtos).where(eq(produtos.id, input.id)).limit(1);
-      await db.update(produtos).set(valores).where(eq(produtos.id, input.id));
+      const [atual] = await db.select({ estoque: produtos.estoque }).from(produtos).where(and(eq(produtos.id, input.id), eq(produtos.empresaId, empresaId))).limit(1);
+      if (!atual) return { ok: false, erro: "Produto não encontrado nesta empresa." };
+      await db.update(produtos).set(valores).where(and(eq(produtos.id, input.id), eq(produtos.empresaId, empresaId)));
       const novoEstoque = round2(input.estoque);
-      if (atual && Math.abs(Number(atual.estoque) - novoEstoque) > 0.0005) {
+      if (Math.abs(Number(atual.estoque) - novoEstoque) > 0.0005) {
         const delta = round2(novoEstoque - Number(atual.estoque));
-        await db.update(produtos).set({ estoque: novoEstoque }).where(eq(produtos.id, input.id));
+        await db.update(produtos).set({ estoque: novoEstoque }).where(and(eq(produtos.id, input.id), eq(produtos.empresaId, empresaId)));
         await db.insert(movimentos).values({
           empresaId,
           produtoId: input.id,
@@ -134,7 +135,7 @@ export async function alternarProduto(id: string): Promise<Resultado> {
     const { empresaId } = await exigirPermissao("cadastros.produtos");
     const [p] = await db.select({ ativo: produtos.ativo }).from(produtos).where(and(eq(produtos.id, id), eq(produtos.empresaId, empresaId))).limit(1);
     if (!p) return { ok: false, erro: "Produto não encontrado." };
-    await db.update(produtos).set({ ativo: !p.ativo }).where(eq(produtos.id, id));
+    await db.update(produtos).set({ ativo: !p.ativo }).where(and(eq(produtos.id, id), eq(produtos.empresaId, empresaId)));
     revalidatePath("/produtos");
     return { ok: true };
   } catch (e) {
@@ -145,6 +146,8 @@ export async function alternarProduto(id: string): Promise<Resultado> {
 export async function excluirProduto(id: string): Promise<Resultado> {
   try {
     const { empresaId } = await exigirPermissao("cadastros.produtos");
+    const [proprio] = await db.select({ id: produtos.id }).from(produtos).where(and(eq(produtos.id, id), eq(produtos.empresaId, empresaId))).limit(1);
+    if (!proprio) return { ok: false, erro: "Produto não encontrado nesta empresa." };
     const [uso] = await db
       .select({ n: sql<string>`count(*)` })
       .from(vendaItens)
@@ -154,7 +157,7 @@ export async function excluirProduto(id: string): Promise<Resultado> {
       revalidatePath("/produtos");
       return { ok: true, aviso: "Produto tem histórico de vendas: foi desativado em vez de apagado." };
     }
-    await db.delete(movimentos).where(eq(movimentos.produtoId, id));
+    await db.delete(movimentos).where(and(eq(movimentos.produtoId, id), eq(movimentos.empresaId, empresaId)));
     await db.delete(produtos).where(and(eq(produtos.id, id), eq(produtos.empresaId, empresaId)));
     revalidatePath("/produtos");
     return { ok: true };

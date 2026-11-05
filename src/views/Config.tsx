@@ -205,6 +205,7 @@ export function ConfigView({
 
       {aba === "fiscal" && (
         <div className="grid gap-4 lg:grid-cols-2">
+          {podeConfig && <Card className="lg:col-span-2"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[13px] font-bold text-ink-800">Tributação de produtos</p><p className="mt-1 text-[11.5px] text-ink-400">Cadastre CFOP, NCM, CST, CSOSN e perfis fiscais por empresa, com revisão contábil.</p></div><Link href="/config/fiscal/produtos"><Button tamanho="sm" variante="secundario" icone="etiqueta">Abrir parametrização fiscal</Button></Link></div></Card>}
           <Card>
             <CardTitulo titulo="Emissão" descricao="Séries por modelo e ambiente da SEFAZ" icone="documento" />
             <div className="grid gap-3 sm:grid-cols-2">

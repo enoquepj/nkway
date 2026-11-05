@@ -19,7 +19,7 @@ if [[ -z "$COOKIE" ]]; then echo "sem usuário no banco — rode build_and_start
 
 # junta os ids de ação de todas as telas
 declare -A VISTOS=()
-for pagina in / /pdv /caixa /clientes /config /assinatura /migracao /usuarios /emissor /dfe /entradas /estoque /financeiro /documentos /transporte /devolucoes /produtos /relatorios; do
+for pagina in / /pdv /caixa /clientes /config /config/fiscal/produtos /assinatura /migracao /usuarios /emissor /dfe /entradas /estoque /financeiro /documentos /transporte /devolucoes /produtos /relatorios; do
   curl -s -H "Cookie: $COOKIE" "$BASE$pagina" -o /tmp/nk-pg.html
   for c in $(grep -o '/_next/static/chunks/[a-z0-9_~.-]*\.js' /tmp/nk-pg.html | sort -u); do
     curl -s "$BASE$c" -o /tmp/nk-c.js

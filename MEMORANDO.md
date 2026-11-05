@@ -3,7 +3,7 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Atualizado em:** 2026-11-05 (main consultado `dd9f0cd`; central e impressão de relatórios na entrega local)
+**Atualizado em:** 2026-11-05 (main consultado `e78d44c`; parametrização fiscal de produtos na entrega local)
 
 Na retomada, o health de produção respondeu HTTP 200. A validação completa foi feita em prévia e banco **locais**: smoke 36/36, diagnóstico 219/219, motor de caixa 16 cenários e 196 chamadas de ações sem erro 500. Não houve teste autenticado em produção nem mudança de infraestrutura.
 
@@ -81,7 +81,8 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 | Gaveta, blind balance e fechamento às cegas (Etapa 2) | `src/lib/caixa.ts` (constantes + `estadoGavetaPorSaldo` + `"cofre"`) · `src/server/caixaCore.ts` (`obterEstadoGavetaSessao`, `listarAuditoriaCaixa`) · `src/server/acoes/caixa.ts` (`fecharTurnoCego`, `homologarQuebraCaixa`, fundo automático, `ajustarCaixaFechado` sem sobrescrever `valoresEsperados`) · `src/app/(pdv)/pdv/page.tsx` · `src/views/Pdv.tsx` · `src/views/Caixa.tsx` · `src/lib/operacoesPdv.ts` · `cx-24` / `cx-25` |
 | UI de fechamento e auditoria (Etapa 3) | `src/components/ModalFechamentoCego.tsx` · `src/views/Pdv.tsx` (botão Encerrar Turno) · `src/app/(painel)/dashboard/auditoria-caixa/page.tsx` · `src/views/AuditoriaCaixa.tsx` · link no `src/components/shell.tsx` · `cx-26` |
 | Relatórios gerenciais de PDV | `/dashboard/relatorios/pdv` + `GET /api/relatorios/pdv` · `src/lib/relatoriosPdv.ts` · `src/server/relatoriosPdv.ts` · `src/views/RelatoriosPdv.tsx` · `scripts/testar-relatorios-pdv.mjs` (50 verificações locais) |
-| Central e impressão dos relatórios | Entrada única `/relatorios` · `src/components/MenuRelatorios.tsx` · prévia gerencial `/dashboard/relatorios/pdv/imprimir` · impressão dos gerais com tabela completa. Entrega local sobre `dd9f0cd`, ainda não comprovada em produção. |
+| Central e impressão dos relatórios | Entrada única `/relatorios` · `src/components/MenuRelatorios.tsx` · prévia gerencial `/dashboard/relatorios/pdv/imprimir` · impressão dos gerais com tabela completa. Código incluído no main `e78d44c`; health não identifica o commit ativo. |
+| Parametrização fiscal de produtos | `/config/fiscal/produtos` · `src/lib/tributacao.ts` · `src/server/tributacaoCore.ts` · `src/server/acoes/tributacao.ts` · `src/views/TributacaoProdutos.tsx` · migração aditiva `20261105_parametros_fiscais_produtos.sql` · 66 testes locais. IBS/CBS e regimes normais têm parametrização parcial, não apuração integral nem homologação automática. Ver `FISCAL_PRODUTOS.md` antes de operar fiscalmente. |
 | Correção de quebra compensada e blind balance | Código no main `dd9f0cd`, testado localmente; health não identifica o commit ativo em produção. Turnos antigos não foram alterados. Ver `CONTEXTO_ARENA.md` → item 22. |
 | Motor de apuração/fechamento de caixa (alinhado ao `main` `ffa115c`, sem módulo paralelo) | `src/lib/caixa.ts` (puro: `compoeCaixa`, `classificarVendaCaixa`, `apurarSessaoCaixa`, `idsEquivalentes`, `totalTroco`) + `src/server/caixaCore.ts` (`carregarInsumosSessao`, `apurarSessaoNoBanco`, `fecharSessaoCaixaTransacional`) + `src/server/acoes/caixa.ts` + `src/server/dados.ts` + `src/server/diagnostico.ts` (`cx-1..cx-27`, 220 verificações) + `scripts/testar-caixa-motor.mjs` (16 cenários) |
 | Migração aditiva mínima do motor de caixa | `supabase/migrations/20261105_caixa_operacao_economica.sql` + `src/db/migracao.ts` + `src/lib/migracaoLegado.ts` — coluna `nk_venda.status_comercial text` anulável, sem default, legado preservado |
