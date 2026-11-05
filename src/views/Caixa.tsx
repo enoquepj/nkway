@@ -48,10 +48,12 @@ export function CaixaView({
   sessaoAtual,
   historico,
   usuarioAtual,
+  operadores = [],
 }: {
   sessaoAtual: CaixaSessaoDto | null;
   historico: CaixaSessaoDto[];
   usuarioAtual: { id: string; nome: string; papel: PerfilUsuario };
+  operadores?: { id: string; nome: string }[];
 }) {
   const toast = useToast();
   const podeAbrir = temPermissao(usuarioAtual.papel, "caixa.abrir");
@@ -67,6 +69,7 @@ export function CaixaView({
   const [terminalAbertura, setTerminalAbertura] = useState("CAIXA 1");
   const [saldoAbertura, setSaldoAbertura] = useState("100,00");
   const [obsAbertura, setObsAbertura] = useState("");
+  const [operadorAbertura, setOperadorAbertura] = useState(usuarioAtual.nome);
 
   async function confirmarAbertura() {
     setOcupado(true);
@@ -74,6 +77,7 @@ export function CaixaView({
       terminal: terminalAbertura,
       saldoInicial: saldoAbertura,
       observacao: obsAbertura,
+      operadorNome: operadorAbertura,
     });
     setOcupado(false);
     toast(r.ok ? (r.aviso ?? "Caixa aberto.") : r.erro, r.ok ? "ok" : "erro");
@@ -411,10 +415,22 @@ export function CaixaView({
           <Card className="mx-auto max-w-xl">
             <CardTitulo
               titulo="Abrir nova sessão de caixa"
-              descricao={`Operador responsável: ${usuarioAtual.nome} · Todas as vendas fiscais serão vinculadas a esta sessão`}
+              descricao="Identifique o operador responsável · todas as vendas desta sessão serão vinculadas a ele"
               icone="caixa"
             />
             <div className="space-y-3">
+              <Campo rotulo="Operador responsável" obrigatorio>
+                <Select
+                  valor={operadorAbertura}
+                  aoMudar={setOperadorAbertura}
+                  opcoes={[
+                    { valor: usuarioAtual.nome, rotulo: `${usuarioAtual.nome} (logado)` },
+                    ...operadores
+                      .filter((o) => o.nome !== usuarioAtual.nome)
+                      .map((o) => ({ valor: o.nome, rotulo: o.nome })),
+                  ]}
+                />
+              </Campo>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Campo rotulo="Terminal / Identificação" obrigatorio>
                   <Select

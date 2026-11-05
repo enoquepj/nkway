@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { normalizarPerfil } from "@/lib/permissoes";
 import { contexto } from "@/lib/session";
 import type { Emitente } from "@/lib/danfe";
-import { listarClientes, listarProdutos } from "@/server/dados";
+import { listarClientes, listarProdutos, listarUsuarios } from "@/server/dados";
 import { obterEstadoGavetaSessao } from "@/server/caixaCore";
 import { PdvView } from "@/views/Pdv";
 
@@ -12,13 +12,15 @@ export default async function PdvPage() {
   const c = await contexto();
   if (!c) redirect("/login");
   const papel = normalizarPerfil(c.usuario.papel);
-  const [produtos, clientes, estadoGaveta] = await Promise.all([
+  const [produtos, clientes, estadoGaveta, usuariosEmpresa] = await Promise.all([
     listarProdutos(c.empresaId, true),
     listarClientes(c.empresaId),
     // Blind balance: o PDV recebe SOMENTE o estado lógico da gaveta e o boolean
     // de bloqueio. Nenhum valor esperado ou saldo em dinheiro sai do servidor.
     obterEstadoGavetaSessao(c.empresaId, c.usuario.id),
+    listarUsuarios(c.empresaId),
   ]);
+  const operadores = usuariosEmpresa.filter((u) => u.ativo).map((u) => ({ id: u.id, nome: u.nome }));
   const fiscal = (c.empresa.fiscal ?? {}) as Record<string, unknown>;
   return (
     <PdvView
@@ -54,6 +56,7 @@ export default async function PdvPage() {
         } satisfies Emitente
       }
       cscId={String(fiscal.cscId ?? "00000000")}
+      operadores={operadores}
       usuario={{
         nome: c.usuario.nome,
         papel,

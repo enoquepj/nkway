@@ -154,6 +154,7 @@ export function PdvView({
   cscId = "00000000",
   usuario = { nome: "Operador", papel: "administrador" },
   sessaoCaixa = null,
+  operadores = [],
 }: {
   produtos: ProdutoDto[];
   clientes: ClienteOpcao[];
@@ -178,6 +179,8 @@ export function PdvView({
     estadoGaveta: "normal" | "alerta" | "bloqueado";
     bloquearVendaDinheiro: boolean;
   } | null;
+  /** Usuários ativos da empresa, para o operador se identificar ao abrir o caixa. */
+  operadores?: { id: string; nome: string }[];
 }) {
   const toast = useToast();
   const router = useRouter();
@@ -211,6 +214,7 @@ export function PdvView({
   const [modalAbrirCaixa, setModalAbrirCaixa] = useState(false);
   const [acaoAposAbrirCaixa, setAcaoAposAbrirCaixa] = useState<"sem_nota" | "emitir_nfce" | null>(null);
   const [terminalRapido, setTerminalRapido] = useState("CAIXA 1");
+  const [operadorAbertura, setOperadorAbertura] = useState(usuario.nome);
   const [saldoRapido, setSaldoRapido] = useState("100,00");
 
   const ativos = useMemo(() => produtos.filter((p) => p.ativo), [produtos]);
@@ -4082,7 +4086,7 @@ export function PdvView({
           setAcaoAposAbrirCaixa(null);
         }}
         titulo="Abrir sessão de caixa"
-        descricao={`Operador: ${usuario.nome} · Libera vendas e controle de gaveta`}
+        descricao="Identifique o operador · libera vendas e controle de gaveta"
         largura="max-w-md"
         rodape={
           <div className="flex justify-end gap-2">
@@ -4100,7 +4104,7 @@ export function PdvView({
               disabled={ocupado}
               onClick={async () => {
                 setOcupado(true);
-                const r = await abrirCaixa({ terminal: terminalRapido, saldoInicial: saldoRapido });
+                const r = await abrirCaixa({ terminal: terminalRapido, saldoInicial: saldoRapido, operadorNome: operadorAbertura });
                 setOcupado(false);
                 if (!r.ok) {
                   toast(r.erro, "erro");
@@ -4123,6 +4127,21 @@ export function PdvView({
         }
       >
         <div className="space-y-3">
+          <Campo rotulo="Operador desta sessão" obrigatorio>
+            <Select
+              valor={operadorAbertura}
+              aoMudar={setOperadorAbertura}
+              opcoes={[
+                { valor: usuario.nome, rotulo: `${usuario.nome} (logado)` },
+                ...operadores
+                  .filter((o) => o.nome !== usuario.nome)
+                  .map((o) => ({ valor: o.nome, rotulo: o.nome })),
+              ]}
+            />
+          </Campo>
+          <p className="-mt-1.5 text-[11px] text-ink-400">
+            Quem está operando o caixa neste turno. As vendas ficam vinculadas a esta sessão.
+          </p>
           <Campo rotulo="Terminal" obrigatorio>
             <Select
               valor={terminalRapido}

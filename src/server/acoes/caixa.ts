@@ -24,10 +24,24 @@ export async function abrirCaixa(bruto: {
   saldoInicial?: number | string;
   terminal?: string;
   observacao?: string;
+  operadorNome?: string;
 }): Promise<ResultadoCaixa> {
   try {
     const { empresaId, usuario } = await exigirPermissao("caixa.abrir");
-    const input = corpo<{ saldoInicial?: number | string; terminal?: string; observacao?: string }>(bruto);
+    const input = corpo<{ saldoInicial?: number | string; terminal?: string; observacao?: string; operadorNome?: string }>(bruto);
+    // Operador identificado na abertura: deve existir e estar ativo na empresa;
+    // caso contrário, usa o nome do usuário logado. (operadorId segue = usuário logado,
+    // preservando o vínculo das vendas à sessão.)
+    const nomeOperadorSelecionado = texto(input.operadorNome).trim();
+    let operadorNome = usuario.nome;
+    if (nomeOperadorSelecionado) {
+      const [usuarioOperador] = await db
+        .select({ nome: usuarios.nome })
+        .from(usuarios)
+        .where(and(eq(usuarios.empresaId, empresaId), eq(usuarios.nome, nomeOperadorSelecionado), eq(usuarios.ativo, true)))
+        .limit(1);
+      if (usuarioOperador) operadorNome = usuarioOperador.nome;
+    }
     const brutoSaldo = input.saldoInicial;
     const informouSaldo = brutoSaldo !== undefined && brutoSaldo !== null && String(brutoSaldo).trim() !== "";
     let saldoInicial = informouSaldo ? round2(numero(brutoSaldo)) : 0;
@@ -81,7 +95,7 @@ export async function abrirCaixa(bruto: {
           numero: proximoNumero,
           terminal,
           operadorId: usuario.id,
-          operadorNome: usuario.nome,
+          operadorNome,
           status: "aberto",
           saldoInicial,
           fundoTroco: FUNDO_TROCO_PADRAO,

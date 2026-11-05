@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { normalizarPerfil } from "@/lib/permissoes";
 import { contexto } from "@/lib/session";
-import { listarSessoesCaixa, obterSessaoCaixaOperador } from "@/server/dados";
+import { listarSessoesCaixa, listarUsuarios, obterSessaoCaixaOperador } from "@/server/dados";
 import { CaixaView } from "@/views/Caixa";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +11,12 @@ export default async function CaixaPage() {
   if (!c) redirect("/login");
 
   const papel = normalizarPerfil(c.usuario.papel);
-  const [sessaoAtual, historico] = await Promise.all([
+  const [sessaoAtual, historico, usuariosEmpresa] = await Promise.all([
     obterSessaoCaixaOperador(c.empresaId, c.usuario.id, papel),
     listarSessoesCaixa(c.empresaId, c.usuario.id, papel),
+    listarUsuarios(c.empresaId),
   ]);
+  const operadores = usuariosEmpresa.filter((u) => u.ativo).map((u) => ({ id: u.id, nome: u.nome }));
 
   return (
     <CaixaView
@@ -25,6 +27,7 @@ export default async function CaixaPage() {
         nome: c.usuario.nome,
         papel,
       }}
+      operadores={operadores}
     />
   );
 }
