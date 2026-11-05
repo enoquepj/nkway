@@ -1,0 +1,54 @@
+NKWAY — ENTREGA: perguntar o OPERADOR na abertura do caixa
+================================================================
+
+TEMA
+-----
+Ao abrir o caixa (no PDV e na tela /caixa), o sistema agora PERGUNTA o
+operador: um campo "Operador" com a lista dos usuários ativos da empresa
+(pré-selecionado o usuário logado). Assim, mesmo com uma conta compartilhada
+no caixa, dá para identificar quem opera o turno.
+
+O que muda na tela
+------------------
+- Modal "Abrir sessão de caixa" (PDV) e "Abrir nova sessão de caixa" (/caixa)
+  ganham o campo "Operador" (seletor).
+- O nome escolhido fica gravado no turno (nk_caixa_sessao.operador_nome) e
+  aparece na barra do PDV ("Caixa #N (TERMINAL) · NomeDoOperador").
+- Segurança: o nome só é aceito se existir e estiver ativo na empresa;
+  senão, usa o nome do usuário logado. O vínculo das vendas à sessão continua
+  intacto (operador_id segue = usuário logado).
+
+ARQUIVOS (5)
+------------
+  1. src\app\(pdv)\pdv\page.tsx
+  2. src\app\(painel)\caixa\page.tsx
+  3. src\views\Pdv.tsx
+  4. src\views\Caixa.tsx
+  5. src\server\acoes\caixa.ts
+
+COMO APLICAR (sem erro)
+-----------------------
+1. Baixe o projeto (o mais recente) e extraia a pasta ENTREGA_GITHUB para:
+   C:\Users\Dell\Documents\Sistema way\ENTREGA_GITHUB
+   (ao lado do nkway, FORA dele; substitua a pasta antiga).
+2. Dois cliques em APLICAR_ENTREGA.cmd.
+   (SmartScreen: "Mais informações" -> "Executar assim mesmo".)
+   Ela copia os 5 arquivos e mostra [OK] em cada um + o que o git enxerga.
+3. GitHub Desktop:
+   - Se "Changes" mostrar os 5 arquivos: cole o Summary abaixo, clique em
+     "Commit to main" e depois "Push origin".
+   - Se mostrar "ahead N" (commits guardados): só "Push origin".
+   Summary:
+     Caixa: perguntar o operador na abertura (PDV e /caixa)
+
+DEPOIS DO PUSH (2-3 min)
+------------------------
+O Vercel publica sozinho. Para conferir:
+  - Abra o caixa no PDV: deve aparecer o campo "Operador" com a lista.
+  - Escolha um operador e abra: a barra mostra "Caixa #N (TERMINAL) · Nome".
+
+NÃO FAZER
+---------
+- Não copie arquivo por arquivo — use o APLICAR_ENTREGA.cmd.
+- Não toque em package.json, package-lock.json nem .env.
+- Não rode SQL no Supabase (esta mudança não cria nenhuma tabela/coluna nova).

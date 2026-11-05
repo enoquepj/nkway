@@ -3,7 +3,7 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Atualizado em:** 2026-10-31 (produção Next.js no Vercel + Supabase funcionando)
+**Atualizado em:** 2026-11-05 (main `c719aac` — seletor de operador na abertura do caixa)
 
 ---
 
