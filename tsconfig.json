@@ -47,6 +47,9 @@
     "src/utils",
     "src/lib/supabase.ts",
     "vite.config.ts",
-    "supabase"
+    "supabase",
+    "ENTREGA_GITHUB",
+    "ARQUIVOS_PARA_GITHUB",
+    "public/downloads"
   ]
 }
