@@ -1,4 +1,12 @@
 @echo off
+echo.
+echo [BLOQUEADO] Este pacote e historico e contem arquivos antigos do caixa.
+echo Nao copie estes arquivos: eles podem desfazer correcoes da versao atual.
+echo Use somente os arquivos atuais do repositorio e o GitHub Desktop.
+echo Nenhum arquivo foi alterado.
+echo.
+pause
+exit /b 1
 rem ============================================================================
 rem  NKWAY - APLICAR ENTREGA (ferramenta unica, dois cliques)
 rem  TEMA: perguntar o OPERADOR na abertura do caixa (PDV e /caixa)

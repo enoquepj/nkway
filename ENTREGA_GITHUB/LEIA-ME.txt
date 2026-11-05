@@ -1,3 +1,10 @@
+AVISO DE SEGURANÇA — PACOTE HISTÓRICO, NÃO APLICAR
+==================================================
+Esta cópia foi feita antes dos relatórios e da correção do fechamento cego.
+Os arquivos abaixo não devem substituir os arquivos atuais do repositório:
+isso desfaria correções e pode quebrar o build. O aplicador foi bloqueado.
+Use somente os arquivos atuais e o GitHub Desktop. O texto a seguir é histórico.
+
 NKWAY — ENTREGA: perguntar o OPERADOR na abertura do caixa
 ================================================================
 

@@ -20,6 +20,12 @@ if [[ $SEM_BUILD -eq 0 ]]; then
   [[ $FAIL -gt 0 ]] && { echo; echo "--- /tmp/nk-build.log ---"; tail -30 /tmp/nk-build.log; exit 1; }
 fi
 
+echo "→ lock de pacotes e isolamento dos espelhos"
+node scripts/testar-tsconfig-entrega.mjs > /tmp/nk-tsconfig-entrega.log 2>&1
+ESPELHO=$?
+marca $ESPELHO "lock sincronizado e arquivos reais verificados sem espelhos"
+if [[ $ESPELHO -ne 0 ]]; then cat /tmp/nk-tsconfig-entrega.log; exit 1; fi
+
 PORTA="${PORTA:-3000}"
 BASE="http://127.0.0.1:${PORTA}"
 if ! curl -fsS "$BASE/api/health" >/dev/null 2>&1; then

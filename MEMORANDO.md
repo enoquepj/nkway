@@ -3,7 +3,7 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Atualizado em:** 2026-11-05 (main consultado `ec4f01b`; código de produto preservado desde `c719aac` — seletor de operador na abertura do caixa)
+**Atualizado em:** 2026-11-05 (main consultado `43a8e4b`; correção do build Vercel pendente de publicação)
 
 Na retomada, o health de produção respondeu HTTP 200. A validação completa foi feita em prévia e banco **locais**: smoke 36/36, diagnóstico 219/219, motor de caixa 16 cenários e 196 chamadas de ações sem erro 500. Não houve teste autenticado em produção nem mudança de infraestrutura.
 
@@ -40,6 +40,7 @@ Na retomada, o health de produção respondeu HTTP 200. A validação completa f
 | Tabelas | legado sem prefixo preservado + Next `nk_*` em produção (assistente somente-leitura em `/migracao`) |
 | RLS `nk_*` | desativado por enquanto; tenant server-side por `empresa_id` |
 | Guia | `VERCEL_SUPABASE.md` |
+| Build Vercel e espelhos | `tsconfig.json` exclui diretórios de entrega; `scripts/testar-tsconfig-entrega.mjs` valida a configuração e o lock. O clone completo passou em instalação limpa, tipos e build. O aplicador histórico está bloqueado para não sobrescrever o caixa atual. |
 | Motor de caixa e regras de `compoeCaixa` / `operacaoEconomicaId` | `CONTEXTO_ARENA.md` → seção 6c (matriz, exemplos de troco e roteiro manual) |
 
 Regras: não criar outro Supabase, não recomendar Neon, não redefinir senha, não recriar tabelas e não alterar Vercel/banco se `/api/health` estiver ok. Nunca registrar segredo em documentação ou print.
@@ -79,8 +80,8 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 | Perfil Gerente e quebra de caixa (Etapa 1) | `src/lib/permissoes.ts` (`gerente`, `caixa.homologar`, `caixa.auditoria`) · `src/db/schema.ts` (`nk_caixa_quebra_log` + 3 colunas em `nk_caixa_sessao`) · `src/db/migracao.ts` · `src/lib/migracaoLegado.ts` · `supabase/migrations/20261106_caixa_quebra_aprovacao.sql` · `usr-6` / `cx-23` no diagnóstico |
 | Gaveta, blind balance e fechamento às cegas (Etapa 2) | `src/lib/caixa.ts` (constantes + `estadoGavetaPorSaldo` + `"cofre"`) · `src/server/caixaCore.ts` (`obterEstadoGavetaSessao`, `listarAuditoriaCaixa`) · `src/server/acoes/caixa.ts` (`fecharTurnoCego`, `homologarQuebraCaixa`, fundo automático, `ajustarCaixaFechado` sem sobrescrever `valoresEsperados`) · `src/app/(pdv)/pdv/page.tsx` · `src/views/Pdv.tsx` · `src/views/Caixa.tsx` · `src/lib/operacoesPdv.ts` · `cx-24` / `cx-25` |
 | UI de fechamento e auditoria (Etapa 3) | `src/components/ModalFechamentoCego.tsx` · `src/views/Pdv.tsx` (botão Encerrar Turno) · `src/app/(painel)/dashboard/auditoria-caixa/page.tsx` · `src/views/AuditoriaCaixa.tsx` · link no `src/components/shell.tsx` · `cx-26` |
-| Relatórios gerenciais de PDV (entrega local; publicar antes de considerar em produção) | `/dashboard/relatorios/pdv` + `GET /api/relatorios/pdv` · `src/lib/relatoriosPdv.ts` · `src/server/relatoriosPdv.ts` · `src/views/RelatoriosPdv.tsx` · `scripts/testar-relatorios-pdv.mjs` (31 verificações locais) |
-| Correção de quebra compensada e blind balance | Corrigida e testada localmente nas ações do PDV e `/caixa`; ainda depende de publicação para valer em produção. Turnos antigos não foram alterados. Ver `CONTEXTO_ARENA.md` → item 22. |
+| Relatórios gerenciais de PDV (código no main; deploy pendente de correção) | `/dashboard/relatorios/pdv` + `GET /api/relatorios/pdv` · `src/lib/relatoriosPdv.ts` · `src/server/relatoriosPdv.ts` · `src/views/RelatoriosPdv.tsx` · `scripts/testar-relatorios-pdv.mjs` (31 verificações locais) |
+| Correção de quebra compensada e blind balance | Código no main `43a8e4b`, testado localmente; o deploy falhou e precisa ser corrigido antes de valer em produção. Turnos antigos não foram alterados. Ver `CONTEXTO_ARENA.md` → item 22. |
 | Motor de apuração/fechamento de caixa (alinhado ao `main` `ffa115c`, sem módulo paralelo) | `src/lib/caixa.ts` (puro: `compoeCaixa`, `classificarVendaCaixa`, `apurarSessaoCaixa`, `idsEquivalentes`, `totalTroco`) + `src/server/caixaCore.ts` (`carregarInsumosSessao`, `apurarSessaoNoBanco`, `fecharSessaoCaixaTransacional`) + `src/server/acoes/caixa.ts` + `src/server/dados.ts` + `src/server/diagnostico.ts` (`cx-1..cx-27`, 220 verificações) + `scripts/testar-caixa-motor.mjs` (16 cenários) |
 | Migração aditiva mínima do motor de caixa | `supabase/migrations/20261105_caixa_operacao_economica.sql` + `src/db/migracao.ts` + `src/lib/migracaoLegado.ts` — coluna `nk_venda.status_comercial text` anulável, sem default, legado preservado |
 
