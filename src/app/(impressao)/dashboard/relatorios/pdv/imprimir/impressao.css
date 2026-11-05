@@ -1,0 +1,34 @@
+.relatorio-pdv-preview{min-height:100vh;background:#edf0f3;padding:24px 16px 48px;color:#202936;font-family:Arial,Helvetica,sans-serif}
+.relatorio-pdv-acoes{max-width:1280px;margin:0 auto 14px;display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:13px;color:#344054}
+.relatorio-pdv-acoes strong,.relatorio-pdv-acoes span{display:block}.relatorio-pdv-acoes span{font-size:12px;margin-top:4px;color:#667085}
+.relatorio-pdv-acoes-botoes{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.relatorio-pdv-imprimir,.relatorio-pdv-voltar{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:8px;padding:10px 14px;font-weight:700;font-size:12px;text-decoration:none;cursor:pointer}
+.relatorio-pdv-imprimir{border:1px solid #157553;background:#16865d;color:#fff}.relatorio-pdv-voltar{border:1px solid #ccd3da;background:#fff;color:#344054}
+.relatorio-pdv-documento{max-width:1280px;margin:auto;padding:36px 40px;background:#fff;box-shadow:0 8px 28px rgba(16,24,40,.12);font-size:12px;line-height:1.35;color:#1d2939}
+.relatorio-pdv-cabecalho{display:flex;justify-content:space-between;gap:18px;border-bottom:2px solid #233746;padding-bottom:14px}
+.relatorio-pdv-marca{display:flex;align-items:flex-start;gap:11px}.relatorio-pdv-marca-icon{display:grid;place-items:center;width:34px;height:34px;border:2px solid #16865d;border-radius:7px;color:#08724f;font-weight:900;font-size:21px}
+.relatorio-pdv-marca strong{display:block;font-size:17px;letter-spacing:.03em}.relatorio-pdv-marca span,.relatorio-pdv-emissao span{display:block;font-size:10px;color:#667085;margin-top:3px}.relatorio-pdv-emissao{text-align:right;font-size:10px}.relatorio-pdv-emissao strong{display:block;color:#344054;font-size:11px}
+.relatorio-pdv-titulo{margin:20px 0 12px}.relatorio-pdv-titulo p{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#667085;font-weight:700;margin:0 0 4px}.relatorio-pdv-titulo h1{font-size:20px;line-height:1.2;font-weight:800;margin:0;color:#17232d}.relatorio-pdv-titulo h2{font-size:12px;font-weight:600;color:#667085;margin:5px 0 0}
+.relatorio-pdv-filtros{border:1px solid #cbd5de;background:#f8fafb;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 14px;padding:10px 12px;margin-bottom:15px}.relatorio-pdv-filtros div{min-width:0}.relatorio-pdv-filtros b{display:block;text-transform:uppercase;font-size:9px;letter-spacing:.05em;color:#667085;margin-bottom:3px}.relatorio-pdv-filtros span{font-size:11px;font-weight:600;overflow-wrap:anywhere}
+.relatorio-pdv-resumo{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:17px}.relatorio-pdv-resumo-item{border:1px solid #d3dae0;border-top:3px solid #16865d;padding:9px 10px;break-inside:avoid}.relatorio-pdv-resumo-item span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#667085}.relatorio-pdv-resumo-item strong{display:block;margin-top:5px;font-size:15px;color:#17232d}.relatorio-pdv-resumo-item small{display:block;margin-top:4px;color:#667085;font-size:9px}
+.relatorio-pdv-secao{display:flex;align-items:end;justify-content:space-between;gap:10px;margin:0 0 7px}.relatorio-pdv-secao h2{font-size:12px;font-weight:800;margin:0;color:#17232d}.relatorio-pdv-secao span{font-size:10px;color:#667085}.relatorio-pdv-tabela-wrap{overflow-x:auto}.relatorio-pdv-tabela{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px}.relatorio-pdv-tabela th{padding:7px 5px;border-top:1px solid #34495a;border-bottom:1px solid #34495a;background:#edf2f5;text-align:left;font-size:9px;line-height:1.2;text-transform:uppercase;color:#344054;overflow-wrap:anywhere}.relatorio-pdv-tabela td{padding:7px 5px;border-bottom:1px solid #d8dfe5;vertical-align:top;overflow-wrap:anywhere}.relatorio-pdv-tabela .numero{text-align:right;font-variant-numeric:tabular-nums}.relatorio-pdv-tabela .id{font-size:8px;color:#667085;word-break:break-all}.relatorio-pdv-tabela .diferenca-falta{color:#b42318;font-weight:700}.relatorio-pdv-tabela .diferenca-sobra{color:#175cd3;font-weight:700}.relatorio-pdv-comparacao{white-space:nowrap;font-size:9px;line-height:1.5}.relatorio-pdv-vazio{border:1px solid #d8dfe5;padding:18px;text-align:center;color:#667085}
+.relatorio-pdv-observacoes{margin-top:16px;border-top:1px solid #cbd5de;padding-top:10px;font-size:9px;color:#475467}.relatorio-pdv-observacoes h2{font-size:10px;font-weight:800;margin:0 0 5px}.relatorio-pdv-observacoes ul{padding-left:14px;margin:0}.relatorio-pdv-observacoes li{margin:3px 0}.relatorio-pdv-rodape{display:flex;justify-content:space-between;gap:15px;border-top:1px solid #cbd5de;margin-top:18px;padding-top:7px;color:#667085;font-size:9px}
+@media(max-width:700px){.relatorio-pdv-acoes{align-items:flex-start;flex-direction:column}.relatorio-pdv-documento{padding:22px 18px}.relatorio-pdv-filtros{grid-template-columns:repeat(2,minmax(0,1fr))}.relatorio-pdv-tabela{min-width:800px}}
+@media print{
+  @page{
+    size:A4 landscape;
+    margin:10mm;
+    @bottom-left{content:"NKWAY · Relatório gerencial";font-size:7pt;color:#667085}
+    @bottom-right{content:"Página " counter(page) " de " counter(pages);font-size:7pt;color:#667085}
+  }
+  .relatorio-pdv-preview{padding:0!important;margin:0!important;background:#fff!important;min-height:0!important}
+  .relatorio-pdv-documento.print-area{position:static!important;inset:auto!important;width:auto!important;max-width:none!important;margin:0!important;padding:0!important;overflow:visible!important;box-shadow:none!important;font-size:8pt!important}
+  .relatorio-pdv-documento .relatorio-pdv-tabela-wrap{overflow:visible!important}
+  .relatorio-pdv-documento .relatorio-pdv-tabela{min-width:0!important;font-size:7pt;table-layout:fixed}
+  .relatorio-pdv-documento .relatorio-pdv-tabela th{font-size:6.5pt;padding:2mm 1mm}
+  .relatorio-pdv-documento .relatorio-pdv-tabela td{padding:1.8mm 1mm}
+  .relatorio-pdv-documento thead{display:table-header-group}.relatorio-pdv-documento tfoot{display:table-footer-group}
+  .relatorio-pdv-documento tr,.relatorio-pdv-resumo-item{break-inside:avoid;page-break-inside:avoid}
+  .relatorio-pdv-documento h1,.relatorio-pdv-documento h2{break-after:avoid;page-break-after:avoid}
+  .relatorio-pdv-cabecalho,.relatorio-pdv-filtros,.relatorio-pdv-resumo-item,.relatorio-pdv-tabela th{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .relatorio-pdv-tabela .diferenca-falta,.relatorio-pdv-tabela .diferenca-sobra{color:#111!important}
+}

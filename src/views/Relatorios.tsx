@@ -17,6 +17,7 @@ import {
   cn,
 } from "@/components/ui";
 import { Tabela, type Coluna } from "@/components/Tabela";
+import { MenuRelatorios } from "@/components/MenuRelatorios";
 import { casaTexto, emPeriodo, type Periodo } from "@/lib/filtros";
 import { ROTULO_SITUACAO, dataBR, moeda, round2, rotuloForma, tributosEstimados } from "@/lib/dominio";
 import type { listarContas, listarVendas } from "@/server/dados";
@@ -37,13 +38,16 @@ export function RelatoriosView({
   contas,
   estoque,
   empresa,
+  podeAcessarPdv,
 }: {
   vendas: { id: string; data: string; total: number; subtotal: number; desconto: number; status: string; tipo: string; modelo: string | null; forma: string; clienteNome: string; pagamentos: { forma: string; valor: number }[]; itens: { nome: string; qtd: number; total: number; precoUnit: number; unidade: string | null }[] }[];
   contas: Conta[];
   estoque: LinhaEstoque[];
   empresa: string;
+  podeAcessarPdv: boolean;
 }) {
   const [aba, setAba] = useState("vendas");
+  const [detalheVendas, setDetalheVendas] = useState<"dia" | "produtos" | "pagamentos">("dia");
   const [periodo, setPeriodo] = useState<Periodo>(ULT_30());
   const [tipo, setTipo] = useState("faturado");
   const [busca, setBusca] = useState("");
@@ -182,10 +186,13 @@ export function RelatoriosView({
   }, [estoque, categoria, busca]);
 
   const cab = (r: string) => ({ key: r });
+  const tituloImpressao = aba === "vendas" ? (detalheVendas === "dia" ? "Vendas por dia" : detalheVendas === "produtos" ? "Produtos / curva ABC de documentos" : "Pagamentos de documentos") : ({ clientes: "Clientes", fiscal: "Fiscal", financeiro: "Financeiro", estoque: "Estoque" } as Record<string, string>)[aba] ?? "Relatório geral";
+  const tipoImpressao = ({ faturado: "Faturados", dav: "DAVs", cancelado: "Cancelados", todos: "Todos" } as Record<string, string>)[tipo] ?? tipo;
 
   return (
-    <>
-      <PageHeader
+    <div className="print-area relatorio-geral-impressao">
+      <div className="no-print mb-4"><MenuRelatorios atual="gerais" podeAcessarPdv={podeAcessarPdv} /></div>
+      <div className="no-print"><PageHeader
         titulo="Relatórios"
         subtitulo={`${empresa} · recorte por período com pré-visualização, CSV e impressão`}
         acao={
@@ -196,16 +203,22 @@ export function RelatoriosView({
             </Button>
           </>
         }
-      />
+      /></div>
+      <header className="relatorio-geral-cabecalho">
+        <strong>NKWAY · RELATÓRIOS GERENCIAIS</strong>
+        <h1>{tituloImpressao}</h1>
+        <p>{empresa} · Período: {periodo.inicio ? dataBR(periodo.inicio) : "início"} a {periodo.fim ? dataBR(periodo.fim) : "hoje"} · Documentos: {tipoImpressao}</p>
+        {aba === "estoque" && (categoria || busca) && <p>Categoria: {categoria || "Todas"} · Produto: {busca || "Todos"}</p>}
+      </header>
 
-      <BarraFiltros>
+      <div className="no-print"><BarraFiltros>
         <FiltroPeriodo valor={periodo} aoMudar={setPeriodo} />
         <Campo rotulo="Documentos">
           <Select
             valor={tipo}
             aoMudar={setTipo}
             opcoes={[
-              { valor: "faturado", rotulo: "Notas autorizadas" },
+              { valor: "faturado", rotulo: "Documentos faturados" },
               { valor: "dav", rotulo: "DAVs" },
               { valor: "cancelado", rotulo: "Cancelados" },
               { valor: "todos", rotulo: "Tudo" },
@@ -222,7 +235,7 @@ export function RelatoriosView({
             </Campo>
           </>
         )}
-      </BarraFiltros>
+      </BarraFiltros></div>
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi rotulo="Faturamento no período" valor={moeda(totalPeriodo)} icone="grafico" tom="ok" detalhe={`${noPeriodo.length} documento(s)`} />
@@ -231,23 +244,36 @@ export function RelatoriosView({
         <Kpi rotulo="Tributos IBS/CBS (teste)" valor={moeda(round2(fiscal.reduce((s, f) => s + f.ibs + f.cbs, 0)))} icone="documento" tom="roxo" detalhe="alíquotas de transição 0,1% + 0,9%" />
       </div>
 
-      <Abas
+      <div className="no-print"><Abas
         abas={[
-          { id: "vendas", rotulo: "Vendas por dia", contagem: porDia.length },
-          { id: "abc", rotulo: "Curva ABC", contagem: abc.length },
+          { id: "vendas", rotulo: "Vendas e documentos", contagem: porDia.length },
           { id: "clientes", rotulo: "Clientes", contagem: porCliente.length },
-          { id: "pagamentos", rotulo: "Formas de pagamento", contagem: porForma.length },
           { id: "fiscal", rotulo: "Fiscal", contagem: fiscal.length },
           { id: "financeiro", rotulo: "Financeiro", contagem: financeiro.length },
           { id: "estoque", rotulo: "Estoque", contagem: porCategoria.length },
         ]}
         atual={aba}
         aoTrocar={setAba}
-      />
+      /></div>
+
+      {aba === "vendas" && (
+        <div className="no-print mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-ink-100 bg-white px-3 py-2" role="tablist" aria-label="Detalhes das vendas e documentos">
+          {([
+            { id: "dia", rotulo: "Por dia" },
+            { id: "produtos", rotulo: "Por produto / ABC" },
+            { id: "pagamentos", rotulo: "Por pagamento" },
+          ] as const).map((item) => (
+            <button key={item.id} type="button" role="tab" aria-selected={detalheVendas === item.id} onClick={() => setDetalheVendas(item.id)} className={cn("rounded-lg px-3 py-2 text-xs font-semibold transition", detalheVendas === item.id ? "bg-ink-900 text-white" : "text-ink-500 hover:bg-ink-50")}>
+              {item.rotulo}
+            </button>
+          ))}
+          <span className="ml-auto text-[11px] text-ink-400">Considera o tipo de documento selecionado, inclusive DAVs quando aplicável.</span>
+        </div>
+      )}
 
       <Card padding={false}>
-        {aba === "vendas" && (
-          <Tabela
+        {aba === "vendas" && detalheVendas === "dia" && (
+          <Tabela imprimirTodasAsLinhas
             nomeExportar="nkway-rel-vendas"
             chave={(l) => l.dia}
             linhas={porDia}
@@ -261,8 +287,8 @@ export function RelatoriosView({
             vazio="Sem documentos no período."
           />
         )}
-        {aba === "abc" && (
-          <Tabela
+        {aba === "vendas" && detalheVendas === "produtos" && (
+          <Tabela imprimirTodasAsLinhas
             nomeExportar="nkway-rel-abc"
             chave={(l) => l.nome}
             linhas={abc}
@@ -292,7 +318,7 @@ export function RelatoriosView({
           />
         )}
         {aba === "clientes" && (
-          <Tabela
+          <Tabela imprimirTodasAsLinhas
             nomeExportar="nkway-rel-clientes"
             chave={(l) => l.nome}
             linhas={porCliente}
@@ -305,8 +331,8 @@ export function RelatoriosView({
             vazio="Nenhum cliente com documento no período."
           />
         )}
-        {aba === "pagamentos" && (
-          <Tabela
+        {aba === "vendas" && detalheVendas === "pagamentos" && (
+          <Tabela imprimirTodasAsLinhas
             nomeExportar="nkway-rel-pagamentos"
             chave={(l) => l.forma}
             linhas={porForma}
@@ -333,7 +359,7 @@ export function RelatoriosView({
           />
         )}
         {aba === "fiscal" && (
-          <Tabela
+          <Tabela imprimirTodasAsLinhas
             nomeExportar="nkway-rel-fiscal"
             chave={(l) => l.chave}
             linhas={fiscal}
@@ -348,7 +374,7 @@ export function RelatoriosView({
           />
         )}
         {aba === "financeiro" && (
-          <Tabela
+          <Tabela imprimirTodasAsLinhas
             nomeExportar="nkway-rel-financeiro"
             chave={(l) => l.categoria}
             linhas={financeiro}
@@ -369,7 +395,7 @@ export function RelatoriosView({
           />
         )}
         {aba === "estoque" && (
-          <Tabela
+          <Tabela imprimirTodasAsLinhas
             nomeExportar="nkway-rel-estoque"
             chave={(l) => l.categoria}
             linhas={porCategoria}
@@ -395,6 +421,6 @@ export function RelatoriosView({
         {ROTULO_SITUACAO.saudavel === "Saudável" ? "" : ""}
         Números recalculados no navegador a partir dos documentos do período — importe para Excel/Sheets pelo CSV de cada aba.
       </p>
-    </>
+    </div>
   );
 }

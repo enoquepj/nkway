@@ -56,7 +56,6 @@ const GRUPOS: {
       { href: "/clientes", rotulo: "Clientes e fornecedores", icone: "pessoas", permissao: "cadastros.clientes" },
       { href: "/financeiro", rotulo: "Financeiro", icone: "carteira", permissao: "financeiro.gerenciar" },
       { href: "/relatorios", rotulo: "Relatórios", icone: "grafico" },
-      { href: "/dashboard/relatorios/pdv", rotulo: "Relatórios do PDV", icone: "grafico", permissao: "caixa.auditoria" },
       { href: "/usuarios", rotulo: "Usuários e auditoria", icone: "pessoas", permissao: "usuarios.ver" },
     ],
   },
@@ -85,7 +84,7 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
     return () => window.removeEventListener("keydown", f);
   }, [router, pathname]);
 
-  const ativo = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+  const ativo = (href: string) => href === "/" ? pathname === "/" : href === "/relatorios" ? pathname.startsWith("/relatorios") || pathname.startsWith("/dashboard/relatorios/") : pathname.startsWith(href);
 
   return (
     <div className="flex min-h-screen">

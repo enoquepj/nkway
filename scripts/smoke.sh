@@ -58,6 +58,8 @@ LOC=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/")
 [[ "$LOC" == "307" || "$LOC" == "200" ]]; marca $? "GET / = $LOC"
 PDV_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/pdv")
 [[ "$PDV_ANON" == "307" ]]; marca $? "GET /pdv sem sessão = $PDV_ANON"
+IMPRESSAO_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/dashboard/relatorios/pdv/imprimir")
+[[ "$IMPRESSAO_ANON" == "307" ]]; marca $? "GET impressão PDV sem sessão = $IMPRESSAO_ANON"
 
 echo "→ rotas autenticadas"
 COOKIE=$(node -e '
@@ -74,7 +76,7 @@ console.log("nkway.sessao="+p+"."+s);await c.end();})();' 2>/dev/null)
 if [[ -z "$COOKIE" ]]; then
   echo "  aviso: sem usuário no banco — rode build_and_start (ou npm run build + start) para o seed criar a empresa demo"
 else
-  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /prontidao /dashboard/auditoria-caixa /dashboard/relatorios/pdv /config; do
+  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /prontidao /dashboard/auditoria-caixa /dashboard/relatorios/pdv /dashboard/relatorios/pdv/imprimir /config; do
     code=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" "$BASE$p")
     [[ "$code" == "200" ]]; marca $? "GET $p = $code"
   done
@@ -84,6 +86,13 @@ else
     marca 1 "/pdv sem Shell (sidebar/topbar/footer ausentes)"
   else
     marca 0 "/pdv sem Shell (sidebar/topbar/footer ausentes)"
+  fi
+
+  IMPRESSAO_HTML=$(curl -s -H "Cookie: $COOKIE" "$BASE/dashboard/relatorios/pdv/imprimir?aba=visao")
+  if echo "$IMPRESSAO_HTML" | grep -q "relatorio-pdv-documento" && ! echo "$IMPRESSAO_HTML" | grep -q "ERP · PDV · Fiscal"; then
+    marca 0 "impressão PDV em área própria, sem Shell"
+  else
+    marca 1 "impressão PDV em área própria, sem Shell"
   fi
 
   DOC_HTML=$(curl -s -H "Cookie: $COOKIE" "$BASE/documentos")
@@ -154,7 +163,7 @@ else
   echo "→ relatórios de PDV (isolamento, caixa e exportação)"
   BASE="$BASE" node scripts/testar-relatorios-pdv.mjs > /tmp/nk-relatorios-pdv.log 2>&1
   RELATORIOS=$?
-  marca $RELATORIOS "relatórios de PDV (31 cenários locais)"
+  marca $RELATORIOS "relatórios de PDV (50 cenários locais)"
   if [[ $RELATORIOS -ne 0 ]]; then tail -35 /tmp/nk-relatorios-pdv.log; fi
 
   echo "→ fechamento cego (homologação e concorrência)"

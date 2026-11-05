@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { Button, Icon, Vazio, cn } from "./ui";
 
 export type Coluna<T> = {
@@ -48,6 +49,7 @@ export function Tabela<T>({
   rodape,
   compacta,
   alturaFixa,
+  imprimirTodasAsLinhas = false,
 }: {
   colunas: Coluna<T>[];
   linhas: T[];
@@ -59,9 +61,21 @@ export function Tabela<T>({
   rodape?: ReactNode;
   compacta?: boolean;
   alturaFixa?: boolean;
+  /** Opcional: renderiza todas as linhas somente para impressão. */
+  imprimirTodasAsLinhas?: boolean;
 }) {
   const [ordem, setOrdem] = useState<{ coluna: string; dir: "asc" | "desc" } | null>(null);
   const [pagina, setPagina] = useState(0);
+  const [imprimindo, setImprimindo] = useState(false);
+
+  useEffect(() => {
+    if (!imprimirTodasAsLinhas) return;
+    const antes = () => flushSync(() => setImprimindo(true));
+    const depois = () => setImprimindo(false);
+    window.addEventListener("beforeprint", antes);
+    window.addEventListener("afterprint", depois);
+    return () => { window.removeEventListener("beforeprint", antes); window.removeEventListener("afterprint", depois); };
+  }, [imprimirTodasAsLinhas]);
 
   const ordenadas = useMemo(() => {
     if (!ordem) return linhas;
@@ -125,11 +139,24 @@ export function Tabela<T>({
     </tr>
   );
 
+  const corpoTabela = (
+    <>
+      <tbody className={imprimirTodasAsLinhas ? "print:hidden" : undefined}>
+        {visiveis.map((l) => <Linha key={chave(l)} linha={l} colunas={colunas} onClick={selecionarLinha} compacta={compacta} />)}
+      </tbody>
+      {imprimirTodasAsLinhas && imprimindo && (
+        <tbody className="hidden print:table-row-group">
+          {ordenadas.map((l) => <Linha key={chave(l)} linha={l} colunas={colunas} compacta={compacta} />)}
+        </tbody>
+      )}
+    </>
+  );
+
   if (linhas.length === 0) return <Vazio>{vazio}</Vazio>;
 
   return (
     <div className="overflow-hidden rounded-xl border border-ink-100 bg-white">
-      <div className="flex items-center justify-between gap-2 border-b border-ink-100 bg-white px-3 py-2">
+      <div className={cn("flex items-center justify-between gap-2 border-b border-ink-100 bg-white px-3 py-2", imprimirTodasAsLinhas && "print:hidden")}>
         <span className="tabular text-[11.5px] font-medium text-ink-400">
           {linhas.length} {linhas.length === 1 ? "registro" : "registros"}
           {ordem && " · ordenado"}
@@ -155,26 +182,18 @@ export function Tabela<T>({
         <div className="max-h-[62vh] overflow-auto">
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-10">{cabecalho}</thead>
-            <tbody>
-              {visiveis.map((l) => (
-                <Linha key={chave(l)} linha={l} colunas={colunas} onClick={selecionarLinha} compacta={compacta} />
-              ))}
-            </tbody>
+            {corpoTabela}
           </table>
         </div>
       ) : (
         <table className="w-full border-collapse">
           <thead>{cabecalho}</thead>
-          <tbody>
-            {visiveis.map((l) => (
-              <Linha key={chave(l)} linha={l} colunas={colunas} onClick={selecionarLinha} compacta={compacta} />
-            ))}
-          </tbody>
+          {corpoTabela}
         </table>
       )}
 
       {totalPaginas > 1 && (
-        <div className="flex items-center justify-between border-t border-ink-100 px-3 py-2">
+        <div className={cn("flex items-center justify-between border-t border-ink-100 px-3 py-2", imprimirTodasAsLinhas && "print:hidden")}>
           <span className="tabular text-[11.5px] text-ink-400">
             {paginaSegura * tamanhoPagina + 1}–{Math.min(ordenadas.length, (paginaSegura + 1) * tamanhoPagina)} de{" "}
             {ordenadas.length}

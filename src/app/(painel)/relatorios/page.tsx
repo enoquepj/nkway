@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { contexto } from "@/lib/session";
+import { temPermissao } from "@/lib/permissoes";
 import { listarContas, listarVendas, posicaoEstoque } from "@/server/dados";
 import { RelatoriosView } from "@/views/Relatorios";
 
@@ -28,6 +29,7 @@ export default async function RelatoriosPage() {
       contas={contas}
       estoque={estoque.map((p) => ({ nome: p.nome, categoria: p.categoria, estoque: p.estoque, custoMedio: p.custoMedio, valorTotal: p.valorTotal, valorVenda: p.valorVenda, situacao: p.situacao }))}
       empresa={c.empresa.nomeFantasia || c.empresa.nome}
+      podeAcessarPdv={temPermissao(c.usuario.papel, "caixa.auditoria")}
     />
   );
 }

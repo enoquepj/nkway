@@ -3,23 +3,14 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Icon, cn } from "@/components/ui";
-import { ABAS_RELATORIOS_PDV, type AbaRelatorioPdv, type ColunaRelatorioPdv, type DetalheCaixaRelatorio, type FiltrosRelatorioPdv, type FormatoRelatorio, type IndicadorRelatorioPdv, type LinhaRelatorioPdv, type RespostaRelatorioPdv, type ValorRelatorio } from "@/lib/relatoriosPdv";
+import { MenuRelatorios } from "@/components/MenuRelatorios";
+import { ABAS_RELATORIOS_PDV, formatarValorRelatorioPdv, type AbaRelatorioPdv, type ColunaRelatorioPdv, type DetalheCaixaRelatorio, type FiltrosRelatorioPdv, type IndicadorRelatorioPdv, type LinhaRelatorioPdv, type RespostaRelatorioPdv } from "@/lib/relatoriosPdv";
 
 type FiltrosTela = Pick<FiltrosRelatorioPdv, "inicio" | "fim" | "terminal" | "operador" | "categoria" | "statusTurno" | "top">;
 const caixaCampo = "h-10 w-full rounded-lg border border-ink-200 bg-white px-3 text-[13px] text-ink-800 outline-none transition focus:border-way-500 focus:ring-2 focus:ring-way-100 disabled:cursor-not-allowed disabled:bg-ink-50 disabled:text-ink-400";
 const rotuloCampo = "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500";
 
-function textoValor(valor: ValorRelatorio | undefined, formato: FormatoRelatorio | undefined, fuso: string): string {
-  if (valor == null || valor === "") return "—";
-  if (formato === "datahora") {
-    const d = new Date(String(valor));
-    return Number.isFinite(d.getTime()) ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: fuso }).format(d) : "—";
-  }
-  if (typeof valor !== "number") return String(valor);
-  if (formato === "moeda" || formato === "diferenca") return `${formato === "diferenca" && valor > 0 ? "+" : ""}${new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(valor)}`;
-  if (formato === "percentual") return `${new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 }).format(valor)}%`;
-  return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: formato === "quantidade" ? 3 : 0 }).format(valor);
-}
+const textoValor = formatarValorRelatorioPdv;
 
 function parametros(aba: AbaRelatorioPdv, detalhe: DetalheCaixaRelatorio, pagina: number, filtros: FiltrosTela) {
   const p = new URLSearchParams({ aba, detalhe, pagina: String(pagina), tamanho: "10", inicio: filtros.inicio, fim: filtros.fim, terminal: filtros.terminal, operador: filtros.operador, categoria: aba === "produtos" ? filtros.categoria : "", statusTurno: aba === "caixa" ? filtros.statusTurno : "todos", top: String(filtros.top) });
@@ -130,6 +121,7 @@ export function RelatoriosPdvView({ empresa, fuso, periodoInicial }: { empresa: 
         <div><p className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-way-700"><span className="size-1.5 rounded-full bg-way-500" /> Gestão / Inteligência de vendas</p><h1 className="text-[27px] font-extrabold tracking-tight text-ink-900 sm:text-[31px]">Relatórios de PDV</h1><p className="mt-1 text-[13px] text-ink-500">Uma visão completa das vendas, produtos e operação da sua loja.</p></div>
         <div className="flex flex-wrap items-center gap-2"><span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-700"><Icon name="cadeado" className="size-3.5" /> Acesso gerencial</span><Link href="/dashboard/auditoria-caixa" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 text-xs font-semibold text-ink-600 hover:bg-ink-50">Auditoria de caixa <Icon name="seta" className="size-3.5" /></Link></div>
       </div>
+      <MenuRelatorios atual="pdv" podeAcessarPdv />
 
       <form onSubmit={aplicar} className="rounded-xl border border-ink-100 bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-way-50 text-way-700"><Icon name="busca" className="size-4" /></span><div><h2 className="text-[13px] font-bold text-ink-800">Filtros do relatório</h2><p className="text-[11px] text-ink-400">Os filtros são aplicados na consulta ao banco.</p></div></div><button type="button" onClick={limpar} className="text-[11px] font-semibold text-ink-500 hover:text-way-700">Limpar filtros</button></div>
@@ -154,7 +146,7 @@ export function RelatoriosPdvView({ empresa, fuso, periodoInicial }: { empresa: 
       {dados && !carregando && <>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{dados.indicadores.map((item) => <Indicador key={item.rotulo} item={item} fuso={fuso} />)}</div>
         {aba === "visao" && <GraficoPagamentos linhas={dados.linhas} fuso={fuso} />}
-        <div className="flex flex-wrap items-center justify-between gap-3"><div>{aba === "caixa" ? <div className="inline-flex rounded-lg bg-ink-100 p-1" aria-label="Detalhe da auditoria">{(["turnos", "sangrias"] as const).map((d) => <button type="button" key={d} onClick={() => { setDetalhe(d); setPagina(1); }} className={cn("rounded-md px-3 py-1.5 text-[11px] font-bold", detalhe === d ? "bg-white text-ink-800 shadow-sm" : "text-ink-500 hover:text-ink-800")}>{d === "turnos" ? "Turnos" : "Sangrias"}</button>)}</div> : <p className="text-xs text-ink-400">Resultados do período selecionado</p>}</div><button type="button" onClick={() => void exportar()} disabled={exportando || dados.total === 0} className="inline-flex h-9 items-center gap-2 rounded-lg border border-ink-200 bg-white px-3.5 text-xs font-bold text-ink-700 shadow-sm transition hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"><Icon name="baixar" className="size-4" />{exportando ? "Exportando…" : "Exportar CSV"}</button></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><div>{aba === "caixa" ? <div className="inline-flex rounded-lg bg-ink-100 p-1" aria-label="Detalhe da auditoria">{(["turnos", "sangrias"] as const).map((d) => <button type="button" key={d} onClick={() => { setDetalhe(d); setPagina(1); }} className={cn("rounded-md px-3 py-1.5 text-[11px] font-bold", detalhe === d ? "bg-white text-ink-800 shadow-sm" : "text-ink-500 hover:text-ink-800")}>{d === "turnos" ? "Turnos" : "Sangrias"}</button>)}</div> : <p className="text-xs text-ink-400">Resultados do período selecionado</p>}</div><div className="flex flex-wrap items-center gap-2"><Link href={`/dashboard/relatorios/pdv/imprimir?${query}`} target="_blank" rel="noopener noreferrer" title="Imprimir todos os registros filtrados" className="inline-flex h-9 items-center gap-2 rounded-lg border border-ink-200 bg-white px-3.5 text-xs font-bold text-ink-700 shadow-sm transition hover:bg-ink-50"><Icon name="imprimir" className="size-4" />Imprimir</Link><button type="button" onClick={() => void exportar()} disabled={exportando || dados.total === 0} className="inline-flex h-9 items-center gap-2 rounded-lg border border-ink-200 bg-white px-3.5 text-xs font-bold text-ink-700 shadow-sm transition hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"><Icon name="baixar" className="size-4" />{exportando ? "Exportando…" : "Exportar CSV"}</button></div></div>
         <TabelaRelatorio dados={dados} pagina={pagina} mudarPagina={setPagina} />
         {dados.avisos.length > 0 && <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-4"><span className="mt-0.5 text-blue-600"><Icon name="ajuda" className="size-4" /></span><div><p className="text-xs font-bold text-blue-900">Como interpretar estes dados</p><ul className="mt-1.5 space-y-1 text-[11px] leading-5 text-blue-800/80">{dados.avisos.map((aviso) => <li key={aviso}>• {aviso}</li>)}</ul></div></div>}
       </>}

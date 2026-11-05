@@ -151,3 +151,17 @@ button {
     padding: 0 !important;
   }
 }
+
+/* Impressão dos relatórios gerais: escopo próprio, sem alterar DANFE ou bobina do PDV. */
+.relatorio-geral-cabecalho { display: none; }
+@media print {
+  .relatorio-geral-impressao.print-area { position: static !important; inset: auto !important; width: auto !important; max-width: none !important; padding: 7mm !important; overflow: visible !important; }
+  .relatorio-geral-cabecalho { display: block !important; border-bottom: 2px solid #233746; margin-bottom: 5mm; padding-bottom: 3mm; color: #17232d; }
+  .relatorio-geral-cabecalho strong { font-size: 9pt; letter-spacing: .05em; }
+  .relatorio-geral-cabecalho h1 { font-size: 16pt; font-weight: 700; margin: 2mm 0; }
+  .relatorio-geral-cabecalho p { font-size: 9pt; margin: 1mm 0; }
+  .relatorio-geral-impressao .overflow-hidden, .relatorio-geral-impressao .overflow-auto { overflow: visible !important; max-height: none !important; }
+  .relatorio-geral-impressao thead { display: table-header-group; position: static !important; }
+  .relatorio-geral-impressao tr { break-inside: avoid; page-break-inside: avoid; }
+  .relatorio-geral-impressao thead svg { display: none !important; }
+}

@@ -11,6 +11,20 @@ export type AbaRelatorioPdv = (typeof ABAS_RELATORIOS_PDV)[number]["id"];
 export type DetalheCaixaRelatorio = "turnos" | "sangrias";
 export type FormatoRelatorio = "texto" | "identificador" | "numero" | "quantidade" | "moeda" | "percentual" | "datahora" | "diferenca" | "estoque" | "classe";
 export type ValorRelatorio = string | number | null;
+
+/** Formatação única para tela e impressão; datas usam o fuso da empresa. */
+export function formatarValorRelatorioPdv(valor: ValorRelatorio | undefined, formato: FormatoRelatorio | undefined, fuso: string): string {
+  if (valor == null || valor === "") return "—";
+  if (formato === "datahora") {
+    const data = new Date(String(valor));
+    return Number.isFinite(data.getTime()) ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: fuso }).format(data) : "—";
+  }
+  if (typeof valor !== "number") return String(valor);
+  if (formato === "moeda" || formato === "diferenca") return `${formato === "diferenca" && valor > 0 ? "+" : ""}${new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(valor)}`;
+  if (formato === "percentual") return `${new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 }).format(valor)}%`;
+  return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: formato === "quantidade" ? 3 : 0 }).format(valor);
+}
+
 export type LinhaRelatorioPdv = Record<string, ValorRelatorio>;
 export type ColunaRelatorioPdv = { chave: string; rotulo: string; formato?: FormatoRelatorio };
 export type IndicadorRelatorioPdv = { rotulo: string; valor: ValorRelatorio; formato?: FormatoRelatorio; detalhe: string; icone: string; tom?: "verde" | "azul" | "laranja" | "roxo" };
