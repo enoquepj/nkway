@@ -11,15 +11,24 @@
 Use o arquivo **`CONTINUAR_NKWAY.txt`** inteiro como primeira mensagem. Ele registra a produção pronta, a arquitetura Vercel/Supabase, as proibições de segurança e a ordem mínima de leitura.
 
 Custo de retomada: ler `CONTINUAR_NKWAY.txt` + `VERCEL_SUPABASE.md` + seções 1/2/4/6 deste arquivo, rodar baseline e executar uma tarefa. Não revisar o histórico inteiro.
+
+**Retomada em 2026-11-05:** o `main` consultado era `ec4f01b`; em relação a `c719aac`, a diferença era somente documentação e arquivos de entrega, sem mudança no código Next. O health da produção respondeu HTTP 200. Na prévia local, o baseline passou: 36 verificações de smoke, diagnóstico 219/219 em 25 módulos, 16 cenários do motor de caixa e 196 chamadas de ações sem erro 500. Esses testes foram locais; nesta retomada não houve teste autenticado em produção nem alteração funcional ou de infraestrutura.
 ---
 
 ## 1. Como rodar / validar (ordem exata)
 
+Em banco local descartável ainda vazio, inicialize primeiro a plataforma com `build_and_start` e aplique o schema apenas ao banco local, preservando o filtro `nk_*`. Não execute schema legado ou push destrutivo no Supabase. Nesta versão do Drizzle, passar `--tablesFilter` pela linha de comando exige também informar o dialeto, o caminho do schema e a conexão, sem registrar credenciais.
+
 ```bash
-npx drizzle-kit push --force          # SOMENTE Postgres local descartável; nunca produção sem filtro nk_*
-npm run build                         # ou o tool build_and_start da plataforma
-bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de todas as rotas
+npx next typegen
+npm exec tsc -- --noEmit --pretty false
+npm run build
+# Executar a ferramenta build_and_start da plataforma.
+bash scripts/smoke.sh --sem-build
+bash scripts/acoes.sh
 ```
+
+Execute os builds em sequência, nunca simultaneamente. Se o smoke informar **HTTP pulado**, as rotas não foram validadas: inicie a prévia e repita `--sem-build`.
 
 - Local: `DATABASE_URL` no `.env`. Produção já funciona no Vercel/Supabase; health oficial `https://nkway.vercel.app/api/health`. Não alterar conexão se estiver `ok:true`.
 - Seed automático: `src/instrumentation.ts` chama `semearAmbiente()` no boot (idempotente).
@@ -183,6 +192,18 @@ bash scripts/smoke.sh                 # typegen + tsc + build + teste HTTP de to
 19. **Etapa 3 (2026), FEITO — Modal de Fechamento Cego no PDV e Auditoria de Caixa.** Novo `src/components/ModalFechamentoCego.tsx` (`useState` + Tailwind), acionado pelo botão **Encerrar Turno** na própria tela de vendas (`src/views/Pdv.tsx`): inputs de Dinheiro / PIX / Crédito / Débito / Boleto / Prazo **iniciam vazios**, nenhum esperado é exibido; só após o servidor responder `requerHomologacao` o modal revela Justificativa + e-mail/PIN de gerente. `fecharTurnoCego()` passou a sinalizar esse estado no retorno. Nova rota **`src/app/(painel)/dashboard/auditoria-caixa/page.tsx`** → `/dashboard/auditoria-caixa`, exclusiva para quem tem `caixa.auditoria` (redirect para `/` caso contrário), com `src/views/AuditoriaCaixa.tsx`: tabela de turnos (OK / Com Quebra / Pendente), cruzamento Esperado × Declarado por forma, detalhe expansível e homologação remota via `homologarQuebraCaixa()` com senha conferida no servidor. `src/components/shell.tsx` ganhou o item de menu do gerente sem remover `/caixa`. `scripts/smoke.sh` cobre a nova rota; diagnóstico ganhou `cx-26` (**219 verificações**, `cx-1..cx-26`). Nenhuma mudança de infraestrutura, RLS, `package.json` ou `DATABASE_URL`.
 
 20. **Etapa 4 (2026-11-05), FEITO — perguntar o OPERADOR na abertura do caixa (commit `c719aac`).** Nos modais de abrir caixa do **PDV** (`src/views/Pdv.tsx`) e do **`/caixa`** (`src/views/Caixa.tsx`) foi adicionado o campo **"Operador"** (seletor) com os **usuários ativos da empresa** (via `listarUsuarios` nas pages `(pdv)/pdv` e `(painel)/caixa`), pré-selecionando o usuário logado. O nome escolhido é enviado a `abrirCaixa` (param novo `operadorNome` em `src/server/acoes/caixa.ts`), que **valida no servidor** (aceita só nome de usuário ativo da empresa; senão usa o nome do logado) e grava em `nk_caixa_sessao.operador_nome` (aparece na barra do PDV). `operador_id` segue = usuário logado — **preserva o vínculo das vendas à sessão** e suporta o cenário de conta compartilhada no caixa. Sem migração nova, sem RLS, sem tocar em `DATABASE_URL`. Teste e2e: abre com operador != logado; nome inexistente cai para o logado; `operador_id` preservado.
+
+21. **Relatórios gerenciais de PDV (2026-11-05, entrega local, publicar código antes de atribuir ao GitHub/produção).** Nova rota `/dashboard/relatorios/pdv` no menu Gestão e API `GET /api/relatorios/pdv`, ambas restritas server-side a `caixa.auditoria` (gerente/administrador), com `empresa_id` derivado exclusivamente do cookie próprio. Arquivos: `src/lib/relatoriosPdv.ts`, `src/server/relatoriosPdv.ts`, `src/views/RelatoriosPdv.tsx`, `src/app/(painel)/dashboard/relatorios/pdv/page.tsx`, `src/app/api/relatorios/pdv/route.ts`, `src/components/shell.tsx` e `scripts/testar-relatorios-pdv.mjs`. Cinco abas: visão de faturamento/pagamentos, curva ABC/produtos, turnos/sangrias, operadores e cancelamentos auditados. Agregações Drizzle/PostgreSQL (`SUM`, `COUNT`, `AVG`, `GROUP BY`), paginação com `LIMIT/OFFSET`, datas no fuso adotado pela UF, até 366 dias/50.000 vendas por consulta e CSV filtrado com Papa Parse, proteção contra fórmulas e limite explícito de 10.000 linhas. O motor existente seleciona DAVs e rateia troco; vendas históricas sem sessão são sinalizadas e não atribuídas a fechamento. Margem usa custo atual e desconto global rateado, nunca custo histórico inventado. Snapshots de turno aberto não são exibidos. Não há schema/migração nova, RLS, SDK Supabase ou alteração do PDV operacional.
+
+   **Limitações reais:** o modelo atual não registra lacre, duração de atendimento, tentativas de senha, liberação de venda travada, cancelamento de item avulso, autorização gerencial do cancelamento ou devolução de venda; vale-refeição também não é forma cadastrada. A tela informa a indisponibilidade e não fabrica números. Devoluções de compra não são confundidas com devoluções de cliente. `scripts/smoke.sh` inclui página, 401 da API e `scripts/testar-relatorios-pdv.mjs` (31 verificações com empresas temporárias no banco local, removidas ao fim).
+
+   **Falha identificada e corrigida na entrega local seguinte:** falta e sobra em formas diferentes podiam se anular no total e dispensar homologação. A correção por forma e a proteção do saldo cego estão descritas no item 22. Não considerar corrigido em produção antes da publicação; turnos antigos não foram alterados e exigem revisão manual.
+
+   **Dependências preexistentes:** `npm audit` apontou 15 alertas, incluindo um crítico no Next já existente e dois altos; avaliar atualização compatível e validar separadamente, sem `npm audit fix --force`. Papa Parse foi adicionado pela ferramenta de pacotes sem alterar as versões preexistentes.
+
+22. **Correção do fechamento cego e sigilo do turno (entrega local, pendente de publicação).** `fecharTurnoCego` e `fecharCaixa` usam o mesmo núcleo transacional em `src/server/caixaCore.ts`; a conferência é recalculada sob `FOR UPDATE`, e qualquer diferença por forma ou recebimento inconsistente exige justificativa e gerente ativo da mesma empresa. FALTA e SOBRA compensadas geram logs separados com uma única homologação. Snapshot, estado de aprovação, cofre, logs e auditoria são confirmados juntos; erro reverte o fechamento. Venda/itens, faturamento de DAV, suprimento, sangria e estorno do PDV coordenam sua gravação financeira com a mesma trava. `/caixa` envia para o navegador somente uma projeção segura de turnos abertos (`src/lib/caixaVisivel.ts`); os snapshots de turnos fechados permanecem disponíveis e não foram alterados. Histórico e auditoria identificam divergência por forma mesmo com total líquido zero. `scripts/testar-fechamento-cego.mjs` cobre 48 cenários locais (credenciais, tenant, sigilo, rollback, concorrência nas duas ordens e imutabilidade); `cx-27` eleva o diagnóstico para 220 verificações. Nenhum schema, RLS, conexão, segredo ou versão de Next foi alterado.
+
+   **Cuidados restantes:** revisar manualmente turnos anteriores com divergência sem homologação; a correção não altera dados antigos. O cancelamento recebido por webhook fiscal é um fluxo separado e sua concorrência com o fechamento não foi alterada nem validada nesta etapa. O alerta de dependência crítica do Next segue pendente de avaliação separada. Até o código ser publicado e validado em produção, a proteção local não está ativa no site publicado.
 
 ## 6b. Blindagem das server actions (2026)
 

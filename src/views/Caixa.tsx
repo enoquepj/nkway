@@ -35,7 +35,7 @@ import {
   reabrirCaixa,
   registrarMovimentoCaixa,
 } from "@/server/acoes/caixa";
-import type { CaixaSessaoDto } from "@/server/dados";
+import type { CaixaSessaoAbertaVisivel, CaixaSessaoFechadaVisivel, CaixaSessaoVisivel } from "@/lib/caixaVisivel";
 
 function parseValorInput(s: string | number | undefined): number {
   if (typeof s === "number") return Number.isFinite(s) ? round2(s) : 0;
@@ -44,14 +44,18 @@ function parseValorInput(s: string | number | undefined): number {
   return Number.isFinite(n) ? round2(Math.max(0, n)) : 0;
 }
 
+function sessaoTemDivergencia(s: CaixaSessaoVisivel): boolean {
+  return s.status === "fechado" && (Math.abs(s.diferencaTotal) >= 0.01 || Object.values(s.diferencas ?? {}).some((v) => Math.abs(Number(v) || 0) >= 0.01));
+}
+
 export function CaixaView({
   sessaoAtual,
   historico,
   usuarioAtual,
   operadores = [],
 }: {
-  sessaoAtual: CaixaSessaoDto | null;
-  historico: CaixaSessaoDto[];
+  sessaoAtual: CaixaSessaoAbertaVisivel | null;
+  historico: CaixaSessaoVisivel[];
   usuarioAtual: { id: string; nome: string; papel: PerfilUsuario };
   operadores?: { id: string; nome: string }[];
 }) {
@@ -114,8 +118,19 @@ export function CaixaView({
   const [informadosStr, setInformadosStr] = useState<Record<string, string>>({});
   const [confirmadoFechar, setConfirmadoFechar] = useState(false);
   const [justificativaFechar, setJustificativaFechar] = useState("");
+  const [requerHomologacaoFechar, setRequerHomologacaoFechar] = useState(false);
+  const [gerenteEmailFechar, setGerenteEmailFechar] = useState("");
+  const [gerenteSenhaFechar, setGerenteSenhaFechar] = useState("");
 
-  function abrirModalFechamento(_s: CaixaSessaoDto) {
+  function fecharModalFechamento() {
+    if (ocupado) return;
+    setModalFechar(false);
+    setGerenteEmailFechar("");
+    setGerenteSenhaFechar("");
+    setRequerHomologacaoFechar(false);
+  }
+
+  function abrirModalFechamento(_s: CaixaSessaoAbertaVisivel) {
     // Blind balance: inputs começam VAZIOS. Nenhum valor esperado é enviado ou
     // exibido ao operador antes da submissão; o servidor recalcula o esperado.
     const inicial: Record<string, string> = {};
@@ -123,6 +138,9 @@ export function CaixaView({
     setInformadosStr(inicial);
     setConfirmadoFechar(false);
     setJustificativaFechar("");
+    setRequerHomologacaoFechar(false);
+    setGerenteEmailFechar("");
+    setGerenteSenhaFechar("");
     setModalFechar(true);
   }
 
@@ -135,19 +153,30 @@ export function CaixaView({
   }, [informadosStr]);
 
   async function confirmarFechamento() {
-    if (!sessaoAtual) return;
+    if (!sessaoAtual || ocupado) return;
     setOcupado(true);
-    const r = await fecharCaixa({
-      sessaoId: sessaoAtual.id,
-      valoresInformados: informadosNum,
-      confirmado: confirmadoFechar,
-      justificativa: justificativaFechar,
-    });
-    setOcupado(false);
-    toast(r.ok ? (r.aviso ?? "Caixa fechado.") : r.erro, r.ok ? "ok" : "erro");
-    if (r.ok) {
-      setModalFechar(false);
-      setAba("historico");
+    try {
+      const r = await fecharCaixa({
+        sessaoId: sessaoAtual.id,
+        valoresInformados: informadosNum,
+        confirmado: confirmadoFechar,
+        justificativa: justificativaFechar,
+        gerenteEmail: gerenteEmailFechar,
+        gerenteSenha: gerenteSenhaFechar,
+      });
+      if (!r.ok && r.requerHomologacao) setRequerHomologacaoFechar(true);
+      toast(r.ok ? (r.aviso ?? "Caixa fechado.") : r.erro, r.ok ? "ok" : "erro");
+      if (r.ok) {
+        setGerenteEmailFechar("");
+        setGerenteSenhaFechar("");
+        setRequerHomologacaoFechar(false);
+        setModalFechar(false);
+        setAba("historico");
+      }
+    } catch {
+      toast("Não foi possível concluir o fechamento. Confira o estado do turno antes de tentar novamente.", "erro");
+    } finally {
+      setOcupado(false);
     }
   }
 
@@ -162,7 +191,7 @@ export function CaixaView({
       historico.filter((s) => {
         if (
           !casaTexto(
-            `${s.numero} ${s.terminal} ${s.operadorNome} ${s.justificativaFechamento} ${s.justificativaReabertura}`,
+            `${s.numero} ${s.terminal} ${s.operadorNome} ${s.status === "fechado" ? s.justificativaFechamento : ""} ${s.justificativaReabertura}`,
             buscaHist,
           )
         )
@@ -170,7 +199,7 @@ export function CaixaView({
         if ((periodoHist.inicio || periodoHist.fim) && !emPeriodo(s.abertoEm, periodoHist)) return false;
         if (operadoresSel.length && !operadoresSel.includes(s.operadorNome)) return false;
         if (statusSel.length) {
-          const comDiv = s.status === "fechado" && Math.abs(s.diferencaTotal) >= 0.01;
+          const comDiv = sessaoTemDivergencia(s);
           const ok = statusSel.some((st) => {
             if (st === "aberto") return s.status === "aberto";
             if (st === "fechado") return s.status === "fechado";
@@ -186,18 +215,19 @@ export function CaixaView({
   );
 
   /* ------------------------------- modal detalhe / reabrir / ajustar */
-  const [detalheSessao, setDetalheSessao] = useState<CaixaSessaoDto | null>(null);
+  const [detalheSessao, setDetalheSessao] = useState<CaixaSessaoFechadaVisivel | null>(null);
   const [modoAdmin, setModoAdmin] = useState<"nenhum" | "reabrir" | "ajustar">("nenhum");
   const [justAdmin, setJustAdmin] = useState("");
   const [ajusteStr, setAjusteStr] = useState<Record<string, string>>({});
 
-  function abrirDetalhe(s: CaixaSessaoDto) {
+  function abrirDetalhe(s: CaixaSessaoVisivel) {
+    if (s.status !== "fechado") return;
     setDetalheSessao(s);
     setModoAdmin("nenhum");
     setJustAdmin("");
     const m: Record<string, string> = {};
     for (const fp of FORMAS_PAGAMENTO) {
-      const val = s.status === "fechado" ? (s.valoresInformados[fp.id] ?? 0) : (s.apuracao.esperadosMap[fp.id] ?? 0);
+      const val = s.valoresInformados[fp.id] ?? 0;
       m[fp.id] = round2(Number(val)).toFixed(2).replace(".", ",");
     }
     setAjusteStr(m);
@@ -229,7 +259,7 @@ export function CaixaView({
 
   const operadoresUnicos = [...new Set(historico.map((s) => s.operadorNome))].sort();
   const somaVendasPeriodo = round2(
-    linhasHistorico.reduce((acc, s) => acc + round2(s.apuracao.totalVendasBrutas - s.apuracao.totalEstornos), 0),
+    linhasHistorico.reduce((acc, s) => acc + (s.status === "fechado" ? round2(s.apuracao.totalVendasBrutas - s.apuracao.totalEstornos) : 0), 0),
   );
   const somaInformadoPeriodo = round2(
     linhasHistorico.filter((s) => s.status === "fechado").reduce((acc, s) => acc + s.totalInformado, 0),
@@ -238,7 +268,7 @@ export function CaixaView({
     linhasHistorico.filter((s) => s.status === "fechado").reduce((acc, s) => acc + s.diferencaTotal, 0),
   );
 
-  const colunasHistorico: Coluna<CaixaSessaoDto>[] = [
+  const colunasHistorico: Coluna<CaixaSessaoVisivel>[] = [
     {
       id: "sessao",
       rotulo: "Sessão / Terminal",
@@ -260,7 +290,7 @@ export function CaixaView({
       render: (s) => (
         <div>
           <p className="text-[12.5px] font-semibold text-ink-800">{s.operadorNome}</p>
-          {s.fechadoEm && (
+          {s.status === "fechado" && s.fechadoEm && (
             <p className="text-[10.5px] text-ink-400">fechado {dataHoraBR(s.fechadoEm)}</p>
           )}
         </div>
@@ -277,8 +307,8 @@ export function CaixaView({
       id: "esperado",
       rotulo: "Esperado",
       alinhar: "direita",
-      valor: (s) => s.totalEsperado,
-      render: (s) => <span className="tabular text-[12.5px] font-semibold text-ink-800">{moeda(s.totalEsperado)}</span>,
+      valor: (s) => s.status === "fechado" ? s.totalEsperado : null,
+      render: (s) => <span className="tabular text-[12.5px] font-semibold text-ink-800">{s.status === "fechado" ? moeda(s.totalEsperado) : "—"}</span>,
     },
     {
       id: "informado",
@@ -299,6 +329,7 @@ export function CaixaView({
       render: (s) => {
         if (s.status !== "fechado") return <span className="text-ink-300">—</span>;
         const dif = round2(s.diferencaTotal);
+        if (Math.abs(dif) < 0.01 && sessaoTemDivergencia(s)) return <Badge tom="alerta">Divergência por forma</Badge>;
         if (Math.abs(dif) < 0.01) return <Badge tom="ok">Batido (R$ 0,00)</Badge>;
         return (
           <Badge tom={dif < 0 ? "erro" : "alerta"}>
@@ -326,11 +357,11 @@ export function CaixaView({
       rotulo: "",
       alinhar: "direita",
       ocultoNoCsv: true,
-      render: (s) => (
+      render: (s) => s.status === "fechado" ? (
         <Button tamanho="sm" variante="secundario" onClick={() => abrirDetalhe(s)}>
           Conferência
         </Button>
-      ),
+      ) : <span className="text-[11px] text-ink-400">Em andamento</span>,
     },
   ];
 
@@ -470,83 +501,34 @@ export function CaixaView({
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Kpi
-                rotulo="Dinheiro esperado na gaveta"
-                valor={moeda(sessaoAtual.apuracao.esperadosMap.dinheiro ?? 0)}
-                detalhe={`fundo inicial ${moeda(sessaoAtual.saldoInicial)}`}
-                tom="ok"
+                rotulo="Estado da gaveta"
+                valor={sessaoAtual.estadoGaveta === "bloqueado" ? "Bloqueada" : sessaoAtual.estadoGaveta === "alerta" ? "Atenção" : "Normal"}
+                detalhe={sessaoAtual.bloquearVendaDinheiro ? "Sangria necessária para venda em dinheiro" : "Estado de segurança, sem saldo exposto"}
+                tom={sessaoAtual.estadoGaveta === "bloqueado" ? "erro" : sessaoAtual.estadoGaveta === "alerta" ? "alerta" : "ok"}
                 icone="carteira"
               />
               <Kpi
-                rotulo="Vendas líquidas da sessão"
-                valor={moeda(round2(sessaoAtual.apuracao.totalVendasBrutas - sessaoAtual.apuracao.totalEstornos))}
-                detalhe={`${sessaoAtual.apuracao.qtdVendasAtivas} venda(s) ativa(s) · ${sessaoAtual.apuracao.qtdVendasCanceladas} cancelada(s)`}
+                rotulo="Vendas da sessão"
+                valor={String(sessaoAtual.qtdVendasAtivas)}
+                detalhe={`${sessaoAtual.qtdVendasCanceladas} cancelada(s)`}
                 tom="info"
                 icone="caixa"
               />
               <Kpi
-                rotulo="Suprimentos / Sangrias"
-                valor={`+${moeda(sessaoAtual.apuracao.totalSuprimentos)} / -${moeda(sessaoAtual.apuracao.totalSangrias)}`}
-                detalhe={`${sessaoAtual.movimentos.filter((m) => m.tipo === "suprimento" || m.tipo === "sangria").length} lançamento(s)`}
+                rotulo="Movimentações"
+                valor={String(sessaoAtual.movimentos.filter((m) => m.tipo === "suprimento" || m.tipo === "sangria").length)}
+                detalhe="Suprimentos e sangrias registrados"
                 tom="neutro"
                 icone="atualizar"
               />
-              <Kpi
-                rotulo="Total geral esperado"
-                valor={moeda(sessaoAtual.apuracao.totalEsperado)}
-                detalhe={`aberto em ${dataHoraBR(sessaoAtual.abertoEm)}`}
-                tom="roxo"
-                icone="documento"
-              />
+              <Kpi rotulo="Turno aberto" valor={`#${sessaoAtual.numero}`} detalhe={`aberto em ${dataHoraBR(sessaoAtual.abertoEm)}`} tom="roxo" icone="documento" />
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-[1.45fr_1fr]">
-              <Card padding={false}>
-                <div className="p-4 pb-2">
-                  <CardTitulo
-                    titulo={`Apuração por forma de pagamento · Caixa #${sessaoAtual.numero}`}
-                    descricao="Valores calculados em tempo real sobre as vendas, trocos, suprimentos, sangrias e estornos"
-                    icone="carteira"
-                  />
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-[12.5px]">
-                    <thead className="border-y border-ink-100 bg-ink-50/70 text-[11px] uppercase text-ink-400">
-                      <tr>
-                        <th className="px-4 py-2.5">Forma</th>
-                        <th className="px-3 py-2.5 text-right">Inicial</th>
-                        <th className="px-3 py-2.5 text-right">Vendas</th>
-                        <th className="px-3 py-2.5 text-right">+ Supr.</th>
-                        <th className="px-3 py-2.5 text-right">− Sangria</th>
-                        <th className="px-3 py-2.5 text-right">− Estornos</th>
-                        <th className="px-4 py-2.5 text-right">Esperado</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-ink-50">
-                      {sessaoAtual.apuracao.porForma.map((linha) => (
-                        <tr key={linha.forma} className="hover:bg-ink-50/40">
-                          <td className="px-4 py-2.5 font-semibold text-ink-800">{linha.rotulo}</td>
-                          <td className="tabular px-3 py-2.5 text-right text-ink-500">{moeda(linha.saldoInicial)}</td>
-                          <td className="tabular px-3 py-2.5 text-right text-ink-700">{moeda(linha.vendas)}</td>
-                          <td className="tabular px-3 py-2.5 text-right text-way-700">{moeda(linha.suprimentos)}</td>
-                          <td className="tabular px-3 py-2.5 text-right text-amber-700">{moeda(linha.sangrias)}</td>
-                          <td className="tabular px-3 py-2.5 text-right text-rose-700">{moeda(linha.estornos)}</td>
-                          <td className="tabular px-4 py-2.5 text-right font-bold text-ink-900">{moeda(linha.esperado)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="border-t border-ink-200 bg-ink-50/60 font-bold text-ink-900">
-                      <tr>
-                        <td className="px-4 py-2.5">Total</td>
-                        <td className="tabular px-3 py-2.5 text-right">{moeda(sessaoAtual.apuracao.saldoInicial)}</td>
-                        <td className="tabular px-3 py-2.5 text-right">{moeda(sessaoAtual.apuracao.totalVendasBrutas)}</td>
-                        <td className="tabular px-3 py-2.5 text-right">{moeda(sessaoAtual.apuracao.totalSuprimentos)}</td>
-                        <td className="tabular px-3 py-2.5 text-right">{moeda(sessaoAtual.apuracao.totalSangrias)}</td>
-                        <td className="tabular px-3 py-2.5 text-right">{moeda(sessaoAtual.apuracao.totalEstornos)}</td>
-                        <td className="tabular px-4 py-2.5 text-right">{moeda(sessaoAtual.apuracao.totalEsperado)}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card>
+                <CardTitulo titulo="Conferência protegida" descricao="Fechamento às cegas" icone="cadeado" />
+                <p className="text-[12.5px] leading-relaxed text-ink-600">Os saldos esperados por forma permanecem no servidor enquanto o turno estiver aberto. Conte os valores e use <strong>Conferir e fechar caixa</strong>; divergências exigem justificativa e homologação gerencial.</p>
+                <p className="mt-3 text-[11.5px] text-ink-400">Os snapshots e a comparação por modalidade ficam disponíveis no histórico após o encerramento.</p>
               </Card>
 
               <Card padding={false}>
@@ -632,8 +614,8 @@ export function CaixaView({
             <Kpi
               rotulo="Saldo de divergências"
               valor={somaDiferencaPeriodo > 0 ? `+${moeda(somaDiferencaPeriodo)}` : moeda(somaDiferencaPeriodo)}
-              detalhe={Math.abs(somaDiferencaPeriodo) < 0.01 ? "sem quebras acumuladas" : "sobras (+) / faltas (-)"}
-              tom={Math.abs(somaDiferencaPeriodo) < 0.01 ? "ok" : somaDiferencaPeriodo < 0 ? "erro" : "alerta"}
+              detalhe={!linhasHistorico.some(sessaoTemDivergencia) ? "sem divergências por forma" : "saldo líquido; confira as diferenças por forma"}
+              tom={!linhasHistorico.some(sessaoTemDivergencia) ? "ok" : somaDiferencaPeriodo < 0 ? "erro" : "alerta"}
               icone="alerta"
             />
           </div>
@@ -667,12 +649,12 @@ export function CaixaView({
                 {
                   valor: "batido",
                   rotulo: "Fechados sem divergência",
-                  contagem: historico.filter((s) => s.status === "fechado" && Math.abs(s.diferencaTotal) < 0.01).length,
+                  contagem: historico.filter((s) => s.status === "fechado" && !sessaoTemDivergencia(s)).length,
                 },
                 {
                   valor: "divergente",
                   rotulo: "Fechados com divergência",
-                  contagem: historico.filter((s) => s.status === "fechado" && Math.abs(s.diferencaTotal) >= 0.01).length,
+                  contagem: historico.filter(sessaoTemDivergencia).length,
                 },
               ]}
             />
@@ -765,13 +747,13 @@ export function CaixaView({
       {/* Modal: Conferência e Fechamento de Caixa */}
       <Modal
         aberto={modalFechar && Boolean(sessaoAtual)}
-        aoFechar={() => setModalFechar(false)}
+        aoFechar={fecharModalFechamento}
         titulo={sessaoAtual ? `Fechamento do Caixa #${sessaoAtual.numero} (${sessaoAtual.terminal})` : "Fechar caixa"}
         descricao={`Operador: ${sessaoAtual?.operadorNome ?? ""} · Confira os valores por forma de pagamento antes de encerrar`}
         largura="max-w-2xl"
         rodape={
           <div className="flex justify-end gap-2">
-            <Button variante="secundario" onClick={() => setModalFechar(false)}>
+            <Button variante="secundario" onClick={fecharModalFechamento} disabled={ocupado}>
               Voltar
             </Button>
             <Button
@@ -824,6 +806,20 @@ export function CaixaView({
               linhas={2}
               placeholder="Se houver sobra ou falta, descreva o motivo para registro na auditoria..."
             />
+
+            {requerHomologacaoFechar && (
+              <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
+                <p className="text-[12px] font-semibold text-amber-900">Há divergência ou inconsistência. Solicite a homologação de um gerente para concluir o fechamento.</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Campo rotulo="E-mail do gerente" obrigatorio>
+                    <Input type="email" valor={gerenteEmailFechar} aoMudar={setGerenteEmailFechar} placeholder="gerente@empresa.com.br" />
+                  </Campo>
+                  <Campo rotulo="PIN / senha do gerente" obrigatorio dica="Verificado no servidor e não registrado em log.">
+                    <Input type="password" autoComplete="off" valor={gerenteSenhaFechar} aoMudar={setGerenteSenhaFechar} placeholder="••••••" />
+                  </Campo>
+                </div>
+              </div>
+            )}
 
             <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-ink-100 bg-ink-50/50 px-3.5 py-2.5 text-[12.5px] font-medium text-ink-800">
               <input

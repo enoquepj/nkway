@@ -56,6 +56,7 @@ const GRUPOS: {
       { href: "/clientes", rotulo: "Clientes e fornecedores", icone: "pessoas", permissao: "cadastros.clientes" },
       { href: "/financeiro", rotulo: "Financeiro", icone: "carteira", permissao: "financeiro.gerenciar" },
       { href: "/relatorios", rotulo: "Relatórios", icone: "grafico" },
+      { href: "/dashboard/relatorios/pdv", rotulo: "Relatórios do PDV", icone: "grafico", permissao: "caixa.auditoria" },
       { href: "/usuarios", rotulo: "Usuários e auditoria", icone: "pessoas", permissao: "usuarios.ver" },
     ],
   },

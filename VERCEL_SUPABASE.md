@@ -1,8 +1,10 @@
 # NKWAY — estado oficial Vercel + Supabase
 
-**Atualizado em:** 2026-10-31  
+**Atualizado em:** 2026-11-05  
 **Produção:** https://nkway.vercel.app  
-**Health confirmado:** `GET /api/health` → HTTP 200 `{"ok":true}`
+**Health confirmado em 2026-11-05:** `GET /api/health` → HTTP 200 `{"ok":true}`
+
+Na retomada, o `main` consultado era `ec4f01b`; seu código Next é o mesmo da base `c719aac`. O baseline foi executado em prévia e banco **locais** (smoke 36/36, diagnóstico 219/219, 16 cenários de caixa e 196 chamadas de ações sem erro 500). Em produção, nesta retomada, foi verificado somente o health, sem teste autenticado e sem alterar Vercel, Supabase, conexão ou segredos.
 
 ## 1. Estado pronto — não refazer
 
@@ -81,6 +83,9 @@ Login demo (enquanto seed estiver ativo): `demo@nkway.com.br` / `nkway123`.
 
 ## 6. Próximos trabalhos
 
+- **Relatórios gerenciais de PDV:** entrega local em `/dashboard/relatorios/pdv` e `GET /api/relatorios/pdv`, pendente de publicação para chegar à produção. Gerente/administrador verificados no servidor, consulta da empresa da sessão, paginação Drizzle e CSV seguro. Não há nova tabela, RLS, SDK Supabase, variável de ambiente ou alteração da conexão. Dados não registrados aparecem como indisponíveis; detalhes em `CONTEXTO_ARENA.md` item 21.
+- **Correção de segurança do fechamento cego:** implementada e testada localmente, ainda pendente de publicação. A homologação é exigida por modalidade, inclusive com total líquido zero; `/caixa` não envia esperados de turnos abertos ao navegador. Snapshot, homologação, logs, recolhimento e auditoria são gravados juntos. Turnos antigos não foram modificados. Até publicar e validar o deploy, não presumir que a produção está corrigida. Detalhes e limites no item 22 de `CONTEXTO_ARENA.md`.
+- **Dependências:** o `npm audit` identificou alertas na base existente, incluindo um crítico no Next; avaliar correção e compatibilidade em tarefa separada. Nenhuma atualização automática da stack foi aplicada nesta entrega.
 - Produto: todas as pendências funcionais da seção 6 de `CONTEXTO_ARENA.md` estão concluídas (incluindo DF-e em `/dfe`, Assinatura com Gateway por CNPJ em `/assinatura` e Migração planejada em `/migracao`). A tela `/prontidao` (`GET /api/prontidao` para checagem por máquina) consolida o que está pronto e o que depende só de chaves externas; mostra apenas nomes de variáveis, booleanos e contagens — nenhum valor de Secret sai do servidor.
 - **Não confundir:** DF-e real (A1 + worker mTLS + bucket privado/cofre), assinatura com gateway e migração do legado são código **já entregue**. O que resta é configurar as chaves abaixo quando a operação live começar; health ok não autoriza mexer na conexão.
 - Reparo de baseline: a rota de cron `GET|POST /api/dfe/dist` estava documentada, mas ausente no `main`; foi restaurada com autenticação por `DFE_CRON_SECRET`/`CRON_SECRET` (401 sem segredo) e está coberta pelo `smoke.sh`.

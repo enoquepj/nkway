@@ -218,25 +218,8 @@ async function gravarOperacaoPdv(params: {
     }
   }
 
-  // Se vier de um DAV, trava o DAV atomicamente ANTES de baixar estoque para garantir baixa única!
-  if (params.davOrigemId) {
-    const travado = await db
-      .update(vendas)
-      .set({ status: "faturado", situacaoFiscal: "nao_emitida" })
-      .where(
-        and(
-          eq(vendas.id, params.davOrigemId),
-          eq(vendas.empresaId, params.empresaId),
-          eq(vendas.tipo, "dav"),
-          eq(vendas.status, "aberto"),
-        ),
-      )
-      .returning({ id: vendas.id });
-    if (travado.length === 0) {
-      return { ok: false, erro: "Este DAV já foi faturado ou cancelado." };
-    }
-  }
-
+  // A trava do DAV e a inclusão financeira da venda são feitas juntas abaixo,
+  // depois de travar novamente a sessão, para não faturar um DAV em caixa encerrado.
   const numeroVenda = await proximoNumero(params.empresaId, "numero");
   const fiscalCfg = (params.empresa.fiscal ?? {}) as Record<string, unknown>;
   const ambiente = String(fiscalCfg.ambiente ?? "2");
@@ -253,7 +236,23 @@ async function gravarOperacaoPdv(params: {
   const situacaoFiscalInicial: SituacaoFiscalVenda =
     tipoRegistro === "fiscal" ? "pendente_transmissao" : "nao_emitida";
 
-  const [venda] = await db
+  const gravacao = await db.transaction(async (tx) => {
+    if (sessaoAberta) {
+      const [sessao] = await tx.select({ status: caixaSessoes.status, operadorId: caixaSessoes.operadorId })
+        .from(caixaSessoes)
+        .where(and(eq(caixaSessoes.id, sessaoAberta.id), eq(caixaSessoes.empresaId, params.empresaId)))
+        .for("update");
+      if (!sessao || sessao.status !== "aberto" || sessao.operadorId !== params.usuario.id) {
+        return { ok: false as const, erro: "A sessão de caixa foi encerrada simultaneamente. Abra o caixa antes de finalizar a venda." };
+      }
+    }
+    if (params.davOrigemId) {
+      const travado = await tx.update(vendas).set({ status: "faturado", situacaoFiscal: "nao_emitida" })
+        .where(and(eq(vendas.id, params.davOrigemId), eq(vendas.empresaId, params.empresaId), eq(vendas.tipo, "dav"), eq(vendas.status, "aberto")))
+        .returning({ id: vendas.id });
+      if (travado.length === 0) return { ok: false as const, erro: "Este DAV já foi faturado ou cancelado." };
+    }
+    const [venda] = await tx
     .insert(vendas)
     .values({
       empresaId: params.empresaId,
@@ -294,22 +293,25 @@ async function gravarOperacaoPdv(params: {
       data: new Date(),
     })
     .returning({ id: vendas.id });
-
-  await db.insert(vendaItens).values(
-    itens.map((i) => {
-      const p = porId.get(i.produtoId)!;
-      return {
-        vendaId: venda.id,
-        produtoId: i.produtoId,
-        nome: p.nome,
-        qtd: round2(i.qtd * 1000) / 1000,
-        precoUnit: i.preco,
-        total: round2(i.qtd * i.preco),
-        unidade: p.unidade,
-        gtin: p.gtin,
-      };
-    }),
-  );
+    await tx.insert(vendaItens).values(
+      itens.map((i) => {
+        const p = porId.get(i.produtoId)!;
+        return {
+          vendaId: venda.id,
+          produtoId: i.produtoId,
+          nome: p.nome,
+          qtd: round2(i.qtd * 1000) / 1000,
+          precoUnit: i.preco,
+          total: round2(i.qtd * i.preco),
+          unidade: p.unidade,
+          gtin: p.gtin,
+        };
+      }),
+    );
+    return { ok: true as const, venda };
+  });
+  if (!gravacao.ok) return gravacao;
+  const venda = gravacao.venda;
 
   let aviso: string | undefined;
   if (baixaEstoque) {
@@ -742,7 +744,7 @@ export async function cancelarVenda(bruto: unknown): Promise<{ ok: true } | { ok
     if (!vendaId) return { ok: false, erro: "Informe o documento para cancelar." };
     if (!motivoLimpo) return { ok: false, erro: "Descreva o motivo do cancelamento." };
 
-    const [venda] = await db
+    let [venda] = await db
       .select()
       .from(vendas)
       .where(and(eq(vendas.id, vendaId), eq(vendas.empresaId, empresaId)))
@@ -752,63 +754,51 @@ export async function cancelarVenda(bruto: unknown): Promise<{ ok: true } | { ok
 
     const movimentouCaixaEEstoque = venda.tipo === "fiscal" || venda.tipo === "sem_nota";
 
-    let sessaoEstornoId: string | null = null;
-    if (movimentouCaixaEEstoque) {
+    const cancelamento = await db.transaction(async (tx) => {
+      let sessaoEstornoId: string | null = null;
       if (venda.caixaSessaoId) {
-        const [sessaoOrigem] = await db
-          .select({ id: caixaSessoes.id, status: caixaSessoes.status })
-          .from(caixaSessoes)
-          .where(and(eq(caixaSessoes.id, venda.caixaSessaoId), eq(caixaSessoes.empresaId, empresaId)))
-          .limit(1);
-        if (sessaoOrigem?.status === "aberto") {
-          sessaoEstornoId = sessaoOrigem.id;
-        } else {
-          const minhaAberta = await buscarSessaoCaixaAberta(empresaId, usuario.id);
-          if (!minhaAberta) {
-            return {
-              ok: false,
-              erro: "Caixa fechado: esta venda pertence a uma sessão de caixa já encerrada. Abra uma sessão de caixa (ou reabra a anterior) para registrar o estorno.",
-            };
-          }
-          sessaoEstornoId = minhaAberta.id;
+        // A mesma trava usada no fechamento garante que o estorno não caia em um snapshot já encerrado.
+        const [origem] = await tx.select({ id: caixaSessoes.id, status: caixaSessoes.status })
+          .from(caixaSessoes).where(and(eq(caixaSessoes.id, venda.caixaSessaoId), eq(caixaSessoes.empresaId, empresaId))).for("update");
+        if (origem?.status === "aberto") sessaoEstornoId = origem.id;
+        else if (movimentouCaixaEEstoque) {
+          const [aberta] = await tx.select({ id: caixaSessoes.id }).from(caixaSessoes)
+            .where(and(eq(caixaSessoes.empresaId, empresaId), eq(caixaSessoes.operadorId, usuario.id), eq(caixaSessoes.status, "aberto")))
+            .limit(1).for("update");
+          if (!aberta) return { ok: false as const, erro: "Caixa fechado: esta venda pertence a uma sessão já encerrada. Abra uma sessão ou reabra a anterior para registrar o estorno." };
+          sessaoEstornoId = aberta.id;
         }
-      } else {
-        const minhaAberta = await buscarSessaoCaixaAberta(empresaId, usuario.id);
-        sessaoEstornoId = minhaAberta?.id ?? null;
+      } else if (movimentouCaixaEEstoque) {
+        const [aberta] = await tx.select({ id: caixaSessoes.id }).from(caixaSessoes)
+          .where(and(eq(caixaSessoes.empresaId, empresaId), eq(caixaSessoes.operadorId, usuario.id), eq(caixaSessoes.status, "aberto")))
+          .limit(1).for("update");
+        sessaoEstornoId = aberta?.id ?? null;
       }
-    }
 
-    await db
-      .update(vendas)
-      .set({
-        status: "cancelado",
-        situacaoFiscal: "cancelada",
-        ...(venda.tipo === "fiscal" ? { statusSefaz: "cancelada_sefaz", cstatSefaz: "135" } : {}),
-        observacao: `${venda.observacao ?? ""} · Cancelado: ${motivoLimpo}`.trim(),
-      })
-      .where(eq(vendas.id, venda.id));
-
-    if (movimentouCaixaEEstoque && sessaoEstornoId) {
-      const rateio = ratearPagamentosLiquidos({
-        total: Number(venda.total),
-        formaPagamento: venda.formaPagamento,
-        pagamentos: (venda.pagamentos ?? []) as { forma: string; valor: number }[],
-      });
-      for (const [forma, valor] of Object.entries(rateio)) {
-        if (valor <= 0) continue;
-        await db.insert(caixaMovimentos).values({
-          empresaId,
-          sessaoId: sessaoEstornoId,
-          tipo: "estorno",
-          forma,
-          valor,
-          motivo: `Estorno ${venda.modelo ?? "Venda"} ${venda.numeroNota ?? venda.numero}: ${motivoLimpo}`,
-          vendaId: venda.id,
-          usuarioId: usuario.id,
-          usuarioNome: usuario.nome,
-        });
+      const [atual] = await tx.select().from(vendas).where(and(eq(vendas.id, vendaId), eq(vendas.empresaId, empresaId))).for("update");
+      if (!atual) return { ok: false as const, erro: "Documento não encontrado." };
+      if (atual.status === "cancelado") return { ok: false as const, erro: "Este documento já está cancelado." };
+      if (atual.caixaSessaoId !== venda.caixaSessaoId || atual.tipo !== venda.tipo) return { ok: false as const, erro: "O documento foi alterado simultaneamente. Consulte-o novamente." };
+      await tx.update(vendas).set({
+        status: "cancelado", situacaoFiscal: "cancelada",
+        ...(atual.tipo === "fiscal" ? { statusSefaz: "cancelada_sefaz", cstatSefaz: "135" } : {}),
+        observacao: `${atual.observacao ?? ""} · Cancelado: ${motivoLimpo}`.trim(),
+      }).where(and(eq(vendas.id, atual.id), eq(vendas.empresaId, empresaId)));
+      if (movimentouCaixaEEstoque && sessaoEstornoId) {
+        const rateio = ratearPagamentosLiquidos({ total: Number(atual.total), formaPagamento: atual.formaPagamento, pagamentos: (atual.pagamentos ?? []) as { forma: string; valor: number }[] });
+        for (const [forma, valor] of Object.entries(rateio)) {
+          if (valor <= 0) continue;
+          await tx.insert(caixaMovimentos).values({
+            empresaId, sessaoId: sessaoEstornoId, tipo: "estorno", forma, valor,
+            motivo: `Estorno ${atual.modelo ?? "Venda"} ${atual.numeroNota ?? atual.numero}: ${motivoLimpo}`,
+            vendaId: atual.id, usuarioId: usuario.id, usuarioNome: usuario.nome,
+          });
+        }
       }
-    }
+      return { ok: true as const, venda: atual };
+    });
+    if (!cancelamento.ok) return cancelamento;
+    venda = cancelamento.venda;
 
     const itens = await db.select().from(vendaItens).where(eq(vendaItens.vendaId, venda.id));
     if (movimentouCaixaEEstoque) {

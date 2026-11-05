@@ -126,7 +126,7 @@ export function ModalFechamentoCego({
         {requerHomologacao && (
           <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
             <p className="text-[12px] font-semibold text-amber-900">
-              Foi identificada uma quebra de caixa. Preencha a justificativa e solicite a
+              Foi identificada uma divergência ou inconsistência. Preencha a justificativa e solicite a
               homologação de um gerente presente para concluir o encerramento.
             </p>
             <Area

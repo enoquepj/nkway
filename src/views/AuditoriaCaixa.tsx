@@ -32,9 +32,15 @@ export type LinhaAuditoriaCaixaView = {
   }[];
 };
 
+function semHomologacaoRegistrada(l: LinhaAuditoriaCaixaView): boolean {
+  const divergente = Math.abs(l.diferencaTotal) >= 0.01 || Object.values(l.diferencas ?? {}).some((v) => Math.abs(Number(v) || 0) >= 0.01);
+  return divergente && l.quebras.length === 0 && l.statusAprovacao !== "homologado";
+}
+
 function situacao(l: LinhaAuditoriaCaixaView): { rotulo: string; tom: "ok" | "alerta" | "erro" } {
   const pendente = l.quebras.some((q) => !q.homologadoPorUsuarioId) || l.statusAprovacao === "pendente";
   if (pendente) return { rotulo: "Pendente", tom: "alerta" };
+  if (semHomologacaoRegistrada(l)) return { rotulo: "Sem homologação", tom: "alerta" };
   if (l.quebras.length > 0) return { rotulo: "Com Quebra", tom: "erro" };
   return { rotulo: "OK", tom: "ok" };
 }
@@ -146,7 +152,7 @@ export function AuditoriaCaixaView({
                             Homologar
                           </Button>
                         ) : (
-                          <span className="text-[11px] text-ink-400">—</span>
+                          <span className="text-[11px] text-ink-400">{semHomologacaoRegistrada(l) ? "Revisar manualmente" : "—"}</span>
                         )}
                       </td>
                     </tr>

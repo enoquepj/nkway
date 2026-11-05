@@ -6,16 +6,20 @@
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { caixaMovimentos, caixaQuebraLogs, caixaSessoes, vendas } from "@/db/schema";
+import { caixaMovimentos, caixaQuebraLogs, caixaSessoes, usuarios, vendas } from "@/db/schema";
 import {
   apurarSessaoCaixa,
   calcularConferenciaCaixa,
+  FUNDO_TROCO_PADRAO,
+  LIMITE_DINHEIRO_GAVETA,
   type ApuracaoSessaoCaixa,
   type MovimentoCaixaInput,
   type VendaCaixaInput,
 } from "@/lib/caixa";
 import { FORMAS_PAGAMENTO, moeda, round2 } from "@/lib/dominio";
 import { temPermissao } from "@/lib/permissoes";
+import { confereSenha } from "@/lib/session";
+import { registrarAuditoria } from "@/server/auditoria";
 
 /** `db` ou a transação `tx` — ambos expõem `select` */
 type Executor = Pick<typeof db, "select">;
@@ -158,11 +162,15 @@ export async function apurarSessaoNoBanco(
 
 export function lerInformados(mapaBruto: Record<string, unknown>): { ok: true; valores: Record<string, number> } | { ok: false; erro: string } {
   const valores: Record<string, number> = {};
+  let total = 0;
   for (const fp of FORMAS_PAGAMENTO) {
     const bruto = mapaBruto?.[fp.id];
-    const v = typeof bruto === "number" ? bruto : Number(String(bruto ?? "0").replace(/\./g, "").replace(",", ".")) || 0;
-    if (v < 0) return { ok: false, erro: `O valor informado em ${fp.label} não pode ser negativo.` };
+    const vazio = bruto === undefined || bruto === null || (typeof bruto === "string" && !bruto.trim());
+    const v = vazio ? 0 : typeof bruto === "number" ? bruto : typeof bruto === "string" ? Number(bruto.replace(/\./g, "").replace(",", ".")) : NaN;
+    if (!Number.isFinite(v) || v < 0 || v > 9_999_999_999.99) return { ok: false, erro: `Informe um valor válido e não negativo em ${fp.label}.` };
     valores[fp.id] = round2(v);
+    total = round2(total + valores[fp.id]);
+    if (total > 9_999_999_999.99) return { ok: false, erro: "A soma informada excede o limite permitido para o fechamento." };
   }
   return { ok: true, valores };
 }
@@ -177,15 +185,12 @@ export type ResultadoFechamentoCaixa =
       conferencia: ReturnType<typeof calcularConferenciaCaixa>;
       justificativa: string;
     }
-  | { ok: false; erro: string };
+  | { ok: false; erro: string; requerHomologacao?: boolean };
 
 /**
- * Fecha a sessão dentro de UMA transação:
- *  1. `SELECT … FOR UPDATE` da sessão (segundo fechamento simultâneo espera a trava e recebe erro claro);
- *  2. recalcula os esperados no servidor pelo motor corrigido (nunca confia em valores do cliente);
- *  3. exige justificativa (≥ 10) para divergência e para inconsistência de recebimento;
- *  4. `UPDATE … WHERE status = 'aberto'` grava o snapshot (esperados/informados/diferenças).
- * Não registra auditoria: o chamador audita após o commit.
+ * Núcleo único de fechamento. Em modo cego, sessão, apuração, aprovação, snapshot,
+ * recolhimento, logs de quebra e auditoria são confirmados na mesma transação.
+ * A opção cega é obrigatória nos dois pontos públicos de fechamento.
  */
 export async function fecharSessaoCaixaTransacional(params: {
   empresaId: string;
@@ -193,6 +198,7 @@ export async function fecharSessaoCaixaTransacional(params: {
   usuario: { id: string; nome: string; papel: string };
   valoresInformados: Record<string, unknown>;
   justificativa: string;
+  cego?: { gerenteEmail: string; gerenteSenha: string; origem: "pdv" | "caixa" };
 }): Promise<ResultadoFechamentoCaixa> {
   const justificativa = String(params.justificativa ?? "").trim();
   const informados = lerInformados(params.valoresInformados ?? {});
@@ -216,18 +222,36 @@ export async function fecharSessaoCaixaTransacional(params: {
     const apuracao = await apurarSessaoNoBanco(params.empresaId, sessao, tx);
     const conferencia = calcularConferenciaCaixa(apuracao.esperadosMap, informados.valores);
 
-    if (apuracao.inconsistencias.length > 0 && justificativa.length < 10) {
-      const lista = apuracao.inconsistencias.map((i) => `${i.vendaId.slice(0, 8)}: ${i.motivo}`).join(" · ");
-      return {
-        ok: false as const,
-        erro: `Recebimento inconsistente em ${apuracao.inconsistencias.length} venda(s) desta sessão (${lista}). Corrija a venda ou informe uma justificativa com no mínimo 10 caracteres.`,
-      };
-    }
-    if (conferencia.temDivergencia && justificativa.length < 10) {
-      return {
-        ok: false as const,
-        erro: `Há divergência de ${moeda(conferencia.diferencaTotal)} na conferência. Informe uma justificativa com no mínimo 10 caracteres.`,
-      };
+    // Nunca use apenas a diferença líquida: uma falta e uma sobra podem se anular.
+    const exigeHomologacao = conferencia.temDivergencia || apuracao.inconsistencias.length > 0;
+    const somaSobra = round2(Object.values(conferencia.diferencas).reduce((s, d) => s + Math.max(0, d), 0));
+    const somaFalta = round2(Object.values(conferencia.diferencas).reduce((s, d) => s + Math.max(0, -d), 0));
+    let gerenteId: string | null = null;
+    if (params.cego && exigeHomologacao) {
+      if (justificativa.length < 10) {
+        return { ok: false as const, erro: "Há divergência ou inconsistência. Informe a justificativa e solicite a homologação de um gerente.", requerHomologacao: true };
+      }
+      const email = params.cego.gerenteEmail.trim().toLowerCase();
+      const senha = params.cego.gerenteSenha;
+      if (!email || !senha) {
+        return { ok: false as const, erro: "Informe o e-mail e o PIN/senha de um gerente para homologar.", requerHomologacao: true };
+      }
+      const [gerente] = await tx.select({ id: usuarios.id, papel: usuarios.papel, senhaHash: usuarios.senhaHash })
+        .from(usuarios)
+        .where(and(eq(usuarios.empresaId, params.empresaId), eq(usuarios.email, email), eq(usuarios.ativo, true)))
+        .limit(1).for("share");
+      if (!gerente || !temPermissao(gerente.papel, "caixa.homologar") || !confereSenha(senha, gerente.senhaHash)) {
+        return { ok: false as const, erro: "Homologação negada: credencial inválida ou usuário sem permissão.", requerHomologacao: true };
+      }
+      gerenteId = gerente.id;
+    } else if (!params.cego) {
+      if (apuracao.inconsistencias.length > 0 && justificativa.length < 10) {
+        const lista = apuracao.inconsistencias.map((i) => `${i.vendaId.slice(0, 8)}: ${i.motivo}`).join(" · ");
+        return { ok: false as const, erro: `Recebimento inconsistente em ${apuracao.inconsistencias.length} venda(s) desta sessão (${lista}). Corrija a venda ou informe uma justificativa com no mínimo 10 caracteres.` };
+      }
+      if (conferencia.temDivergencia && justificativa.length < 10) {
+        return { ok: false as const, erro: `Há divergência de ${moeda(conferencia.diferencaTotal)} na conferência. Informe uma justificativa com no mínimo 10 caracteres.` };
+      }
     }
 
     const [fechado] = await tx
@@ -244,6 +268,7 @@ export async function fecharSessaoCaixaTransacional(params: {
         fechadoEm: new Date(),
         fechadoPorId: params.usuario.id,
         fechadoPorNome: params.usuario.nome,
+        ...(params.cego ? { fundoTroco: FUNDO_TROCO_PADRAO, statusAprovacao: exigeHomologacao ? "homologado" : null, homologadoPorUsuarioId: gerenteId } : {}),
       })
       .where(
         and(eq(caixaSessoes.id, sessao.id), eq(caixaSessoes.empresaId, params.empresaId), eq(caixaSessoes.status, "aberto")),
@@ -252,6 +277,47 @@ export async function fecharSessaoCaixaTransacional(params: {
 
     if (!fechado) {
       return { ok: false as const, erro: `O Caixa #${sessao.numero} já foi fechado em outro acesso simultâneo.` };
+    }
+
+    if (params.cego) {
+      const recolhido = round2(Math.max(0, (informados.valores.dinheiro ?? 0) - FUNDO_TROCO_PADRAO));
+      if (recolhido > 0) {
+        await tx.insert(caixaMovimentos).values({
+          empresaId: params.empresaId, sessaoId: sessao.id, tipo: "cofre", forma: "dinheiro", valor: recolhido,
+          motivo: `Recolhimento líquido ao cofre · fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado`,
+          usuarioId: params.usuario.id, usuarioNome: params.usuario.nome,
+        });
+      }
+      const homologadoEm = new Date();
+      const registrosQuebra = [
+        ...(somaFalta >= 0.01 ? [{ tipo: "FALTA", valorDiferenca: somaFalta }] : []),
+        ...(somaSobra >= 0.01 ? [{ tipo: "SOBRA", valorDiferenca: somaSobra }] : []),
+      ];
+      if (registrosQuebra.length) {
+        await tx.insert(caixaQuebraLogs).values(registrosQuebra.map((q) => ({
+          empresaId: params.empresaId, sessaoId: sessao.id, usuarioId: params.usuario.id,
+          tipo: q.tipo, valorDiferenca: q.valorDiferenca, justificativa,
+          homologadoPorUsuarioId: gerenteId, homologadoEm,
+        })));
+      }
+      const tipoQuebra = somaFalta >= 0.01 && somaSobra >= 0.01 ? "MISTA" : somaFalta >= 0.01 ? "FALTA" : somaSobra >= 0.01 ? "SOBRA" : null;
+      await registrarAuditoria({
+        empresaId: params.empresaId,
+        usuario: params.usuario,
+        acao: params.cego.origem === "caixa" ? "caixa.fechar" : "caixa.fechamento_cego",
+        entidade: "caixa_sessao",
+        registroId: sessao.id,
+        resumo: `Turno #${sessao.numero} encerrado às cegas · ${exigeHomologacao ? "conferência homologada" : "sem divergência"} · cofre ${moeda(recolhido)}`,
+        alteracoes: {
+          numero: sessao.numero, operador: sessao.operadorNome, esperados: apuracao.esperadosMap,
+          informados: conferencia.informados, diferencas: conferencia.diferencas,
+          diferencaTotal: conferencia.diferencaTotal, tipoQuebra, somaFalta, somaSobra,
+          justificativa: justificativa || null, homologadoPorUsuarioId: gerenteId,
+          fundoTroco: FUNDO_TROCO_PADRAO, recolhidoCofre: recolhido,
+          limiteGaveta: LIMITE_DINHEIRO_GAVETA, estadoGaveta: apuracao.estadoGaveta,
+          inconsistencias: apuracao.inconsistencias,
+        },
+      }, tx);
     }
 
     return {

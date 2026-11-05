@@ -2338,6 +2338,13 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
     shellTxt.includes("/dashboard/auditoria-caixa");
   ok("cx-26", "Caixa por Operador", "Modal cego no PDV e auditoria restrita por caixa.auditoria", etapa3UiOk, "inputs vazios · PIN do gerente · rota gated", true);
 
+  const conferenciaCompensada = calcularConferenciaCaixa(
+    { dinheiro: 100, pix: 100 },
+    { dinheiro: 90, pix: 110 },
+  );
+  const compensadaOk = conferenciaCompensada.diferencaTotal === 0 && conferenciaCompensada.temDivergencia && conferenciaCompensada.diferencas.dinheiro === -10 && conferenciaCompensada.diferencas.pix === 10;
+  ok("cx-27", "Caixa por Operador", "Falta e sobra compensadas continuam sendo divergência por forma", compensadaOk, "dinheiro -10 · PIX +10 · total líquido zero", true);
+
   /* ------------------------------------- Fase 3: exportação de XML vendas */
   const permXmlOk =
     temPermissao("administrador", "documentos.exportar_xml") &&

@@ -68,7 +68,7 @@ console.log("nkway.sessao="+p+"."+s);await c.end();})();' 2>/dev/null)
 if [[ -z "$COOKIE" ]]; then
   echo "  aviso: sem usuário no banco — rode build_and_start (ou npm run build + start) para o seed criar a empresa demo"
 else
-  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /prontidao /dashboard/auditoria-caixa /config; do
+  for p in / /pdv /caixa /documentos /emissor /dfe /entradas /devolucoes /estoque /produtos /clientes /financeiro /relatorios /transporte /usuarios /assinatura /migracao /prontidao /dashboard/auditoria-caixa /dashboard/relatorios/pdv /config; do
     code=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" "$BASE$p")
     [[ "$code" == "200" ]]; marca $? "GET $p = $code"
   done
@@ -98,6 +98,9 @@ else
   [[ "$CRON_CODE" == "401" ]]; marca $? "GET /api/dfe/dist sem segredo = $CRON_CODE"
   CRON_ERRADO=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/dfe/dist" -H "x-dfe-cron-secret: segredo-errado" -H "Authorization: Bearer segredo-errado" -H "Content-Type: application/json" --data '{"origem":"smoke"}')
   [[ "$CRON_ERRADO" == "401" ]]; marca $? "POST /api/dfe/dist com segredo errado = $CRON_ERRADO"
+
+  REL_PDV_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/relatorios/pdv")
+  [[ "$REL_PDV_ANON" == "401" ]]; marca $? "GET /api/relatorios/pdv sem sessão = $REL_PDV_ANON"
 
   PRON_ANON=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/prontidao")
   [[ "$PRON_ANON" == "401" ]]; marca $? "GET /api/prontidao sem sessão = $PRON_ANON"
@@ -141,6 +144,18 @@ else
   MOTOR=$?
   marca $MOTOR "motor de caixa unificado (16 cenários)"
   if [[ $MOTOR -ne 0 ]]; then tail -25 /tmp/nk-caixa-motor.log; fi
+
+  echo "→ relatórios de PDV (isolamento, caixa e exportação)"
+  BASE="$BASE" node scripts/testar-relatorios-pdv.mjs > /tmp/nk-relatorios-pdv.log 2>&1
+  RELATORIOS=$?
+  marca $RELATORIOS "relatórios de PDV (31 cenários locais)"
+  if [[ $RELATORIOS -ne 0 ]]; then tail -35 /tmp/nk-relatorios-pdv.log; fi
+
+  echo "→ fechamento cego (homologação e concorrência)"
+  BASE="$BASE" node scripts/testar-fechamento-cego.mjs > /tmp/nk-fechamento-cego.log 2>&1
+  FECHAMENTO=$?
+  marca $FECHAMENTO "fechamento cego (48 cenários locais)"
+  if [[ $FECHAMENTO -ne 0 ]]; then tail -40 /tmp/nk-fechamento-cego.log; fi
 fi
 
 echo

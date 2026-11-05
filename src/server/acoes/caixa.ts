@@ -4,12 +4,12 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { caixaMovimentos, caixaQuebraLogs, caixaSessoes, usuarios } from "@/db/schema";
-import { calcularConferenciaCaixa, FUNDO_TROCO_PADRAO, LIMITE_DINHEIRO_GAVETA } from "@/lib/caixa";
+import { calcularConferenciaCaixa, FUNDO_TROCO_PADRAO } from "@/lib/caixa";
 import { FORMAS_PAGAMENTO, moeda, round2 } from "@/lib/dominio";
 import { temPermissao } from "@/lib/permissoes";
 import { confereSenha } from "@/lib/session";
 import { registrarAuditoria } from "@/server/auditoria";
-import { apurarSessaoNoBanco, fecharSessaoCaixaTransacional, lerInformados } from "@/server/caixaCore";
+import { apurarSessaoNoBanco, fecharSessaoCaixaTransacional } from "@/server/caixaCore";
 import { comoErro, corpo, exigirPermissao, logico, numero, texto } from "@/server/tenant";
 
 export type ResultadoCaixa =
@@ -17,7 +17,7 @@ export type ResultadoCaixa =
   | { ok: false; erro: string; requerHomologacao?: boolean };
 
 function revalidarCaixa() {
-  ["/caixa", "/pdv", "/", "/relatorios", "/usuarios"].forEach((p) => revalidatePath(p));
+  ["/caixa", "/pdv", "/", "/relatorios", "/usuarios", "/dashboard/auditoria-caixa", "/dashboard/relatorios/pdv"].forEach((p) => revalidatePath(p));
 }
 
 export async function abrirCaixa(bruto: {
@@ -143,113 +143,85 @@ export async function registrarMovimentoCaixa(bruto: {
 }): Promise<ResultadoCaixa> {
   try {
     const { empresaId, usuario } = await exigirPermissao("caixa.movimentar");
-    const input = corpo<{
-      sessaoId?: string;
-      tipo?: string;
-      forma?: string;
-      valor?: number | string;
-      motivo?: string;
-    }>(bruto);
-
+    const input = corpo<{ sessaoId?: unknown; tipo?: unknown; forma?: unknown; valor?: unknown; motivo?: unknown }>(bruto);
     const tipo = texto(input.tipo).toLowerCase();
-    if (tipo !== "suprimento" && tipo !== "sangria") {
-      return { ok: false, erro: "Tipo de movimentação inválido. Escolha suprimento ou sangria." };
-    }
-
+    if (tipo !== "suprimento" && tipo !== "sangria") return { ok: false, erro: "Tipo de movimentação inválido. Escolha suprimento ou sangria." };
     const forma = texto(input.forma) || "dinheiro";
-    if (!FORMAS_PAGAMENTO.some((f) => f.id === forma)) {
-      return { ok: false, erro: "Forma de pagamento inválida para movimentação de caixa." };
-    }
-
+    if (!FORMAS_PAGAMENTO.some((f) => f.id === forma)) return { ok: false, erro: "Forma de pagamento inválida para movimentação de caixa." };
     const valor = round2(numero(input.valor));
-    if (!(valor > 0)) return { ok: false, erro: "Informe um valor maior que zero." };
-
+    if (!Number.isFinite(valor) || !(valor > 0) || valor > 9_999_999_999.99) return { ok: false, erro: "Informe um valor válido maior que zero." };
     const motivo = texto(input.motivo);
     if (motivo.length < 3) return { ok: false, erro: "Informe o motivo da movimentação (mín. 3 caracteres)." };
-
     const sessaoId = texto(input.sessaoId);
-    const [sessao] = sessaoId
-      ? await db
-          .select()
-          .from(caixaSessoes)
-          .where(and(eq(caixaSessoes.id, sessaoId), eq(caixaSessoes.empresaId, empresaId)))
-          .limit(1)
-      : await db
-          .select()
-          .from(caixaSessoes)
-          .where(
-            and(
-              eq(caixaSessoes.empresaId, empresaId),
-              eq(caixaSessoes.operadorId, usuario.id),
-              eq(caixaSessoes.status, "aberto"),
-            ),
-          )
-          .limit(1);
+    if (sessaoId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessaoId)) return { ok: false, erro: "Informe uma sessão de caixa válida." };
 
-    if (!sessao) {
-      return { ok: false, erro: "Caixa fechado: nenhuma sessão aberta encontrada para registrar a movimentação." };
-    }
-    if (sessao.status !== "aberto") {
-      return { ok: false, erro: "Caixa fechado: não é permitido registrar suprimento ou sangria em sessão encerrada." };
-    }
-    if (sessao.operadorId !== usuario.id && !temPermissao(usuario.papel, "caixa.relatorio_todos")) {
-      return { ok: false, erro: "Você só pode movimentar a sua própria sessão de caixa." };
-    }
-
-    if (tipo === "sangria") {
-      // mesma regra do fechamento: saldo disponível vem do motor corrigido (todas as vendas concretas)
-      const apuracao = await apurarSessaoNoBanco(empresaId, sessao);
-      const disponivel = round2(apuracao.esperadosMap[forma] ?? 0);
-      if (valor > disponivel + 0.01) {
-        return {
-          ok: false,
-          erro: `Saldo insuficiente em ${forma} para sangria (disponível no caixa: ${moeda(disponivel)}).`,
-        };
+    const resultado = await db.transaction(async (tx) => {
+      const condicao = sessaoId
+        ? and(eq(caixaSessoes.id, sessaoId), eq(caixaSessoes.empresaId, empresaId))
+        : and(eq(caixaSessoes.empresaId, empresaId), eq(caixaSessoes.operadorId, usuario.id), eq(caixaSessoes.status, "aberto"));
+      const [sessao] = await tx.select().from(caixaSessoes).where(condicao).limit(1).for("update");
+      if (!sessao) return { ok: false as const, erro: "Caixa fechado: nenhuma sessão aberta encontrada para registrar a movimentação." };
+      if (sessao.status !== "aberto") return { ok: false as const, erro: "Caixa fechado: não é permitido registrar suprimento ou sangria em sessão encerrada." };
+      if (sessao.operadorId !== usuario.id && !temPermissao(usuario.papel, "caixa.relatorio_todos")) return { ok: false as const, erro: "Você só pode movimentar a sua própria sessão de caixa." };
+      if (tipo === "sangria") {
+        const apuracao = await apurarSessaoNoBanco(empresaId, sessao, tx);
+        const disponivel = round2(apuracao.esperadosMap[forma] ?? 0);
+        if (valor > disponivel + 0.01) return { ok: false as const, erro: `Saldo insuficiente em ${forma} para sangria.` };
       }
-    }
-
-    // Reconfirma estado aberto no momento da inserção
-    const [aindaAberto] = await db
-      .select({ id: caixaSessoes.id })
-      .from(caixaSessoes)
-      .where(and(eq(caixaSessoes.id, sessao.id), eq(caixaSessoes.empresaId, empresaId), eq(caixaSessoes.status, "aberto")))
-      .limit(1);
-    if (!aindaAberto) {
-      return { ok: false, erro: "A sessão de caixa foi encerrada simultaneamente. Movimentação cancelada." };
-    }
-
-    const [mov] = await db
-      .insert(caixaMovimentos)
-      .values({
-        empresaId,
-        sessaoId: sessao.id,
-        tipo,
-        forma,
-        valor,
-        motivo,
-        usuarioId: usuario.id,
-        usuarioNome: usuario.nome,
-      })
-      .returning({ id: caixaMovimentos.id });
-
-    await registrarAuditoria({
-      empresaId,
-      usuario,
-      acao: `caixa.${tipo}`,
-      entidade: "caixa_sessao",
-      registroId: sessao.id,
-      resumo: `${tipo === "suprimento" ? "Suprimento" : "Sangria"} de ${moeda(valor)} (${forma}) no Caixa #${sessao.numero}: ${motivo}`,
-      alteracoes: { movimentoId: mov.id, tipo, forma, valor, motivo, sessaoNumero: sessao.numero },
+      const [mov] = await tx.insert(caixaMovimentos).values({ empresaId, sessaoId: sessao.id, tipo, forma, valor, motivo, usuarioId: usuario.id, usuarioNome: usuario.nome }).returning({ id: caixaMovimentos.id });
+      await registrarAuditoria({
+        empresaId, usuario, acao: `caixa.${tipo}`, entidade: "caixa_sessao", registroId: sessao.id,
+        resumo: `${tipo === "suprimento" ? "Suprimento" : "Sangria"} de ${moeda(valor)} (${forma}) no Caixa #${sessao.numero}: ${motivo}`,
+        alteracoes: { movimentoId: mov.id, tipo, forma, valor, motivo, sessaoNumero: sessao.numero },
+      }, tx);
+      return { ok: true as const, id: mov.id, numero: sessao.numero };
     });
-
+    if (!resultado.ok) return resultado;
     revalidarCaixa();
-    return {
-      ok: true,
-      id: mov.id,
-      aviso: `${tipo === "suprimento" ? "Suprimento" : "Sangria"} de ${moeda(valor)} registrado no Caixa #${sessao.numero}.`,
-    };
+    return { ok: true, id: resultado.id, aviso: `${tipo === "suprimento" ? "Suprimento" : "Sangria"} de ${moeda(valor)} registrado no Caixa #${resultado.numero}.` };
   } catch (e) {
     return comoErro(e);
+  }
+}
+
+async function executarFechamentoCego(bruto: unknown, origem: "pdv" | "caixa"): Promise<ResultadoCaixa> {
+  try {
+    const { empresaId, usuario } = await exigirPermissao("caixa.fechar");
+    const input = corpo<{
+      sessaoId?: unknown; valoresInformados?: unknown; confirmado?: unknown;
+      justificativa?: unknown; gerenteEmail?: unknown; gerenteSenha?: unknown;
+    }>(bruto);
+    const sessaoId = texto(input.sessaoId);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessaoId)) {
+      return { ok: false, erro: "Informe uma sessão de caixa válida." };
+    }
+    if (origem === "caixa" && !logico(input.confirmado)) {
+      return { ok: false, erro: "Confirme a conferência dos valores antes de concluir o fechamento do caixa." };
+    }
+    const resultado = await fecharSessaoCaixaTransacional({
+      empresaId, sessaoId, usuario,
+      valoresInformados: corpo<Record<string, unknown>>(input.valoresInformados),
+      justificativa: texto(input.justificativa),
+      cego: {
+        origem,
+        gerenteEmail: texto(input.gerenteEmail),
+        gerenteSenha: typeof input.gerenteSenha === "string" ? input.gerenteSenha : "",
+      },
+    });
+    if (!resultado.ok) return resultado;
+    revalidarCaixa();
+    const homologado = resultado.conferencia.temDivergencia || resultado.apuracao.inconsistencias.length > 0;
+    return {
+      ok: true, id: resultado.sessaoId, numero: resultado.numero,
+      aviso: homologado
+        ? `Turno #${resultado.numero} encerrado com conferência homologada. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`
+        : `Turno #${resultado.numero} encerrado sem divergências. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`,
+    };
+  } catch (e) {
+    const mensagem = e instanceof Error ? e.message : "";
+    if (mensagem.startsWith("Sessão expirada") || mensagem.startsWith("Acesso negado")) return { ok: false, erro: mensagem };
+    console.error("[caixa] Não foi possível concluir o fechamento:", e instanceof Error ? e.name : "erro inesperado");
+    return { ok: false, erro: "Não foi possível concluir o fechamento. Confira o estado do turno antes de tentar novamente." };
   }
 }
 
@@ -258,69 +230,10 @@ export async function fecharCaixa(bruto: {
   valoresInformados?: Record<string, number | string>;
   confirmado?: boolean;
   justificativa?: string;
+  gerenteEmail?: string;
+  gerenteSenha?: string;
 }): Promise<ResultadoCaixa> {
-  try {
-    const { empresaId, usuario } = await exigirPermissao("caixa.fechar");
-    const input = corpo<{
-      sessaoId?: string;
-      valoresInformados?: Record<string, number | string>;
-      confirmado?: boolean;
-      justificativa?: string;
-    }>(bruto);
-
-    const sessaoId = texto(input.sessaoId);
-    if (!sessaoId) return { ok: false, erro: "Informe a sessão de caixa a ser fechada." };
-    if (!logico(input.confirmado)) {
-      return { ok: false, erro: "Confirme a conferência dos valores antes de concluir o fechamento do caixa." };
-    }
-
-    // Recalcula no servidor, dentro de transação com trava de linha (fecharSessaoCaixaTransacional)
-    const r = await fecharSessaoCaixaTransacional({
-      empresaId,
-      sessaoId,
-      usuario,
-      valoresInformados: corpo<Record<string, unknown>>(input.valoresInformados),
-      justificativa: texto(input.justificativa),
-    });
-    if (!r.ok) return r;
-    const { apuracao, conferencia, justificativa } = r;
-
-    await registrarAuditoria({
-      empresaId,
-      usuario,
-      acao: "caixa.fechar",
-      entidade: "caixa_sessao",
-      registroId: r.sessaoId,
-      resumo: `Caixa #${r.numero} (${r.operadorNome}) fechado · esperado ${moeda(conferencia.totalEsperado)} · informado ${moeda(conferencia.totalInformado)} · dif. ${moeda(conferencia.diferencaTotal)}`,
-      alteracoes: {
-        numero: r.numero,
-        operador: r.operadorNome,
-        esperados: apuracao.esperadosMap,
-        informados: conferencia.informados,
-        diferencas: conferencia.diferencas,
-        diferencaTotal: conferencia.diferencaTotal,
-        vendasConsideradas: apuracao.consideradas,
-        vendasExcluidas: apuracao.excluidas.length,
-        troco: apuracao.totalTroco,
-        naoFisico: apuracao.totalNaoFisico,
-        inconsistencias: apuracao.inconsistencias,
-        avisos: apuracao.avisos,
-        justificativa: justificativa || null,
-      },
-    });
-
-    revalidarCaixa();
-    return {
-      ok: true,
-      id: r.sessaoId,
-      numero: r.numero,
-      aviso: conferencia.temDivergencia
-        ? `Caixa #${r.numero} fechado com divergência de ${moeda(conferencia.diferencaTotal)} devidamente justificada e auditada.`
-        : `Caixa #${r.numero} fechado sem divergências (${moeda(conferencia.totalInformado)}).`,
-    };
-  } catch (e) {
-    return comoErro(e);
-  }
+  return executarFechamentoCego(bruto, "caixa");
 }
 
 export async function reabrirCaixa(bruto: {
@@ -539,153 +452,7 @@ export async function fecharTurnoCego(bruto: {
   gerenteEmail?: string;
   gerenteSenha?: string;
 }): Promise<ResultadoCaixa> {
-  try {
-    const { empresaId, usuario } = await exigirPermissao("caixa.fechar");
-    const input = corpo<{
-      sessaoId?: string;
-      valoresInformados?: Record<string, number | string>;
-      justificativa?: string;
-      gerenteEmail?: string;
-      gerenteSenha?: string;
-    }>(bruto);
-    const sessaoId = texto(input.sessaoId);
-    if (!sessaoId) return { ok: false, erro: "Informe a sessão de caixa a ser encerrada." };
-
-    const informados = lerInformados(corpo<Record<string, unknown>>(input.valoresInformados));
-    if (!informados.ok) return informados;
-
-    const [sessao] = await db
-      .select()
-      .from(caixaSessoes)
-      .where(and(eq(caixaSessoes.id, sessaoId), eq(caixaSessoes.empresaId, empresaId)))
-      .limit(1);
-    if (!sessao) return { ok: false, erro: "Sessão de caixa não encontrada." };
-    if (sessao.status !== "aberto") return { ok: false, erro: "Este turno já foi encerrado." };
-    if (sessao.operadorId !== usuario.id && !temPermissao(usuario.papel, "caixa.relatorio_todos")) {
-      return { ok: false, erro: "Você só pode encerrar a sua própria sessão de caixa." };
-    }
-
-    const apuracao = await apurarSessaoNoBanco(empresaId, sessao);
-    const conferencia = calcularConferenciaCaixa(apuracao.esperadosMap, informados.valores);
-    const diferenca = round2(conferencia.diferencaTotal);
-    const temQuebra = Math.abs(diferenca) >= 0.01;
-    const justificativa = texto(input.justificativa);
-    if (temQuebra && justificativa.length < 10) {
-      return {
-        ok: false,
-        erro: "Há quebra de caixa. Informe a justificativa e o PIN/senha de um gerente para homologar.",
-        requerHomologacao: true,
-      };
-    }
-
-    let gerenteId: string | null = null;
-    if (temQuebra) {
-      const email = texto(input.gerenteEmail).toLowerCase();
-      const senha = String(input.gerenteSenha ?? "");
-      if (!email || !senha) {
-        return {
-          ok: false,
-          erro: "Quebra de caixa: informe o e-mail e o PIN/senha de um gerente para homologar.",
-          requerHomologacao: true,
-        };
-      }
-      const [gerente] = await db
-        .select()
-        .from(usuarios)
-        .where(and(eq(usuarios.empresaId, empresaId), eq(usuarios.email, email), eq(usuarios.ativo, true)))
-        .limit(1);
-      if (!gerente || !temPermissao(gerente.papel, "caixa.homologar") || !confereSenha(senha, gerente.senhaHash)) {
-        return {
-          ok: false,
-          erro: "Homologação negada: credencial inválida ou usuário sem caixa.homologar.",
-          requerHomologacao: true,
-        };
-      }
-      gerenteId = gerente.id;
-    }
-
-    const r = await fecharSessaoCaixaTransacional({
-      empresaId,
-      sessaoId,
-      usuario,
-      valoresInformados: informados.valores,
-      justificativa,
-    });
-    if (!r.ok) return r;
-
-    // Pós-fechamento: não altera o snapshot gravado.
-    const dinheiroContado = round2(informados.valores.dinheiro ?? 0);
-    const recolhido = round2(Math.max(0, dinheiroContado - FUNDO_TROCO_PADRAO));
-    await db
-      .update(caixaSessoes)
-      .set({
-        fundoTroco: FUNDO_TROCO_PADRAO,
-        statusAprovacao: temQuebra ? "homologado" : null,
-        homologadoPorUsuarioId: gerenteId,
-      })
-      .where(and(eq(caixaSessoes.id, sessaoId), eq(caixaSessoes.empresaId, empresaId)));
-
-    if (recolhido > 0) {
-      await db.insert(caixaMovimentos).values({
-        empresaId,
-        sessaoId,
-        tipo: "cofre",
-        forma: "dinheiro",
-        valor: recolhido,
-        motivo: `Recolhimento líquido ao cofre · fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado`,
-        usuarioId: usuario.id,
-        usuarioNome: usuario.nome,
-      });
-    }
-
-    if (temQuebra) {
-      await db.insert(caixaQuebraLogs).values({
-        empresaId,
-        sessaoId,
-        usuarioId: usuario.id,
-        valorDiferenca: Math.abs(diferenca),
-        tipo: diferenca > 0 ? "SOBRA" : "FALTA",
-        justificativa,
-        homologadoPorUsuarioId: gerenteId,
-        homologadoEm: new Date(),
-      });
-    }
-
-    await registrarAuditoria({
-      empresaId,
-      usuario,
-      acao: "caixa.fechamento_cego",
-      entidade: "caixa_sessao",
-      registroId: sessaoId,
-      resumo: `Turno #${r.numero} encerrado às cegas · ${temQuebra ? `quebra ${diferenca > 0 ? "SOBRA" : "FALTA"} homologada` : "sem quebra"} · cofre ${moeda(recolhido)}`,
-      alteracoes: {
-        numero: r.numero,
-        operador: r.operadorNome,
-        esperados: apuracao.esperadosMap,
-        informados: conferencia.informados,
-        diferencaTotal: diferenca,
-        tipoQuebra: temQuebra ? (diferenca > 0 ? "SOBRA" : "FALTA") : null,
-        justificativa: justificativa || null,
-        homologadoPorUsuarioId: gerenteId,
-        fundoTroco: FUNDO_TROCO_PADRAO,
-        recolhidoCofre: recolhido,
-        limiteGaveta: LIMITE_DINHEIRO_GAVETA,
-        estadoGaveta: apuracao.estadoGaveta,
-      },
-    });
-
-    revalidarCaixa();
-    return {
-      ok: true,
-      id: sessaoId,
-      numero: r.numero,
-      aviso: temQuebra
-        ? `Turno #${r.numero} encerrado com quebra homologada. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`
-        : `Turno #${r.numero} encerrado sem quebras. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`,
-    };
-  } catch (e) {
-    return comoErro(e);
-  }
+  return executarFechamentoCego(bruto, "pdv");
 }
 
 /** Homologação remota de quebra pendente (rota /dashboard/auditoria-caixa). */

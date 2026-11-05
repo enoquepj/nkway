@@ -50,9 +50,9 @@ export type RegistroAuditoriaInput = {
   alteracoes?: Record<string, unknown>;
 };
 
-export async function registrarAuditoria(input: RegistroAuditoriaInput): Promise<void> {
+export async function registrarAuditoria(input: RegistroAuditoriaInput, executor: Pick<typeof db, "insert"> = db): Promise<void> {
   const alteracoesLimpas = (sanitizarObjeto(input.alteracoes ?? {}) ?? {}) as Record<string, unknown>;
-  await db.insert(auditorias).values({
+  await executor.insert(auditorias).values({
     empresaId: input.empresaId,
     usuarioId: input.usuario?.id ?? null,
     usuarioNome: String(input.usuario?.nome ?? "Sistema").slice(0, 120),
