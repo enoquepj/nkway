@@ -12,6 +12,8 @@
 
 Use o arquivo **`CONTINUAR_NKWAY.txt`** inteiro como primeira mensagem. Ele registra a produção pronta, a arquitetura Vercel/Supabase, as proibições de segurança e a ordem mínima de leitura.
 
+**Dependências (2026-11-09):** `next` atualizado de 16.2.6 para **16.4.5** após avaliar o alerta crítico do `npm audit` (`fixAvailable` não-major = 16.4.5; `latest` = 16.4.5). Manifesto e lock sincronizados via ferramenta de instalação; `npm audit` ficou com 0 críticos. Validação completa verde (typegen, tsc, build, build_and_start, smoke 51/51, ações 206/0). Detalhes em `VERCEL_SUPABASE.md` §7.
+
 Custo de retomada: ler `CONTINUAR_NKWAY.txt` + `VERCEL_SUPABASE.md` + seções 1/2/4/6 deste arquivo, rodar baseline e executar uma tarefa. Não revisar o histórico inteiro.
 
 **Retomada atual sobre `main` `cf0200d` (`atualiza_tributação`):** a parametrização fiscal já está versionada no GitHub. Antes de editar, a base passou localmente em geração de tipos, TypeScript, build, prévia gerenciada, smoke 47/47, diagnóstico 225/225 e 206 chamadas de ações sem erro 500. Produção foi consultada somente por leitura: health HTTP 200, sem identificação do commit, e `/api/versao` HTTP 404. A identificação de deploy descrita no item 26 é uma entrega local ainda não publicada; não comprova o deploy fiscal nem autoriza alterar infraestrutura.

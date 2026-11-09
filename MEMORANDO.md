@@ -37,7 +37,7 @@ Nesta retomada, o health de produção respondeu HTTP 200 sem identificar o comm
 | Identificação de deploy | Entrega local sobre `cf0200d`: `GET /api/versao`, cabeçalhos do health e conferência em `/prontidao`. Produção ainda respondeu 404 na nova API. Sem metadados, informa não identificado; não altera variáveis. |
 | Parametrização fiscal de produtos | Código já no `main` `cf0200d`; publicação e homologação fiscal não são comprovadas por health 200. |
 | Consulta oficial NCM — etapa 1 | Entrega local: Produtos → Consultar NCM; API autenticada `/api/fiscal/ncm`; cache `nk_catalogo_ncm` por empresa, atualização administrativa explícita, dados e auditoria preservados em falhas. Migração aditiva exige backup/revisão antes do deploy. Sem certificação automática do enquadramento. |
-| App | Next.js 16 + Drizzle no Vercel |
+| App | Next.js 16.4.5 + Drizzle no Vercel (atualizado de 16.2.6 em 2026-11-09 após avaliação do alerta crítico do `npm audit`; validação completa verde) |
 | Banco | PostgreSQL do Supabase existente, pooler 6543 |
 | Acesso do app | `DATABASE_URL` Secret; usuário PostgreSQL dedicado `nkway_app` |
 | Tabelas | legado sem prefixo preservado + Next `nk_*` em produção (assistente somente-leitura em `/migracao`) |

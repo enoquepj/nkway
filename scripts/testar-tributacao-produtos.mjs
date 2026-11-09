@@ -141,10 +141,15 @@ try {
   ok(!(await acao("salvarPerfilFiscal", { id: normal.id, nome: "Tentativa externa", regime: "real", dados: dadosB })).ok, "perfil de outra empresa não pode ser editado");
   ok(!(await acao("salvarTributacaoProduto", { produtoId: produtoB, dados: dadosA })).ok, "produto de outra empresa não pode ser parametrizado");
   ok(!(await acao("salvarTributacaoProduto", { produtoId: produtoA, perfilId: normal.id, dados: dadosA })).ok, "perfil de outra empresa não pode ser vinculado");
-  const salvo = await acao("salvarTributacaoProduto", { produtoId: produtoA, perfilId: perfil.id, dados: dadosA });
+  const salvo = await acao("salvarTributacaoProduto", { produtoId: produtoA, perfilId: perfil.id, dados: dadosA, sobrescreverNcmCest: true });
   const a = (await client.query("select ncm,cest,cfop,csosn,pis_aliq,cofins_aliq,ibs_aliq,cbs_aliq from nk_produto where id=$1 and empresa_id=$2",[produtoA,empresaA])).rows[0];
   const complemento = (await client.query("select perfil_id,dados from nk_produto_tributacao where produto_id=$1 and empresa_id=$2",[produtoA,empresaA])).rows[0];
-  ok(salvo.ok && a.ncm === "10063021" && a.cfop === "5102" && a.cest === "1200100" && Number(a.pis_aliq) === 1.65 && Number(a.cofins_aliq) === 7.6, "produto recebe códigos e alíquotas sem perda de precisão");
+  ok(salvo.ok && a.ncm === "10063021" && a.cfop === "5102" && a.cest === "1200100" && Number(a.pis_aliq) === 1.65 && Number(a.cofins_aliq) === 7.6, "produto recebe códigos e alíquotas sem perda de precisão (sobrescrita explícita de NCM/CEST)");
+  const semFlag = await acao("salvarTributacaoProduto", { produtoId: produtoA2, dados: dadosA });
+  const a2 = (await client.query("select ncm,cest,cfop,pis_aliq from nk_produto where id=$1 and empresa_id=$2", [produtoA2, empresaA])).rows[0];
+  ok(semFlag.ok && a2.ncm === "00000000" && a2.cest === "1111111" && a2.cfop === "5102" && Number(a2.pis_aliq) === 1.65, "etapa 3: sem flag explícita, a central preserva NCM/CEST do produto e aplica só o resto");
+  const logPreservou = (await client.query("select alteracoes from nk_auditoria where acao='fiscal.produto_parametrizar' and registro_id=$1 order by created_at desc limit 1", [produtoA2])).rows[0];
+  ok(logPreservou?.alteracoes?.ncmCestPreservados === true && logPreservou?.alteracoes?.sobrescreverNcmCest === false, "auditoria registra que NCM/CEST foram preservados");
   ok(complemento.perfil_id === perfil.id && complemento.dados.origem === "1" && complemento.dados.classTrib === "000001", "complementos e vínculo de perfil são persistidos");
   ok(!(await acao("salvarTributacaoProduto", { produtoId: produtoA, dados: { ...dadosA, pisAliq: "101" } })).ok && !(await acao("salvarTributacaoProduto", { produtoId: produtoA, dados: { ...dadosA, fcpAliq: "1,234" } })).ok, "alíquotas fora do intervalo ou precisão são rejeitadas");
   ok(!(await acao("salvarTributacaoProduto", { produtoId: produtoA, dados: { ...dadosA, icmsAliq: "-1" } })).ok, "alíquota negativa é rejeitada");
