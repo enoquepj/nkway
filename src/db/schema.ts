@@ -15,6 +15,7 @@ import {
 import { sql } from "drizzle-orm";
 import type { ParametrosTributarios } from "@/lib/tributacao";
 import type { RegistroNcm } from "@/lib/ncm";
+import type { RegistroCest } from "@/lib/cest";
 
 /** Plano comercial — freemium com trial de 14 dias */
 export const PLANOS = ["start", "me", "loja_mais"] as const;
@@ -119,6 +120,20 @@ export const catalogosNcm = pgTable("nk_catalogo_ncm", {
   leaseId: uuid("lease_id"),
   leaseAte: timestamp("lease_ate", { withTimezone: true }),
   repetirApos: timestamp("repetir_apos", { withTimezone: true }),
+});
+
+/**
+ * Etapa 2 (CEST): referência LOCAL por empresa (CEST ↔ NCM), com proveniência declarada.
+ * O CONFAZ publica o CEST apenas em anexos PDF; nenhuma fonte de terceiro foi adotada.
+ * Atualizar esta referência nunca altera mercadorias, notas ou parâmetros.
+ */
+export const catalogoCest = pgTable("nk_catalogo_cest", {
+  empresaId: uuid("empresa_id").primaryKey().references(() => empresas.id, { onDelete: "cascade" }),
+  registros: jsonb("registros").$type<RegistroCest[]>(),
+  hash: text("hash"),
+  fonte: text("fonte"),
+  totalRegistros: integer("total_registros").notNull().default(0),
+  atualizadoEm: timestamp("atualizado_em", { withTimezone: true }),
 });
 
 /** Códigos mantidos pela empresa e perfis fiscais reutilizáveis; não é tabela oficial. */

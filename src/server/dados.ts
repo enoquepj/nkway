@@ -20,8 +20,38 @@ import {
   usuarios,
   vendaItens,
   vendas,
+  parametrosFiscais,
+  produtoTributacoes,
   type EntradaRow,
 } from "@/db/schema";
+import { CAMPOS_TRIBUTARIOS, PARAMETROS_TRIBUTARIOS_VAZIOS, type ParametrosTributarios, type RegimeFiscalPerfil } from "@/lib/tributacao";
+
+function lerParametros(bruto: unknown): ParametrosTributarios {
+  const fonte = bruto && typeof bruto === "object" && !Array.isArray(bruto) ? bruto as Record<string, unknown> : {};
+  const resultado = { ...PARAMETROS_TRIBUTARIOS_VAZIOS };
+  for (const campo of CAMPOS_TRIBUTARIOS) {
+    const valor = fonte[campo];
+    resultado[campo] = typeof valor === "string" || typeof valor === "number" ? String(valor) : "";
+  }
+  return resultado;
+}
+
+export type PerfilFiscalResumoDto = { id: string; nome: string; regime: RegimeFiscalPerfil; ativo: boolean; atualizadoEm: string; dados: ParametrosTributarios };
+export type ComplementoProdutoDto = { perfilId: string | null; dados: ParametrosTributarios };
+
+/** Etapa 3: perfis da própria empresa (ativos e inativos, para exibir vínculo histórico) — nunca de outra empresa. */
+export async function listarPerfisFiscais(empresaId: string): Promise<PerfilFiscalResumoDto[]> {
+  const linhas = await db.select().from(parametrosFiscais)
+    .where(and(eq(parametrosFiscais.empresaId, empresaId), eq(parametrosFiscais.tipo, "perfil")))
+    .orderBy(asc(parametrosFiscais.nome));
+  return linhas.map((p) => ({ id: p.id, nome: p.nome, regime: p.regime as RegimeFiscalPerfil, ativo: p.ativo, atualizadoEm: p.atualizadoEm ? p.atualizadoEm.toISOString() : "", dados: lerParametros(p.dados) }));
+}
+
+/** Etapa 3: vínculo atual de perfil por produto (complemento fiscal), somente da empresa da sessão. */
+export async function listarComplementosFiscais(empresaId: string): Promise<Record<string, ComplementoProdutoDto>> {
+  const linhas = await db.select().from(produtoTributacoes).where(eq(produtoTributacoes.empresaId, empresaId));
+  return Object.fromEntries(linhas.map((c) => [c.produtoId, { perfilId: c.perfilId ?? null, dados: lerParametros(c.dados) }]));
+}
 import type { CicloAssinatura, FormaAssinatura, StatusAssinatura, StatusFaturaAssinatura } from "@/lib/assinatura";
 import { apurarSessaoCaixa, aplicarSnapshotFechamento, type ApuracaoSessaoCaixa, type MovimentoCaixaInput } from "@/lib/caixa";
 import { carregarInsumosSessoes } from "@/server/caixaCore";

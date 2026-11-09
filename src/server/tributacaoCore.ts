@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { parametrosFiscais, produtos, produtoTributacoes } from "@/db/schema";
@@ -25,6 +26,11 @@ export function lerParametrosSalvos(bruto: unknown): ParametrosTributarios {
     resultado[campo] = typeof valor === "string" || typeof valor === "number" ? String(valor) : "";
   }
   return resultado;
+}
+
+/** Etapa 3: hash do perfil para detectar alteração concorrente entre prévia e aplicação. */
+export function hashPerfilFiscal(perfil: { dados: unknown; atualizadoEm: Date | null }): string {
+  return createHash("sha256").update(JSON.stringify({ dados: perfil.dados ?? {}, atualizadoEm: perfil.atualizadoEm?.toISOString() ?? null })).digest("hex");
 }
 
 export function resolverCrtFiscal(regime: string, fiscal: unknown): { crt: number; configurado: boolean; sugerido: number | null } {

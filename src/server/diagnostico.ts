@@ -53,6 +53,7 @@ import {
 } from "@/lib/caixa";
 import { fecharSessaoCaixaTransacional } from "@/server/caixaCore";
 import { aplicarPerfilTributario, crtSugeridoParaRegime, PARAMETROS_TRIBUTARIOS_VAZIOS, validarCodigoFiscal, validarParametrosTributarios, validarRegimeTributario } from "@/lib/tributacao";
+import { codigoCestDigitado, formatarCest, validarRegistroCest } from "@/lib/cest";
 import { normalizarPerfil, perfilValido, temPermissao } from "@/lib/permissoes";
 import { confereSenha, hashSenha } from "@/lib/session";
 import { extrairEntradasZip, gerarZipBuffer } from "@/lib/zip";
@@ -1956,6 +1957,14 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("fis-12", "Fiscal", "Tabelas fiscais complementares estão disponíveis", Number(tabelasFiscais.rows[0]?.n ?? 0) === 2, "nk_fiscal_parametro · nk_produto_tributacao", true);
   const classificacaoIbsOk = validarParametrosTributarios({ cstIbsCbs: "000", classTrib: "000001" }).ok && !validarParametrosTributarios({ cstIbsCbs: "200", classTrib: "000001" }).ok;
   ok("fis-13", "Fiscal", "CST IBS/CBS e cClassTrib mantêm o mesmo prefixo", classificacaoIbsOk, "verificação estrutural; vigência deve ser confirmada em tabela oficial", true);
+
+  // Etapa 2 — CEST: referência local por empresa (nunca aplicada automaticamente) e formato preservado nos produtos.
+  const tabelaCest = await db.execute<{ n: number }>(sql`select count(*)::int as n from information_schema.tables where table_schema='public' and table_name='nk_catalogo_cest'`);
+  const cestProdutos = await db.execute<{ ruins: number }>(sql`select count(*)::int as ruins from nk_produto where cest <> '' and cest !~ '^\\d{7}$'`);
+  const cestRegOk = (() => { try { const r = validarRegistroCest({ cest: "03.002.00", descricao: "Cervejas de malte", ncm: ["2203", "22030000"], fonte: "CONFAZ — Conv. ICMS 142/2018 (anexos PDF)", ato: "Convênio ICMS 142/2018", vigencia: "consolidado até Conv. 107/2026" }); return r.cest === "0300200" && r.ncm.length === 2; } catch { return false; } })();
+  const cestRegInvalido = (() => { try { validarRegistroCest({ cest: "123", descricao: "x" }); return false; } catch { return true; } })();
+  const cestOk = Number(tabelaCest.rows[0]?.n ?? 0) === 1 && Number(cestProdutos.rows[0]?.ruins ?? 0) === 0 && cestRegOk && cestRegInvalido && codigoCestDigitado("03.002.00") === "0300200" && codigoCestDigitado("123") === null && formatarCest("0300200") === "03.002.00";
+  ok("fis-14", "Fiscal", "CEST: referência local por empresa, prefixos NCM/SH e formato preservado (nada aplicado automaticamente)", cestOk, `tabela nk_catalogo_cest · produtos com CEST fora de 7 dígitos: ${Number(cestProdutos.rows[0]?.ruins ?? 0)} · não é validação oficial`, true);
 
   /* ---------------------------------------- DF-e / Certificado A1 / SEFAZ */
   const soapTeste = buildSoapDistNsu(empresa?.cnpj ?? "23567891000174", "42", 2);

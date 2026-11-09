@@ -135,6 +135,22 @@ export function aplicarPerfilTributario(atual: ParametrosTributarios, perfil: Pa
   return resultado;
 }
 
+/**
+ * Etapa 3: aplicação de perfil no cadastro PRESERVA NCM/CEST por padrão.
+ * NCM/CEST são atributos da mercadoria; só mudam com escolha explícita (sobrescreverNcmCest),
+ * mesmo que o perfil histórico contenha esses campos.
+ */
+export function aplicarPerfilTributarioPreservando(atual: ParametrosTributarios, perfil: ParametrosTributarios, sobrescreverNcmCest = false): ParametrosTributarios {
+  const resultado = aplicarPerfilTributario(atual, perfil);
+  if (!sobrescreverNcmCest) { resultado.ncm = atual.ncm; resultado.cest = atual.cest; }
+  return resultado;
+}
+
+/** Campos efetivamente alterados pela aplicação do perfil (para a prévia antes/depois). */
+export function diffPerfilTributario(antes: ParametrosTributarios, depois: ParametrosTributarios): { campo: CampoTributario; de: string; para: string }[] {
+  return CAMPOS_TRIBUTARIOS.filter((campo) => antes[campo] !== depois[campo]).map((campo) => ({ campo, de: antes[campo], para: depois[campo] }));
+}
+
 export function avisosTributarios(dados: ParametrosTributarios, crt: number): string[] {
   const avisos: string[] = [];
   if (!dados.ncm || dados.ncm === "00000000") avisos.push("NCM não informado ou genérico: confirme o código vigente.");

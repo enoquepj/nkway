@@ -201,6 +201,12 @@ else
   NCM=$?
   marca $NCM "consulta NCM, isolamento, atualização íntegra e auditoria do cadastro"
   if [[ $NCM -ne 0 ]]; then tail -70 /tmp/nk-ncm.log; fi
+
+  echo "→ CEST etapa 2 (referência local, prefixos NCM, isolamento e HTTP local)"
+  PORTA="$PORTA" node scripts/testar-cest.mjs --http > /tmp/nk-cest.log 2>&1
+  CEST=$?
+  marca $CEST "CEST local por empresa, nunca aplicado automaticamente, com auditoria"
+  if [[ $CEST -ne 0 ]]; then tail -70 /tmp/nk-cest.log; fi
 fi
 
 echo

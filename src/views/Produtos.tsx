@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ConsultaNcm } from "@/components/ConsultaNcm";
+import { ConsultaCest, type OrigemCest } from "@/components/ConsultaCest";
 import {
   Badge,
   BarraFiltros,
@@ -47,6 +48,7 @@ const VAZIO: ProdutoInput = {
   pesavel: false,
   ativo: true,
   ncm: "00000000",
+  cest: "",
   cfop: "5102",
   csosn: "102",
   icmsAliq: 0,
@@ -492,6 +494,7 @@ export function ProdutosView({
               </span>
             </div>
             <ConsultaNcm valor={editando.ncm} aoMudar={(ncm) => setEditando({ ...editando, ncm })} podeAtualizar={podeFiscal} disabled={ocupado} />
+            <ConsultaCest valor={editando.cest ?? ""} ncm={editando.ncm} aoMudar={(cest, origem: OrigemCest) => setEditando({ ...editando, cest, cestOrigem: origem })} podeGerenciar={podeFiscal} disabled={ocupado} />
             <div className="grid gap-3 sm:grid-cols-4">
               <Campo rotulo="Estoque atual">
                 <Input dinheiro valor={String(editando.estoque)} aoMudar={(v) => setEditando({ ...editando, estoque: Number(v.replace(",", ".")) || 0 })} disabled={!!editando.id} />

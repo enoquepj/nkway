@@ -4,9 +4,9 @@ import { and, eq, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { parametrosFiscais, produtos, produtoTributacoes } from "@/db/schema";
-import { CAMPOS_TRIBUTARIOS, REGIMES_FISCAIS, crtSugeridoParaRegime, validarCodigoFiscal, validarParametrosTributarios, validarRegimeTributario } from "@/lib/tributacao";
+import { CAMPOS_TRIBUTARIOS, REGIMES_FISCAIS, aplicarPerfilTributarioPreservando, crtSugeridoParaRegime, diffPerfilTributario, validarCodigoFiscal, validarParametrosTributarios, validarRegimeTributario, type ParametrosTributarios } from "@/lib/tributacao";
 import { registrarAuditoria } from "@/server/auditoria";
-import { resolverCrtFiscal } from "@/server/tributacaoCore";
+import { hashPerfilFiscal, lerParametrosSalvos, resolverCrtFiscal } from "@/server/tributacaoCore";
 import { corpo, exigirPermissao, texto } from "@/server/tenant";
 
 export type ResultadoTributacao = { ok: true; id: string; aviso: string } | { ok: false; erro: string };
@@ -127,7 +127,9 @@ export async function alterarStatusParametroFiscal(bruto: unknown): Promise<Resu
 export async function salvarTributacaoProduto(bruto: unknown): Promise<ResultadoTributacao> {
   try {
     const { empresaId, empresa, usuario } = await exigirPermissao("config.gerenciar");
-    const entrada = corpo<{ produtoId?: unknown; perfilId?: unknown; dados?: unknown }>(bruto);
+    const entrada = corpo<{ produtoId?: unknown; perfilId?: unknown; dados?: unknown; sobrescreverNcmCest?: unknown }>(bruto);
+    // Etapa 3: a central não sobrescreve NCM/CEST silenciosamente; só com escolha explícita auditada.
+    const sobrescreverNcmCest = entrada.sobrescreverNcmCest === true;
     const produtoId = texto(entrada.produtoId), perfilId = texto(entrada.perfilId);
     if (!uuidValido(produtoId) || (perfilId && !uuidValido(perfilId))) return { ok: false, erro: "Produto ou perfil fiscal inválido." };
     if (!entrada.dados || typeof entrada.dados !== "object" || Array.isArray(entrada.dados) || CAMPOS_TRIBUTARIOS.some((campo) => !Object.prototype.hasOwnProperty.call(entrada.dados, campo))) {
@@ -150,7 +152,9 @@ export async function salvarTributacaoProduto(bruto: unknown): Promise<Resultado
       }
       const d = validado.dados;
       const atualizado = {
-        ncm: d.ncm || produto.ncm, cest: d.cest, cfop: d.cfop || produto.cfop, csosn: d.tipoIcms === "csosn" ? (d.csosn || produto.csosn) : produto.csosn,
+        ncm: sobrescreverNcmCest ? (d.ncm || produto.ncm) : produto.ncm,
+        cest: sobrescreverNcmCest ? d.cest : produto.cest,
+        cfop: d.cfop || produto.cfop, csosn: d.tipoIcms === "csosn" ? (d.csosn || produto.csosn) : produto.csosn,
         icmsAliq: d.icmsAliq === "" ? produto.icmsAliq : Number(d.icmsAliq),
         pisAliq: d.pisAliq === "" ? produto.pisAliq : Number(d.pisAliq),
         cofinsAliq: d.cofinsAliq === "" ? produto.cofinsAliq : Number(d.cofinsAliq),
@@ -164,11 +168,79 @@ export async function salvarTributacaoProduto(bruto: unknown): Promise<Resultado
         await tx.insert(produtoTributacoes).values({ empresaId, produtoId, perfilId: perfilId || null, dados: d });
       }
       await registrarAuditoria({ empresaId, usuario, acao: "fiscal.produto_parametrizar", entidade: "produto", registroId: produtoId,
-        resumo: `Tributação do produto ${produto.nome} atualizada`,
-        alteracoes: { antes: { ncm: produto.ncm, cest: produto.cest, cfop: produto.cfop, csosn: produto.csosn, complemento: complemento?.dados ?? null }, depois: { ...d, perfilId: perfilId || null } } }, tx);
+        resumo: `Tributação do produto ${produto.nome} atualizada${sobrescreverNcmCest ? " (NCM/CEST sobrescritos por escolha explícita)" : " (NCM/CEST preservados)"}`,
+        alteracoes: { antes: { ncm: produto.ncm, cest: produto.cest, cfop: produto.cfop, csosn: produto.csosn, complemento: complemento?.dados ?? null }, depois: { ...d, perfilId: perfilId || null }, sobrescreverNcmCest, ncmCestPreservados: !sobrescreverNcmCest } }, tx);
       return { ok: true as const, id: produtoId, aviso: "Tributação do produto salva e registrada na auditoria." };
     });
     if (resultado.ok) atualizarTelas();
     return resultado;
   } catch (e) { return falha(e); }
+}
+
+export type PreviaPerfilDto = {
+  ok: true;
+  produto: { id: string; nome: string };
+  perfil: { id: string; nome: string; regime: string; ativo: boolean; atualizadoEm: string; hash: string };
+  antes: ParametrosTributarios;
+  depois: ParametrosTributarios;
+  camposAfetados: { campo: string; de: string; para: string }[];
+  avisos: string[];
+  compativel: boolean;
+  motivo?: string;
+  sobrescreverNcmCest: boolean;
+} | { ok: false; erro: string };
+
+/**
+ * Etapa 3 — prévia SOMENTE LEITURA do que a aplicação explícita de um perfil alteraria.
+ * Nunca aplica nada; o hash permite que a aplicação recuse um perfil alterado depois da prévia.
+ */
+export async function preverPerfilProduto(bruto: unknown): Promise<PreviaPerfilDto> {
+  try {
+    const { empresaId, empresa } = await exigirPermissao("cadastros.produtos");
+    const entrada = corpo<{ produtoId?: unknown; perfilId?: unknown; sobrescreverNcmCest?: unknown }>(bruto);
+    const produtoId = texto(entrada.produtoId), perfilId = texto(entrada.perfilId);
+    if (!uuidValido(produtoId) || !uuidValido(perfilId)) return { ok: false, erro: "Produto ou perfil fiscal inválido." };
+    const sobrescrever = entrada.sobrescreverNcmCest === true;
+    const [produto] = await db.select().from(produtos).where(and(eq(produtos.id, produtoId), eq(produtos.empresaId, empresaId))).limit(1);
+    if (!produto) return { ok: false, erro: "Produto não encontrado nesta empresa." };
+    const [perfil] = await db.select().from(parametrosFiscais).where(and(eq(parametrosFiscais.id, perfilId), eq(parametrosFiscais.empresaId, empresaId), eq(parametrosFiscais.tipo, "perfil"))).limit(1);
+    if (!perfil) return { ok: false, erro: "Perfil fiscal não encontrado nesta empresa." };
+    const [complemento] = await db.select().from(produtoTributacoes).where(and(eq(produtoTributacoes.produtoId, produtoId), eq(produtoTributacoes.empresaId, empresaId))).limit(1);
+    const jaVinculado = complemento?.perfilId === perfilId;
+    let compativel = true; let motivo: string | undefined;
+    if (!perfil.ativo && !jaVinculado) { compativel = false; motivo = "Perfil inativo não pode ser aplicado como novo vínculo; vínculos históricos são apenas exibidos."; }
+    if (perfil.regime !== "todos" && perfil.regime !== empresa.regime && !jaVinculado) { compativel = false; motivo = "O regime do perfil não corresponde ao regime da empresa."; }
+    const crt = resolverCrtFiscal(empresa.regime, empresa.fiscal).crt;
+    const antes: ParametrosTributarios = {
+      ...lerParametrosSalvos(complemento?.dados),
+      ncm: produto.ncm, cest: produto.cest, cfop: produto.cfop, csosn: produto.csosn,
+      icmsAliq: String(produto.icmsAliq), pisAliq: String(produto.pisAliq), cofinsAliq: String(produto.cofinsAliq),
+      ibsAliq: String(produto.ibsAliq), cbsAliq: String(produto.cbsAliq),
+    };
+    const depois = aplicarPerfilTributarioPreservando(antes, lerParametrosSalvos(perfil.dados), sobrescrever);
+    const incompat = validarRegimeTributario(depois, crt);
+    if (incompat) { compativel = false; motivo = incompat; }
+    return {
+      ok: true,
+      produto: { id: produto.id, nome: produto.nome },
+      perfil: { id: perfil.id, nome: perfil.nome, regime: perfil.regime, ativo: perfil.ativo, atualizadoEm: perfil.atualizadoEm?.toISOString() ?? "", hash: hashPerfilFiscal(perfil) },
+      antes, depois,
+      camposAfetados: diffPerfilTributario(antes, depois),
+      avisos: [...avisosTributariosLocal(depois, crt), ...(perfilDadosTemClassificacao(perfil.dados) && !sobrescrever ? ["O perfil contém NCM/CEST, que NÃO serão aplicados: a classificação do produto é preservada por padrão."] : [])],
+      compativel, ...(motivo ? { motivo } : {}),
+      sobrescreverNcmCest: sobrescrever,
+    };
+  } catch (e) { return falha(e) as { ok: false; erro: string }; }
+}
+
+function avisosTributariosLocal(dados: ParametrosTributarios, crt: number): string[] {
+  const avisos: string[] = [];
+  if (!dados.ncm || dados.ncm === "00000000") avisos.push("NCM não informado ou genérico.");
+  const incompat = validarRegimeTributario(dados, crt);
+  if (incompat) avisos.push(incompat);
+  return avisos;
+}
+function perfilDadosTemClassificacao(dados: unknown): boolean {
+  const d = dados && typeof dados === "object" ? dados as Record<string, unknown> : {};
+  return Boolean(String(d.ncm ?? "") || String(d.cest ?? ""));
 }

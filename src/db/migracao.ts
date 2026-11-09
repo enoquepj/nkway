@@ -233,5 +233,17 @@ export async function garantirMigracoesNk() {
       repetir_apos timestamptz
     )
   `);
+  // Etapa 2 CEST: referência local por empresa (CEST ↔ NCM) com proveniência declarada.
+  // Aditiva e idempotente: não altera nk_produto, notas, parâmetros ou legado.
+  await db.execute(sql`
+    create table if not exists nk_catalogo_cest (
+      empresa_id uuid primary key references nk_empresa(id) on delete cascade,
+      registros jsonb,
+      hash text,
+      fonte text,
+      total_registros integer not null default 0,
+      atualizado_em timestamptz
+    )
+  `);
   aplicado = true;
 }
