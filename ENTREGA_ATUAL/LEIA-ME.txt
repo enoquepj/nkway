@@ -1,0 +1,25 @@
+NKWAY — PACOTE DE ENTREGA · base: main 56b881b · gerado 2026-11-09T17:42Z
+
+Copie o CONTEÚDO desta pasta (src/, scripts/ e arquivos da raiz) para a pasta do repositório, sobrescrevendo.
+NÃO copie a pasta ENTREGA_ATUAL em si. Depois, confira: src/lib/tabelasFiscais.ts deve existir no repositório.
+
+Arquivos e SHA-256 (primeiros 16 caracteres):
+  src/lib/tabelasFiscais.ts                     e9d8020ca87c3a47
+  src/lib/tabelaClassTrib.ts                    84f07e3bee28d923
+  scripts/testar-tabelas-fiscais.mjs            4ed01f1e23181edd
+  src/components/CamposTributarios.tsx          cbc76a1b4853459d
+  src/components/ModalFechamentoCego.tsx        606460058dd64ee5
+  src/lib/caixa.ts                              12dad35c55142816
+  src/server/caixaCore.ts                       aee9c0e4cfe354b3
+  src/views/Caixa.tsx                           9ac2e56be4b4dd62
+  src/server/diagnostico.ts                     55110392e7008187
+  scripts/smoke.sh                              e33d73181b11a330
+  scripts/testar-caixa-motor.mjs                bc8f5ddeee4a78eb
+  scripts/testar-fechamento-cego.mjs            967ab1ddd10b8a3a
+  package.json                                  f2b73663991ef201
+  package-lock.json                             6d082366a544eac7
+  CONTEXTO_ARENA.md                             99464f854567305d
+  MEMORANDO.md                                  e69d6c01c9c889a5
+  VERCEL_SUPABASE.md                            e9b720da458b244a
+  CONTINUAR_NKWAY.txt                           025e017115955e99
+  FISCAL_PRODUTOS.md                            15fbdea8f9674db5
