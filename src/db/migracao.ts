@@ -213,5 +213,25 @@ export async function garantirMigracoesNk() {
   `);
   await db.execute(sql`create unique index if not exists nk_produto_tributacao_produto_uidx on nk_produto_tributacao(produto_id)`);
   await db.execute(sql`create index if not exists nk_produto_tributacao_empresa_idx on nk_produto_tributacao(empresa_id)`);
+  // Etapa 1 NCM: última cópia íntegra e trava persistente por empresa. Nenhum produto é alterado.
+  await db.execute(sql`
+    create table if not exists nk_catalogo_ncm (
+      empresa_id uuid primary key references nk_empresa(id) on delete cascade,
+      registros jsonb,
+      hash text,
+      referencia date,
+      referencia_fonte text,
+      ato text,
+      total_registros integer not null default 0,
+      total_codigos integer not null default 0,
+      coletado_em timestamptz,
+      tentativa_em timestamptz,
+      falha_em timestamptz,
+      erro text,
+      lease_id uuid,
+      lease_ate timestamptz,
+      repetir_apos timestamptz
+    )
+  `);
   aplicado = true;
 }

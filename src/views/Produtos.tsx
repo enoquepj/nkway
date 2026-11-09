@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { ConsultaNcm } from "@/components/ConsultaNcm";
 import {
   Badge,
   BarraFiltros,
@@ -490,6 +491,7 @@ export function ProdutosView({
                 <b className="tabular font-bold text-ink-800">{moeda(round2(editando.preco - editando.custo))}</b>
               </span>
             </div>
+            <ConsultaNcm valor={editando.ncm} aoMudar={(ncm) => setEditando({ ...editando, ncm })} podeAtualizar={podeFiscal} disabled={ocupado} />
             <div className="grid gap-3 sm:grid-cols-4">
               <Campo rotulo="Estoque atual">
                 <Input dinheiro valor={String(editando.estoque)} aoMudar={(v) => setEditando({ ...editando, estoque: Number(v.replace(",", ".")) || 0 })} disabled={!!editando.id} />
@@ -497,9 +499,7 @@ export function ProdutosView({
               <Campo rotulo="Estoque mínimo">
                 <Input dinheiro valor={String(editando.estoqueMin)} aoMudar={(v) => setEditando({ ...editando, estoqueMin: Number(v.replace(",", ".")) || 0 })} />
               </Campo>
-              <Campo rotulo="NCM">
-                <Input valor={editando.ncm} aoMudar={(v) => setEditando({ ...editando, ncm: v })} className="font-mono" />
-              </Campo>
+
               <Campo rotulo="CSOSN / CST">
                 <Input valor={editando.csosn} aoMudar={(v) => setEditando({ ...editando, csosn: v })} className="font-mono" />
               </Campo>

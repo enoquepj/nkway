@@ -39,6 +39,12 @@ fi
 echo "→ API $BASE/api/health"
 curl -fsS "$BASE/api/health" >/dev/null 2>&1; marca $? "health 200"
 
+echo "→ identificação segura do deploy"
+node scripts/testar-versao-deploy.mjs --http > /tmp/nk-versao-deploy.log 2>&1
+VERSAO=$?
+marca $VERSAO "identificação do deploy, contrato do health e HTTP local"
+if [[ $VERSAO -ne 0 ]]; then cat /tmp/nk-versao-deploy.log; exit 1; fi
+
 echo "→ rota sem sessão (espera 307 para /login)"
 
 echo "→ banco (contagens do seed)"
@@ -123,13 +129,23 @@ else
   [[ "$PRON_ANON" == "401" ]]; marca $? "GET /api/prontidao sem sessão = $PRON_ANON"
 
   PRON_JSON=$(curl -s -H "Cookie: $COOKIE" "$BASE/api/prontidao" 2>/dev/null)
+  VERSAO_JSON=$(curl -s "$BASE/api/versao" 2>/dev/null)
   PRON_OK=$(node -e '
     const j=JSON.parse(process.argv[1]||"{}");
+    const versao=JSON.parse(process.argv[2]||"null");
+    const mesmaVersao=!!versao && require("node:util").isDeepStrictEqual(j.versao,versao);
     const blocos=Array.isArray(j.blocos)?j.blocos.length:0;
     const chavesProibidas=/DATABASE_URL|ASAAS_API_KEY|STRIPE_SECRET_KEY|pfx|senha|token/i.test(JSON.stringify(j));
-    console.log(j.ok===true && blocos>=5 && j.resumo?.total>0 && !chavesProibidas ? "ok" : "falha");
-  ' "$PRON_JSON" 2>/dev/null)
-  [[ "$PRON_OK" == "ok" ]]; marca $? "GET /api/prontidao com sessão (blocos + sem segredos)"
+    console.log(j.ok===true && blocos>=5 && j.resumo?.total>0 && mesmaVersao && !chavesProibidas ? "ok" : "falha");
+  ' "$PRON_JSON" "$VERSAO_JSON" 2>/dev/null)
+  [[ "$PRON_OK" == "ok" ]]; marca $? "GET /api/prontidao com sessão (mesma versão + blocos + sem segredos)"
+
+  PRON_HTML=$(curl -s -H "Cookie: $COOKIE" "$BASE/prontidao")
+  if grep -q "Versão em execução" <<< "$PRON_HTML" && grep -q "Conferir publicação" <<< "$PRON_HTML" && grep -q "Identificação não é homologação" <<< "$PRON_HTML"; then
+    marca 0 "prontidão mostra identificação, conferência e limite fiscal"
+  else
+    marca 1 "prontidão mostra identificação, conferência e limite fiscal"
+  fi
 
   XML_ANON=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/documentos/xml" -H "Content-Type: application/json" --data '{"ids":[]}')
   [[ "$XML_ANON" == "401" ]]; marca $? "POST /api/documentos/xml sem sessão = $XML_ANON"
@@ -179,6 +195,12 @@ else
   TRIBUTACAO=$?
   marca $TRIBUTACAO "cadastros, regimes, tenant e emissor fiscal"
   if [[ $TRIBUTACAO -ne 0 ]]; then tail -45 /tmp/nk-tributacao-produtos.log; fi
+
+  echo "→ NCM oficial (fixtures, cache, concorrência e HTTP local)"
+  PORTA="$PORTA" node scripts/testar-ncm.mjs --http > /tmp/nk-ncm.log 2>&1
+  NCM=$?
+  marca $NCM "consulta NCM, isolamento, atualização íntegra e auditoria do cadastro"
+  if [[ $NCM -ne 0 ]]; then tail -70 /tmp/nk-ncm.log; fi
 fi
 
 echo

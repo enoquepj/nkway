@@ -3,9 +3,9 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Atualizado em:** 2026-11-05 (main consultado `e78d44c`; parametrização fiscal de produtos na entrega local)
+**Base desta retomada:** `main` `cf0200d` (`atualiza_tributação`; parametrização fiscal já versionada). Entregas locais ainda não publicadas: identificação de deploy e etapa 1 de consulta oficial NCM. CEST e perfil no formulário seguem pendentes nas etapas 2 e 3.
 
-Na retomada, o health de produção respondeu HTTP 200. A validação completa foi feita em prévia e banco **locais**: smoke 36/36, diagnóstico 219/219, motor de caixa 16 cenários e 196 chamadas de ações sem erro 500. Não houve teste autenticado em produção nem mudança de infraestrutura.
+Nesta retomada, o health de produção respondeu HTTP 200 sem identificar o commit; `/api/versao` respondeu HTTP 404. O baseline do main foi validado em prévia e banco **locais**: tipos, build, smoke 47/47, diagnóstico 225/225, motor de caixa 16 cenários, relatórios 50, fechamento cego 48, tributação 66 e 206 chamadas de ações sem erro 500. A entrega acrescenta identificação pública sanitizada, cabeçalhos no health e conferência em `/prontidao`, sem mudar o corpo do health, schema, ações, dependências ou infraestrutura. Não houve publicação nem teste autenticado em produção; o aceite fiscal continua pendente. Detalhes no item 26 de `CONTEXTO_ARENA.md`.
 
 ---
 
@@ -33,7 +33,10 @@ Na retomada, o health de produção respondeu HTTP 200. A validação completa f
 | Item | Estado |
 |---|---|
 | Site | `https://nkway.vercel.app` |
-| Health | `GET /api/health` = HTTP 200 `{"ok":true}` (confirmado 2026-11-05) |
+| Health | `GET /api/health` = HTTP 200 `{"ok":true}`; reconferido nesta retomada, ainda sem commit no cabeçalho |
+| Identificação de deploy | Entrega local sobre `cf0200d`: `GET /api/versao`, cabeçalhos do health e conferência em `/prontidao`. Produção ainda respondeu 404 na nova API. Sem metadados, informa não identificado; não altera variáveis. |
+| Parametrização fiscal de produtos | Código já no `main` `cf0200d`; publicação e homologação fiscal não são comprovadas por health 200. |
+| Consulta oficial NCM — etapa 1 | Entrega local: Produtos → Consultar NCM; API autenticada `/api/fiscal/ncm`; cache `nk_catalogo_ncm` por empresa, atualização administrativa explícita, dados e auditoria preservados em falhas. Migração aditiva exige backup/revisão antes do deploy. Sem certificação automática do enquadramento. |
 | App | Next.js 16 + Drizzle no Vercel |
 | Banco | PostgreSQL do Supabase existente, pooler 6543 |
 | Acesso do app | `DATABASE_URL` Secret; usuário PostgreSQL dedicado `nkway_app` |
@@ -167,3 +170,10 @@ Assim a próxima configuração futura parte **sempre** do repositório, não da
 ---
 
 *NKWAY · memorando de acesso e configuração · manter na raiz do repositório*
+
+## Retomada do roteiro NCM / CEST / perfil (2026-11-08)
+
+1. **Etapa 1 implementada localmente:** consulta NCM oficial da Receita, fonte/datas separadas, cache persistente com concorrência, preenchimento manual e gravação auditada/transacional. Fonte real reconferida separadamente dos testes. Guia técnico e limites em `FISCAL_PRODUTOS.md`; implementação e aceite no item 27 de `CONTEXTO_ARENA.md`.
+2. **Etapa 2 pendente:** conferir CONFAZ e qualidade, manutenção, vigência/licença de fonte estruturada de CEST; usar alternativa manual honesta se não houver base confiável. Nenhum catálogo CEST foi adotado nesta etapa.
+3. **Etapa 3 pendente:** seleção/aplicação/desvinculação de perfil no formulário principal, prévia e proteção explícita de NCM/CEST do produto. Perfis históricos e comportamento da central não foram apagados ou modificados nesta etapa.
+4. **Etapa 4 geral pendente:** haverá validação específica após cada etapa, além do aceite final integrado. A suíte NCM não é uma homologação fiscal ou validação de todas as etapas. Nenhuma configuração de produção ou segredo foi alterado.

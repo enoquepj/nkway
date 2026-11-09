@@ -1,0 +1,17 @@
+{
+  "_aviso": "Fixture sintética de testes. Não é catálogo oficial e não deve ser usada em operação fiscal.",
+  "Data_Ultima_Atualizacao_NCM": "Vigente em 08/11/2026",
+  "Ato": "Ato sintético de teste, sem validade fiscal",
+  "Nomenclaturas": [
+    {"Codigo":"01","Descricao":"Animais sintéticos de teste","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"01.01","Descricao":"Cavalos sintéticos","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"0101.2","Descricao":"- Grupo de cavalos","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"0101.21.00","Descricao":"-- Reprodutores de teste","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"0101.29.00","Descricao":"-- Outros","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"09","Descricao":"Café e chá de teste","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"09.01","Descricao":"Café sintético","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"0901.2","Descricao":"- Café torrado","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"0901.21.00","Descricao":"-- Não descafeinado","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"},
+    {"Codigo":"0901.22.00","Descricao":"-- Descafeinado","Data_Inicio":"01/04/2022","Data_Fim":"31/12/9999","Tipo_Ato_Ini":"Teste","Numero_Ato_Ini":"1","Ano_Ato_Ini":"2022"}
+  ]
+}

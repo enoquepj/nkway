@@ -1,12 +1,13 @@
 import { contexto } from "@/lib/session";
 import { obterProntidao } from "@/server/prontidaoCore";
+import { obterVersaoDeploy } from "@/server/versaoDeploy";
 
 export const dynamic = "force-dynamic";
 
 /**
  * NKWAY — leitura resumida da Central de prontidão.
- * GET /api/prontidao → 401 sem sessão; nunca devolve valores de variáveis,
- * URLs de conexão, tokens, senhas ou certificados.
+ * GET /api/prontidao → 401 sem sessão; nunca devolve valores de variáveis secretas,
+ * URLs de conexão, tokens, senhas ou certificados. Apenas metadados públicos de versão.
  */
 export async function GET() {
   const c = await contexto();
@@ -17,6 +18,7 @@ export async function GET() {
     return Response.json(
       {
         ok: dados.bancoConectado,
+        versao: obterVersaoDeploy(),
         geradoEm: dados.geradoEm,
         empresa: dados.empresaNome,
         resumo: dados.resumo,

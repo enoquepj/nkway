@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { IdentificacaoDeploy } from "@/components/IdentificacaoDeploy";
+import type { VersaoDeploy } from "@/lib/versaoDeploy";
 import { Badge, Card, CardTitulo, Icon, Kpi, PageHeader, cn } from "@/components/ui";
 import { dataHoraBR } from "@/lib/dominio";
 import {
@@ -70,7 +72,7 @@ function Bloco({ bloco }: { bloco: BlocoProntidao }) {
   );
 }
 
-export function ProntidaoView({ dados }: { dados: ProntidaoDto }) {
+export function ProntidaoView({ dados, versao }: { dados: ProntidaoDto; versao: VersaoDeploy }) {
   const { resumo, contagens } = dados;
   const barraTom = resumo.percentual >= 80 ? "bg-way-500" : resumo.percentual >= 50 ? "bg-signal-500" : "bg-rose-500";
 
@@ -89,6 +91,8 @@ export function ProntidaoView({ dados }: { dados: ProntidaoDto }) {
           </>
         }
       />
+
+      <IdentificacaoDeploy versao={versao} />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi
@@ -157,7 +161,7 @@ export function ProntidaoView({ dados }: { dados: ProntidaoDto }) {
         />
         <ul className="space-y-1.5 text-[12px] leading-snug text-ink-600">
           <li>• <strong>Pronto</strong>: implementado e/ou configurado. <strong>Pendente</strong>: falta cadastro ou chave externa. <strong>Opcional</strong>: só entra quando a operação live for iniciada.</li>
-          <li>• Nenhum valor de variável, URL de conexão, token, senha ou certificado é exibido nem enviado ao navegador.</li>
+          <li>• Nenhum valor de variável secreta, URL de conexão, token, senha ou certificado é exibido nem enviado ao navegador. A versão mostra somente SHA e ambiente públicos da publicação.</li>
           <li>• A migração do legado continua somente leitura nas tabelas antigas, com simulação Dry-Run antes de gravar em <span className="font-mono">nk_*</span>.</li>
           <li>• Para migrar dados antigos use a tela <Link href="/migracao" className="font-semibold text-way-700 hover:underline">Migração legado</Link>; para o certificado A1 use <Link href="/dfe" className="font-semibold text-way-700 hover:underline">DF-e</Link>.</li>
         </ul>

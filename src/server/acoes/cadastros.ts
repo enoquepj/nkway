@@ -7,6 +7,8 @@ import { clientes, fornecedores, movimentos, produtos, vendaItens, vendas } from
 import { round2, validarGtin } from "@/lib/dominio";
 import { comoErro, exigirPermissao, tenant, texto, corpo } from "@/server/tenant";
 import { planoById } from "@/lib/dominio";
+import { codigoNcmDigitado } from "@/lib/ncm";
+import { registrarAuditoria } from "@/server/auditoria";
 
 export type Resultado = { ok: true; id?: string; aviso?: string } | { ok: false; erro: string };
 
@@ -38,95 +40,77 @@ export type ProdutoInput = {
 
 export async function salvarProduto(input: ProdutoInput): Promise<Resultado> {
   try {
-    const { empresaId, empresa } = await exigirPermissao("cadastros.produtos");
+    const { empresaId, empresa, usuario } = await exigirPermissao("cadastros.produtos");
     input = corpo(input);
     const nome = texto(input.nome).trim();
     if (nome.length < 3) return { ok: false, erro: "Nome do produto é obrigatório (mín. 3 caracteres)." };
     if (input.preco < 0 || input.custo < 0) return { ok: false, erro: "Custo e preço não podem ser negativos." };
     if (!validarGtin(texto(input.gtin).trim())) return { ok: false, erro: "GTIN inválido: o dígito verificador não confere." };
-    if (texto(input.gtin).trim() && input.gtin !== "SEM GTIN") {
-      const [duplicado] = await db
-        .select({ id: produtos.id })
-        .from(produtos)
-        .where(and(eq(produtos.empresaId, empresaId), eq(produtos.gtin, texto(input.gtin).trim()), input.id ? sql`${produtos.id} <> ${input.id}` : undefined))
-        .limit(1);
-      if (duplicado) return { ok: false, erro: "Já existe produto com este GTIN." };
-    }
-
-    const limite = planoById(empresa.plano).limiteProdutos;
-    const [qtd] = await db
-      .select({ n: sql<string>`count(*)` })
-      .from(produtos)
-      .where(and(eq(produtos.empresaId, empresaId), eq(produtos.ativo, true)));
-    if (!input.id && Number(qtd?.n ?? 0) >= limite)
-      return { ok: false, erro: `Plano ${planoById(empresa.plano).nome} permite ${limite} produtos ativos. Faça upgrade em Configurações → Assinatura.` };
-
-    const valores = {
-      nome: nome.toUpperCase(),
-      sku: texto(input.sku).trim(),
-      gtin: texto(input.gtin).trim() || "SEM GTIN",
-      categoria: texto(input.categoria).trim() || "Geral",
-      marca: texto(input.marca).trim(),
-      unidade: input.unidade,
-      custo: round2(input.custo),
-      preco: round2(input.preco),
-      estoqueMin: Math.max(0, input.estoqueMin),
-      pesavel: input.pesavel,
-      ativo: input.ativo,
-      ncm: texto(input.ncm).replace(/\D/g, "").padEnd(8, "0").slice(0, 8),
-      cfop: texto(input.cfop).replace(/\D/g, "").slice(0, 4) || "5102",
-      csosn: texto(input.csosn).trim() || "102",
-      icmsAliq: round2(input.icmsAliq),
-      atualizadoEm: new Date(),
-    };
-
-    if (input.id) {
-      const [atual] = await db.select({ estoque: produtos.estoque }).from(produtos).where(and(eq(produtos.id, input.id), eq(produtos.empresaId, empresaId))).limit(1);
-      if (!atual) return { ok: false, erro: "Produto não encontrado nesta empresa." };
-      await db.update(produtos).set(valores).where(and(eq(produtos.id, input.id), eq(produtos.empresaId, empresaId)));
-      const novoEstoque = round2(input.estoque);
-      if (Math.abs(Number(atual.estoque) - novoEstoque) > 0.0005) {
-        const delta = round2(novoEstoque - Number(atual.estoque));
-        await db.update(produtos).set({ estoque: novoEstoque }).where(and(eq(produtos.id, input.id), eq(produtos.empresaId, empresaId)));
-        await db.insert(movimentos).values({
-          empresaId,
-          produtoId: input.id,
-          produtoNome: valores.nome,
-          tipo: "ajuste",
-          qtd: delta,
-          saldoApos: novoEstoque,
-          custoUnit: valores.custo,
-          custoMedioApos: valores.custo,
-          documento: "Cadastro do produto",
-          observacao: "Estoque ajustado pela tela de produtos",
-        });
+    if ([input.preco, input.custo, input.estoque, input.estoqueMin, input.icmsAliq].some((n) => typeof n !== "number" || !Number.isFinite(n))) return { ok: false, erro: "Informe valores numéricos válidos para preço, custo, estoque e ICMS." };
+    const resultado: Resultado = await db.transaction(async (tx) => {
+      const [atual] = input.id ? await tx.select().from(produtos).where(and(eq(produtos.id, input.id), eq(produtos.empresaId, empresaId))).for("update") : [];
+      if (input.id && !atual) return { ok: false as const, erro: "Produto não encontrado nesta empresa." };
+      const ncmInformado = texto(input.ncm);
+      // Valores legados não editados continuam intactos, mesmo se precisarem de revisão.
+      // Um novo código jamais é completado com zeros nem truncado silenciosamente.
+      const ncm = atual && input.ncm === atual.ncm ? atual.ncm : ncmInformado === "" ? "00000000" : codigoNcmDigitado(ncmInformado);
+      if (ncm === null) return { ok: false as const, erro: "NCM deve conter 8 dígitos completos. Níveis hierárquicos não podem ser usados como código do produto." };
+      if (texto(input.gtin).trim() && input.gtin !== "SEM GTIN") {
+        const [duplicado] = await tx.select({ id: produtos.id }).from(produtos).where(and(
+          eq(produtos.empresaId, empresaId), eq(produtos.gtin, texto(input.gtin).trim()), input.id ? sql`${produtos.id} <> ${input.id}` : undefined,
+        )).limit(1);
+        if (duplicado) return { ok: false as const, erro: "Já existe produto com este GTIN." };
       }
-      revalidar();
-      return { ok: true, id: input.id };
-    }
-
-    const estoqueInicial = Math.max(0, round2(input.estoque));
-    const [novo] = await db
-      .insert(produtos)
-      .values({ ...valores, empresaId, estoque: estoqueInicial })
-      .returning({ id: produtos.id });
-    if (estoqueInicial > 0)
-      await db.insert(movimentos).values({
-        empresaId,
-        produtoId: novo.id,
-        produtoNome: valores.nome,
-        tipo: "inventario",
-        qtd: estoqueInicial,
-        saldoApos: estoqueInicial,
-        custoUnit: valores.custo,
-        custoMedioApos: valores.custo,
-        documento: "Cadastro do produto",
-        observacao: "Saldo inicial de estoque",
-      });
-    revalidar();
-    return { ok: true, id: novo.id };
+      if (!input.id) {
+        const limite = planoById(empresa.plano).limiteProdutos;
+        const [qtd] = await tx.select({ n: sql<string>`count(*)` }).from(produtos).where(and(eq(produtos.empresaId, empresaId), eq(produtos.ativo, true)));
+        if (Number(qtd?.n ?? 0) >= limite) return { ok: false as const, erro: `Plano ${planoById(empresa.plano).nome} permite ${limite} produtos ativos. Faça upgrade em Configurações → Assinatura.` };
+      }
+      const valores = {
+        nome: nome.toUpperCase(), sku: texto(input.sku).trim(), gtin: texto(input.gtin).trim() || "SEM GTIN",
+        categoria: texto(input.categoria).trim() || "Geral", marca: texto(input.marca).trim(), unidade: input.unidade,
+        custo: round2(input.custo), preco: round2(input.preco), estoqueMin: Math.max(0, input.estoqueMin),
+        pesavel: input.pesavel, ativo: input.ativo, ncm,
+        cfop: texto(input.cfop).replace(/\D/g, "").slice(0, 4) || "5102",
+        csosn: texto(input.csosn).trim() || "102", icmsAliq: round2(input.icmsAliq), atualizadoEm: new Date(),
+      };
+      let id: string;
+      if (atual) {
+        id = atual.id;
+        await tx.update(produtos).set(valores).where(and(eq(produtos.id, id), eq(produtos.empresaId, empresaId)));
+        const novoEstoque = round2(input.estoque);
+        if (Math.abs(Number(atual.estoque) - novoEstoque) > 0.0005) {
+          const delta = round2(novoEstoque - Number(atual.estoque));
+          await tx.update(produtos).set({ estoque: novoEstoque }).where(and(eq(produtos.id, id), eq(produtos.empresaId, empresaId)));
+          await tx.insert(movimentos).values({ empresaId, produtoId: id, produtoNome: valores.nome, tipo: "ajuste", qtd: delta,
+            saldoApos: novoEstoque, custoUnit: valores.custo, custoMedioApos: valores.custo,
+            documento: "Cadastro do produto", observacao: "Estoque ajustado pela tela de produtos" });
+        }
+      } else {
+        const estoqueInicial = Math.max(0, round2(input.estoque));
+        const [novo] = await tx.insert(produtos).values({ ...valores, empresaId, estoque: estoqueInicial }).returning({ id: produtos.id });
+        id = novo.id;
+        if (estoqueInicial > 0) await tx.insert(movimentos).values({ empresaId, produtoId: id, produtoNome: valores.nome,
+          tipo: "inventario", qtd: estoqueInicial, saldoApos: estoqueInicial, custoUnit: valores.custo, custoMedioApos: valores.custo,
+          documento: "Cadastro do produto", observacao: "Saldo inicial de estoque" });
+      }
+      if (!atual || atual.ncm !== ncm) {
+        await registrarAuditoria({ empresaId, usuario, acao: "produto.ncm_informado", entidade: "produto", registroId: id,
+          resumo: "NCM informado no cadastro; classificação e tributação não certificadas pelo sistema.",
+          alteracoes: { antes: atual?.ncm ?? null, depois: ncm, modo: ncm === "00000000" ? "nao_informado" : "informado_pelo_usuario", validacaoOficial: false } }, tx);
+      }
+      const aviso = ncm === "00000000" || !codigoNcmDigitado(ncm)
+        ? "Produto salvo com NCM genérico ou legado não revisado. Confirme a classificação antes de emitir."
+        : !atual || atual.ncm !== ncm ? "Produto salvo. O NCM foi registrado na auditoria como escolha do usuário, sem certificação fiscal." : undefined;
+      return { ok: true as const, id, ...(aviso ? { aviso } : {}) };
+    });
+    // Uma falha de revalidação de tela não pode ser apresentada como rollback de uma transação já confirmada.
+    if (resultado.ok) { try { revalidar(); } catch { console.error("[produtos] Falha ao revalidar a tela após gravação confirmada."); } }
+    return resultado;
   } catch (e) {
-    return comoErro(e);
+    const mensagem = e instanceof Error ? e.message : "";
+    if (mensagem.startsWith("Sessão expirada") || mensagem.startsWith("Acesso negado")) return comoErro(e);
+    return { ok: false, erro: "Não foi possível salvar o produto. A gravação não foi confirmada; revise os dados e tente novamente." };
   }
 }
 

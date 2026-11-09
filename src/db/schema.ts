@@ -14,6 +14,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { ParametrosTributarios } from "@/lib/tributacao";
+import type { RegistroNcm } from "@/lib/ncm";
 
 /** Plano comercial — freemium com trial de 14 dias */
 export const PLANOS = ["start", "me", "loja_mais"] as const;
@@ -100,6 +101,25 @@ export const produtos = pgTable(
     index("nk_produto_gtin_idx").on(t.gtin),
   ],
 );
+
+/** Último catálogo oficial íntegro por empresa. Atualizar esta cópia nunca altera mercadorias. */
+export const catalogosNcm = pgTable("nk_catalogo_ncm", {
+  empresaId: uuid("empresa_id").primaryKey().references(() => empresas.id, { onDelete: "cascade" }),
+  registros: jsonb("registros").$type<RegistroNcm[]>(),
+  hash: text("hash"),
+  referencia: date("referencia"),
+  referenciaFonte: text("referencia_fonte"),
+  ato: text("ato"),
+  totalRegistros: integer("total_registros").notNull().default(0),
+  totalCodigos: integer("total_codigos").notNull().default(0),
+  coletadoEm: timestamp("coletado_em", { withTimezone: true }),
+  tentativaEm: timestamp("tentativa_em", { withTimezone: true }),
+  falhaEm: timestamp("falha_em", { withTimezone: true }),
+  erro: text("erro"),
+  leaseId: uuid("lease_id"),
+  leaseAte: timestamp("lease_ate", { withTimezone: true }),
+  repetirApos: timestamp("repetir_apos", { withTimezone: true }),
+});
 
 /** Códigos mantidos pela empresa e perfis fiscais reutilizáveis; não é tabela oficial. */
 export const parametrosFiscais = pgTable(
