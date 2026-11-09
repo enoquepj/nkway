@@ -598,7 +598,7 @@ export async function listarKardex(empresaId: string, produtoId?: string) {
     .from(movimentos)
     .where(and(eq(movimentos.empresaId, empresaId), produtoId ? eq(movimentos.produtoId, produtoId) : undefined))
     .orderBy(desc(movimentos.data))
-    .limit(600);
+    .limit(produtoId ? 2000 : 1500);
   return linhas.map((m) => ({
     id: m.id,
     produtoId: m.produtoId,
@@ -610,7 +610,35 @@ export async function listarKardex(empresaId: string, produtoId?: string) {
     custoMedioApos: N(m.custoMedioApos, 4),
     documento: m.documento ?? "",
     observacao: m.observacao ?? "",
+    usuarioNome: m.usuarioNome ?? "",
     data: m.data ? new Date(m.data).toISOString() : "",
+  }));
+}
+
+/** Saídas por venda nos últimos 30/90 dias por produto (vendas válidas: não canceladas e fora de DAV orçamento). */
+export async function vendasPorProdutoRecentes(empresaId: string): Promise<{ produtoId: string; qtd30: number; qtd90: number; valor90: number; ultimaVenda: string | null }[]> {
+  const linhas = await db
+    .select({
+      produtoId: vendaItens.produtoId,
+      qtd30: sql<string>`coalesce(sum(case when ${vendas.data} >= now() - interval '30 days' then ${vendaItens.qtd} else 0 end), 0)`,
+      qtd90: sql<string>`coalesce(sum(${vendaItens.qtd}), 0)`,
+      valor90: sql<string>`coalesce(sum(${vendaItens.total}), 0)`,
+      ultimaVenda: sql<string | null>`max(${vendas.data})`,
+    })
+    .from(vendaItens)
+    .innerJoin(vendas, eq(vendaItens.vendaId, vendas.id))
+    .where(and(
+      eq(vendas.empresaId, empresaId),
+      sql`${vendas.data} >= now() - interval '90 days'`,
+      sql`lower(${vendas.status}) <> 'cancelado'`,
+      // DAV (orçamento) nunca baixa estoque; ao faturar, a venda filha (davOrigemId) é quem registra a saída.
+      sql`${vendas.tipo} <> 'dav'`,
+      sql`${vendaItens.produtoId} is not null`,
+    ))
+    .groupBy(vendaItens.produtoId);
+  return linhas.filter((l) => l.produtoId).map((l) => ({
+    produtoId: l.produtoId as string, qtd30: N(l.qtd30, 3), qtd90: N(l.qtd90, 3), valor90: N(l.valor90, 2),
+    ultimaVenda: l.ultimaVenda ? new Date(l.ultimaVenda).toISOString() : null,
   }));
 }
 

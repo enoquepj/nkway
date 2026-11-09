@@ -208,6 +208,12 @@ else
   marca $CEST "CEST local por empresa, nunca aplicado automaticamente, com auditoria"
   if [[ $CEST -ne 0 ]]; then tail -70 /tmp/nk-cest.log; fi
 
+  echo "→ estoque (giro, cobertura, ABC, reposição, inventário transacional)"
+  node scripts/testar-estoque.mjs > /tmp/nk-estoque.log 2>&1
+  ESTOQUE=$?
+  marca $ESTOQUE "estoque: indicadores puros e inventário/ajuste transacionais (11 cenários)"
+  if [[ $ESTOQUE -ne 0 ]]; then tail -30 /tmp/nk-estoque.log; fi
+
   echo "→ tabelas fiscais de referência embutidas (CST PIS/COFINS/IPI/IBS-CBS, CST ICMS, CSOSN, cClassTrib v1.70)"
   node scripts/testar-tabelas-fiscais.mjs > /tmp/nk-tabelas-fiscais.log 2>&1
   TABREF=$?

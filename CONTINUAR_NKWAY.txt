@@ -64,6 +64,8 @@ ESTADO DO PRODUTO NO GITHUB:
 
 - MENU LATERAL (2026-11-09, local sobre 3a013ab): `shell.tsx` com 7 grupos recolhíveis por domínio (Vendas e caixa · Fiscal · Compras e estoque · Cadastros · Financeiro · Gestão · Sistema); PDV, caixa e auditoria de caixa juntos; itens do rodapé incorporados; preferência em `localStorage nkway.menu`. Sem mudança de rotas/permissões.
 
+- ESTOQUE (2026-11-09, local sobre 537014c): posição com giro/cobertura/ABC/reposição, aba Reposição (sugestão de compra), kardex com extrato por produto e filtro por usuário, inventário com leitor de código de barras, rótulo da contagem, modos e CSV; `ajustarEstoque`/`lancarInventario` transacionais com FOR UPDATE. `src/lib/estoqueIndicadores.ts`, `vendasPorProdutoRecentes` em dados.ts. Suíte `testar-estoque.mjs` (11). Sem migração.
+
 ANTES DE EDITAR:
 - Compare a tarefa com o código atual do GitHub; não misture versões/zip de outra sessão.
 - Rode o baseline do projeto conforme `CONTEXTO_ARENA.md`.
