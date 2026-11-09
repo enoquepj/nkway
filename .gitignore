@@ -23,3 +23,11 @@ Thumbs.db
 ENTREGA_ATUAL/
 ENTREGA_ATUAL.zip
 public/downloads/ENTREGA_ATUAL.zip
+
+# scripts de reprodução/depuração locais e pacotes de entrega — nunca versionar
+.repro*.mjs
+ENTREGA_ATUAL/
+ENTREGA_ATUAL.zip
+nkway-pacote.zip
+LEIA-ME-ENTREGA.txt
+public/downloads/*.zip

@@ -60,6 +60,10 @@ ESTADO DO PRODUTO NO GITHUB:
 
 - DIVERGE NO FECHAMENTO CEGO (2026-11-09, local sobre 608b589): divergência real é ACEITA com justificativa; gerente opcional (credencial informada precisa ser válida). Sem gerente → `status_aprovacao=pendente`, logs sem homologação, auditoria crítica com resumo "DIVERGE …"; homologação posterior em /dashboard/auditoria-caixa. Ações devolvem `diverge`/`pendenteHomologacao`. Suíte fechamento cego 58. Sem migração.
 
+- LIMPEZA (2026-11-09, local sobre 3a013ab): removidos `.repro3.mjs`, `LEIA-ME-ENTREGA.txt`, `netlify.toml`, `publicar.sh` (sem referência em código/teste/build). `.gitignore` bloqueia `.repro*.mjs` e pacotes de entrega. Legado Vite (`src/erp`, `index.html`, `vite.config.ts`, `ENTREGA_GITHUB`, `ATUALIZAR_SUPABASE_AGORA.sql`) permanece por decisão documentada.
+
+- MENU LATERAL (2026-11-09, local sobre 3a013ab): `shell.tsx` com 7 grupos recolhíveis por domínio (Vendas e caixa · Fiscal · Compras e estoque · Cadastros · Financeiro · Gestão · Sistema); PDV, caixa e auditoria de caixa juntos; itens do rodapé incorporados; preferência em `localStorage nkway.menu`. Sem mudança de rotas/permissões.
+
 ANTES DE EDITAR:
 - Compare a tarefa com o código atual do GitHub; não misture versões/zip de outra sessão.
 - Rode o baseline do projeto conforme `CONTEXTO_ARENA.md`.
