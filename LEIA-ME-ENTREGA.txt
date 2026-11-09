@@ -1,28 +1,10 @@
-NKWAY — PACOTE · base: main eca58aa · 2026-11-09T17:57Z
-COMO USAR: descompacte este ZIP DIRETAMENTE NA RAIZ da pasta do repositório nkway (onde está o package.json), sobrescrevendo.
-Não deve existir pasta intermediária. Depois, APAGUE a pasta ENTREGA_ATUAL do repositório (ela entrou por engano no commit eca58aa).
-Conferência: src/lib/tabelasFiscais.ts deve existir na raiz do repositório (não dentro de ENTREGA_ATUAL).
+NKWAY — PACOTE Etapa C · base: main e1c4de2 · 2026-11-09T20:03Z
+Descompacte DIRETAMENTE NA RAIZ da pasta do repositório (onde está o package.json), sobrescrevendo. Sem pasta intermediária.
 
-Arquivos (22) e SHA-256 (16 primeiros):
-  src/lib/tabelasFiscais.ts                     e9d8020ca87c3a47
-  src/lib/tabelaClassTrib.ts                    84f07e3bee28d923
-  scripts/testar-tabelas-fiscais.mjs            4ed01f1e23181edd
-  src/components/CamposTributarios.tsx          cbc76a1b4853459d
-  src/components/ModalFechamentoCego.tsx        606460058dd64ee5
-  src/lib/caixa.ts                              12dad35c55142816
-  src/server/caixaCore.ts                       aee9c0e4cfe354b3
-  src/views/Caixa.tsx                           9ac2e56be4b4dd62
-  src/server/diagnostico.ts                     55110392e7008187
-  scripts/smoke.sh                              e33d73181b11a330
-  scripts/testar-caixa-motor.mjs                bc8f5ddeee4a78eb
-  scripts/testar-fechamento-cego.mjs            967ab1ddd10b8a3a
-  scripts/testar-tsconfig-entrega.mjs           afd56022d0e3d492
-  tsconfig.json                                 a25959d5e19f9d8f
-  .gitignore                                    a608df00986890bf
-  package.json                                  f2b73663991ef201
-  package-lock.json                             6d082366a544eac7
-  CONTEXTO_ARENA.md                             99464f854567305d
-  MEMORANDO.md                                  e69d6c01c9c889a5
-  VERCEL_SUPABASE.md                            e9b720da458b244a
-  CONTINUAR_NKWAY.txt                           025e017115955e99
-  FISCAL_PRODUTOS.md                            15fbdea8f9674db5
+  src/lib/tabelasFiscais.ts                     7cbed99a637655e5
+  src/components/CamposTributarios.tsx          ea87f4a93346dcc0
+  src/views/TributacaoProdutos.tsx              be44173317ccd552
+  scripts/testar-tabelas-fiscais.mjs            4e4f690756cb29e1
+  CONTEXTO_ARENA.md                             b8f18e33d3968780
+  CONTINUAR_NKWAY.txt                           b8fa1330176a878f
+  FISCAL_PRODUTOS.md                            9e221917d38d81a1

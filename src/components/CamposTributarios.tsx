@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Campo, Input, Select } from "@/components/ui";
 import { CSOSN_FISCAIS, CST_ICMS_FISCAIS, ORIGENS_MERCADORIA, type CampoTributario, type ParametrosTributarios, type TipoCodigoFiscal } from "@/lib/tributacao";
 import type { CodigoFiscalDto } from "@/server/tributacaoCore";
-import { descricaoFiscal, opcoesTabelaFiscal, tabelaFiscal, type IdTabelaFiscal } from "@/lib/tabelasFiscais";
+import { CFOP_FONTE, descricaoCfop, descricaoFiscal, opcoesCfop, opcoesTabelaFiscal, tabelaFiscal, type IdTabelaFiscal } from "@/lib/tabelasFiscais";
 import { CLASS_TRIB_VERSAO, classTribPorCodigo, listarClassTrib } from "@/lib/tabelaClassTrib";
 
 type LinhaTabela = { codigo: string; descricao: string };
@@ -38,6 +38,33 @@ function SeletorTabela({ id, valor, aoMudar, rotulo, dica, codigosEmpresa, tabel
         opcoes={[{ valor: "", rotulo: "Não informado" }, ...opcoes, ...locais.map((c) => ({ valor: c.codigo, rotulo: `${c.codigo} — ${c.nome} (código da empresa)` })), { valor: OUTRO, rotulo: "Outro código…" }]} />
     )}
     {valor && !descricao && <p className="mt-1 text-[10.5px] text-amber-700">Código fora da tabela de referência; confirme com a contabilidade.</p>}
+  </Campo>;
+}
+
+/** CFOP de saída: lista "código — descrição" (banco `cfop` se carregado, senão subconjunto do varejo), com "Outro código…" para qualquer CFOP válido. */
+function SeletorCfop({ valor, aoMudar, rotulo, dica, grupo, codigosEmpresa, tabelas }: { valor: string; aoMudar: (v: string) => void; rotulo: string; dica?: string; grupo: "56" | "6"; codigosEmpresa: CodigoFiscalDto[]; tabelas: TabelasDominio }) {
+  const { opcoes, origem } = useMemo(() => {
+    const doBanco = tabelas?.cfop;
+    const aceita = (c: string) => (grupo === "6" ? c.startsWith("6") : c.startsWith("5") || c.startsWith("6"));
+    if (doBanco && doBanco.length) return { opcoes: doBanco.filter((l) => aceita(l.codigo)).map((l) => ({ valor: l.codigo, rotulo: `${l.codigo} — ${l.descricao}` })), origem: "tabela oficial carregada" };
+    return { opcoes: opcoesCfop(grupo), origem: CFOP_FONTE.fonte };
+  }, [tabelas, grupo]);
+  const digitos = valor.replace(/\D/g, "");
+  const locais = codigosEmpresa.filter((c) => c.ativo && c.tipo === "cfop" && !opcoes.some((o) => o.valor === c.codigo));
+  const conhecido = digitos === "" || opcoes.some((o) => o.valor === digitos) || locais.some((c) => c.codigo === digitos);
+  const [manual, setManual] = useState(!conhecido);
+  const descricao = digitos ? (opcoes.find((o) => o.valor === digitos)?.rotulo ?? descricaoCfop(digitos) ?? locais.find((c) => c.codigo === digitos)?.nome ?? null) : null;
+  return <Campo rotulo={rotulo} dica={dica ?? origem}>
+    {manual || !conhecido ? (
+      <div className="flex gap-1.5">
+        <Input valor={valor} aoMudar={aoMudar} inputMode="numeric" className="font-mono" maxLength={5} placeholder="5.102" />
+        <button type="button" className="shrink-0 rounded-lg px-2 text-[11px] font-semibold text-way-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50" onClick={() => { setManual(false); if (!opcoes.some((o) => o.valor === digitos) && !locais.some((c) => c.codigo === digitos)) aoMudar(""); }}>lista</button>
+      </div>
+    ) : (
+      <Select valor={digitos} aoMudar={(v) => { if (v === OUTRO) { setManual(true); return; } aoMudar(v); }} className="font-mono text-[12px]" data-testid={`seletor-cfop-${grupo}`}
+        opcoes={[{ valor: "", rotulo: "Não informado" }, ...opcoes, ...locais.map((c) => ({ valor: c.codigo, rotulo: `${c.codigo} — ${c.nome} (código da empresa)` })), { valor: OUTRO, rotulo: "Outro código…" }]} />
+    )}
+    {digitos && !descricao && <p className="mt-1 text-[10.5px] text-amber-700">CFOP fora do subconjunto de referência; confirme com a contabilidade.</p>}
   </Campo>;
 }
 
@@ -97,8 +124,9 @@ const REFORMA: CampoFiscal[] = [
   { campo: "cbsAliq", rotulo: "CBS (%)", aliquota: true, placeholder: "Não informado" },
 ];
 
-export function CamposTributarios({ dados, aoMudar, codigos, prefixo, crt, tabelas }: { dados: ParametrosTributarios; aoMudar: (d: ParametrosTributarios) => void; codigos: CodigoFiscalDto[]; prefixo: string; crt: number; tabelas?: Record<string, { codigo: string; descricao: string }[]> }) {
+export function CamposTributarios({ dados, aoMudar, codigos, prefixo, crt, tabelas, semMercadoria = false }: { dados: ParametrosTributarios; aoMudar: (d: ParametrosTributarios) => void; codigos: CodigoFiscalDto[]; prefixo: string; crt: number; tabelas?: Record<string, { codigo: string; descricao: string }[]>; /** Perfil fiscal: oculta NCM/CEST (atributos da mercadoria), preservando valores já gravados. */ semMercadoria?: boolean }) {
   const campo = (item: CampoFiscal) => {
+    if (item.campo === "cfop" || item.campo === "cfopInterestadual") return <SeletorCfop key={item.campo} valor={dados[item.campo]} aoMudar={(v) => aoMudar({ ...dados, [item.campo]: v })} rotulo={item.rotulo} dica={item.dica} grupo={item.campo === "cfopInterestadual" ? "6" : "56"} codigosEmpresa={codigos} tabelas={tabelas} />;
     if (item.campo === "classTrib") return <SeletorClassTrib key="classTrib" valor={dados.classTrib} cst={dados.cstIbsCbs} aoMudar={(v) => aoMudar({ ...dados, classTrib: v })} tabelas={tabelas} />;
     const idTabela = TABELA_DO_CAMPO[item.campo];
     if (idTabela) return <SeletorTabela key={item.campo} id={idTabela} valor={dados[item.campo]} aoMudar={(v) => aoMudar({ ...dados, [item.campo]: v })} rotulo={item.rotulo} dica={item.dica} codigosEmpresa={codigos} tabelas={tabelas} />;
@@ -122,7 +150,8 @@ export function CamposTributarios({ dados, aoMudar, codigos, prefixo, crt, tabel
       })}
       <section className="rounded-xl border border-ink-100 bg-ink-50/35 p-3.5">
         <h3 className="text-[13px] font-bold text-ink-800">Classificação e operação</h3><p className="mt-0.5 text-[11px] text-ink-400">Códigos cadastrais e CFOPs usados como referência para a saída.</p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{IDENTIFICACAO.map(campo)}<Campo rotulo="Origem da mercadoria"><Select valor={dados.origem} aoMudar={(v) => aoMudar({ ...dados, origem: v })} opcoes={[{ valor: "", rotulo: "Não informado" }, ...ORIGENS_MERCADORIA.map((o) => ({ valor: o.id, rotulo: o.rotulo }))]} /></Campo></div>
+        {semMercadoria && (dados.ncm || dados.cest) && <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">Este perfil guarda classificação de mercadoria (NCM {dados.ncm || "—"} · CEST {dados.cest || "—"}). Ela fica preservada, mas <b>não é aplicada aos produtos</b> salvo escolha explícita na aplicação; NCM e CEST pertencem ao cadastro do produto.</p>}
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{IDENTIFICACAO.filter((c) => !(semMercadoria && (c.campo === "ncm" || c.campo === "cest"))).map(campo)}<Campo rotulo="Origem da mercadoria"><Select valor={dados.origem} aoMudar={(v) => aoMudar({ ...dados, origem: v })} opcoes={[{ valor: "", rotulo: "Não informado" }, ...ORIGENS_MERCADORIA.map((o) => ({ valor: o.id, rotulo: o.rotulo }))]} /></Campo></div>
       </section>
       <section className="rounded-xl border border-ink-100 bg-ink-50/35 p-3.5">
         <h3 className="text-[13px] font-bold text-ink-800">ICMS e substituição tributária</h3><p className="mt-0.5 text-[11px] text-ink-400">CRT {crt}: escolha a classificação orientada pelo contador. Simples/MEI podem usar CST monofásico quando aplicável.</p>

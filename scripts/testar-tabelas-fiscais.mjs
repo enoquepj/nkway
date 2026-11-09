@@ -60,4 +60,15 @@ caso("formulário: CST PIS/COFINS/IPI/IBS-CBS e cClassTrib são seletores, não 
 caso("arquivos declaram limites e não alegam certificação oficial", () => {
   for (const a of ["src/lib/tabelasFiscais.ts", "src/lib/tabelaClassTrib.ts"]) { const f = fs.readFileSync(a, "utf8"); assert.doesNotMatch(f, /validad[oa] oficialmente|homologad[oa] pelo sistema/i); assert.match(f, /sem atualização automática|não há atualização automática/); }
 });
+caso("CFOP de saída: subconjunto do varejo com 104 códigos únicos nos grupos 5/6/7, descrições e validador", () => {
+  assert.equal(T.CFOP_SAIDA_VAREJO.length, 104); assert.equal(new Set(T.CFOP_SAIDA_VAREJO.map((i) => i.codigo)).size, 104);
+  for (const i of T.CFOP_SAIDA_VAREJO) { assert.match(i.codigo, /^[567]\d{3}$/); assert.ok(i.descricao.length > 8, i.codigo); assert.equal(trib.validarCodigoFiscal("cfop", i.codigo).ok, true, i.codigo); }
+  assert.match(T.descricaoCfop("5.102"), /adquirida ou recebida de terceiros/); assert.match(T.descricaoCfop("6404"), /retido anteriormente/); assert.equal(T.descricaoCfop("1102"), null);
+  assert.ok(T.opcoesCfop("6").every((o) => o.valor.startsWith("6"))); assert.ok(T.opcoesCfop("56").every((o) => /^[56]/.test(o.valor))); assert.equal(T.opcoesCfop("7").length, 6);
+  assert.match(T.CFOP_FONTE.url, /confaz\.fazenda\.gov\.br/);
+});
+caso("formulário: CFOP vira seletor e o perfil oculta NCM/CEST preservando valores", () => {
+  const f = fs.readFileSync("src/components/CamposTributarios.tsx", "utf8"); assert.match(f, /SeletorCfop/); assert.match(f, /semMercadoria/); assert.match(f, /não é aplicada aos produtos/);
+  const v = fs.readFileSync("src/views/TributacaoProdutos.tsx", "utf8"); assert.match(v, /prefixo="perfil-fiscal" semMercadoria/); assert.match(v, /prefixo="produto-fiscal"(?! semMercadoria)/);
+});
 console.log(`NKWAY tabelas fiscais de referência: ${passou} cenários aprovados (sem banco, sem rede).`);

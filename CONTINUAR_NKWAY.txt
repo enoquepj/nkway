@@ -56,6 +56,8 @@ ESTADO DO PRODUTO NO GITHUB:
 
 - SELETORES FISCAIS (2026-11-09, local sobre e0a224f): CST PIS/COFINS/IPI/IBS-CBS, CST ICMS, CSOSN e cClassTrib viraram listas "código — descrição" em `CamposTributarios` (perfil e tributação do produto), com cascata banco (`nk_tabela_dominio`) → instantâneo oficial embutido (`src/lib/tabelasFiscais.ts`, `src/lib/tabelaClassTrib.ts`, 173 cClassTrib v1.70). Funciona em produção sem carregar o banco. Suíte `testar-tabelas-fiscais.mjs` (14); `fis-16`.
 
+- ETAPA C FISCAL (2026-11-09, local sobre e1c4de2): CFOP de saída/interestadual como lista "código — descrição" (subconjunto do varejo, 104 códigos, em `src/lib/tabelasFiscais.ts`; "Outro código…" mantém qualquer CFOP) e modal de perfil fiscal sem NCM/CEST (`semMercadoria`; valores históricos preservados com aviso). Suíte `testar-tabelas-fiscais.mjs` 16.
+
 ANTES DE EDITAR:
 - Compare a tarefa com o código atual do GitHub; não misture versões/zip de outra sessão.
 - Rode o baseline do projeto conforme `CONTEXTO_ARENA.md`.
