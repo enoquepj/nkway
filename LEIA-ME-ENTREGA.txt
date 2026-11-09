@@ -1,10 +1,14 @@
-NKWAY — PACOTE Etapa C · base: main e1c4de2 · 2026-11-09T20:03Z
+NKWAY — PACOTE DIVERGE · base: main 608b589 · 2026-11-09T20:19Z
 Descompacte DIRETAMENTE NA RAIZ da pasta do repositório (onde está o package.json), sobrescrevendo. Sem pasta intermediária.
 
-  src/lib/tabelasFiscais.ts                     7cbed99a637655e5
-  src/components/CamposTributarios.tsx          ea87f4a93346dcc0
-  src/views/TributacaoProdutos.tsx              be44173317ccd552
-  scripts/testar-tabelas-fiscais.mjs            4e4f690756cb29e1
-  CONTEXTO_ARENA.md                             b8f18e33d3968780
-  CONTINUAR_NKWAY.txt                           b8fa1330176a878f
-  FISCAL_PRODUTOS.md                            9e221917d38d81a1
+  src/server/caixaCore.ts                       1f5bdfb938a4520e
+  src/server/acoes/caixa.ts                     4059ebb24c5a3dd9
+  src/components/ModalFechamentoCego.tsx        2c03cc7bde0c3f1c
+  src/views/Caixa.tsx                           e484515adbf164b7
+  src/views/AuditoriaCaixa.tsx                  1df19491fc93f36a
+  src/views/Usuarios.tsx                        95d4147d0774723d
+  scripts/testar-fechamento-cego.mjs            316b452706110ab1
+  scripts/smoke.sh                              36df57f1f3670b5f
+  CONTEXTO_ARENA.md                             c471cffa64515363
+  CONTINUAR_NKWAY.txt                           0e953b1ce8cda47d
+  MEMORANDO.md                                  a3d9cef04c4a7a7f

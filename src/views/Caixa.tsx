@@ -165,7 +165,7 @@ export function CaixaView({
         gerenteSenha: gerenteSenhaFechar,
       });
       if (!r.ok && r.requerHomologacao) setRequerHomologacaoFechar(true);
-      toast(r.ok ? (r.aviso ?? "Caixa fechado.") : r.erro, r.ok ? "ok" : "erro");
+      toast(r.ok ? (r.aviso ?? "Caixa fechado.") : r.erro, r.ok && !r.diverge ? "ok" : "erro");
       if (r.ok) {
         setGerenteEmailFechar("");
         setGerenteSenhaFechar("");
@@ -810,13 +810,13 @@ export function CaixaView({
             {requerHomologacaoFechar && (
               <div ref={(el) => { if (el) setTimeout(() => { el.scrollIntoView({ block: "start", behavior: "smooth" }); el.querySelector<HTMLInputElement>("input[type=email]")?.focus(); }, 50); }}
                 role="alertdialog" aria-live="assertive" data-testid="painel-homologacao" className="space-y-3 rounded-xl border-2 border-amber-300 bg-amber-50 p-3 ring-4 ring-amber-100">
-                <p className="text-[13px] font-bold text-amber-900">Autorização do gerente ou responsável</p>
-                <p className="text-[12px] text-amber-900">Há divergência ou inconsistência. Confira a justificativa acima e peça ao gerente que informe e-mail e PIN para concluir o fechamento.</p>
+                <p className="text-[13px] font-bold text-amber-900">Divergência (DIVERGE) — justificativa obrigatória, gerente opcional</p>
+                <p className="text-[12px] text-amber-900">Há divergência ou inconsistência. Com a justificativa acima, o turno será <b>aceito e marcado como DIVERGE</b> na auditoria. Gerente presente: informe e-mail e PIN para homologar agora. Sem gerente: o turno fica <b>pendente</b> em Auditoria de Caixa.</p>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Campo rotulo="E-mail do gerente" obrigatorio>
+                  <Campo rotulo="E-mail do gerente (opcional)">
                     <Input type="email" valor={gerenteEmailFechar} aoMudar={setGerenteEmailFechar} placeholder="gerente@empresa.com.br" />
                   </Campo>
-                  <Campo rotulo="PIN / senha do gerente" obrigatorio dica="Verificado no servidor e não registrado em log.">
+                  <Campo rotulo="PIN / senha do gerente (opcional)" dica="Verificado no servidor e não registrado em log. Em branco = DIVERGE pendente.">
                     <Input type="password" autoComplete="off" valor={gerenteSenhaFechar} aoMudar={setGerenteSenhaFechar} placeholder="••••••" />
                   </Campo>
                 </div>

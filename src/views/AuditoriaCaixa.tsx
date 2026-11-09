@@ -39,9 +39,9 @@ function semHomologacaoRegistrada(l: LinhaAuditoriaCaixaView): boolean {
 
 function situacao(l: LinhaAuditoriaCaixaView): { rotulo: string; tom: "ok" | "alerta" | "erro" } {
   const pendente = l.quebras.some((q) => !q.homologadoPorUsuarioId) || l.statusAprovacao === "pendente";
-  if (pendente) return { rotulo: "Pendente", tom: "alerta" };
-  if (semHomologacaoRegistrada(l)) return { rotulo: "Sem homologação", tom: "alerta" };
-  if (l.quebras.length > 0) return { rotulo: "Com Quebra", tom: "erro" };
+  if (pendente) return { rotulo: "DIVERGE · pendente", tom: "erro" };
+  if (semHomologacaoRegistrada(l)) return { rotulo: "DIVERGE · sem homologação", tom: "alerta" };
+  if (l.quebras.length > 0) return { rotulo: "DIVERGE · homologado", tom: "alerta" };
   return { rotulo: "OK", tom: "ok" };
 }
 

@@ -20,8 +20,7 @@ import {
   PageHeader,
   Select,
   Vazio,
-  useToast,
-} from "@/components/ui";
+  useToast, cn } from "@/components/ui";
 import { Tabela, type Coluna } from "@/components/Tabela";
 import { dataBR, dataHoraBR } from "@/lib/dominio";
 import { alternarItem, casaTexto, emPeriodo, type Periodo } from "@/lib/filtros";
@@ -291,7 +290,7 @@ export function UsuariosView({
       valor: (a) => a.resumo,
       render: (a) => (
         <div className="min-w-0">
-          <p className="truncate text-[12.5px] text-ink-800">{a.resumo}</p>
+          <p className={cn("truncate text-[12.5px]", a.resumo.startsWith("DIVERGE") ? "font-bold text-rose-700" : "text-ink-800")}>{a.resumo}</p>
           {a.registroId && (
             <p className="truncate font-mono text-[10px] text-ink-400">registro: {a.registroId}</p>
           )}

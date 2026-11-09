@@ -187,7 +187,7 @@ else
   echo "→ fechamento cego (homologação e concorrência)"
   BASE="$BASE" node scripts/testar-fechamento-cego.mjs > /tmp/nk-fechamento-cego.log 2>&1
   FECHAMENTO=$?
-  marca $FECHAMENTO "fechamento cego (55 cenários locais)"
+  marca $FECHAMENTO "fechamento cego (58 cenários locais)"
   if [[ $FECHAMENTO -ne 0 ]]; then tail -40 /tmp/nk-fechamento-cego.log; fi
 
   echo "→ parametrização fiscal de produtos"

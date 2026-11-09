@@ -58,6 +58,8 @@ ESTADO DO PRODUTO NO GITHUB:
 
 - ETAPA C FISCAL (2026-11-09, local sobre e1c4de2): CFOP de saída/interestadual como lista "código — descrição" (subconjunto do varejo, 104 códigos, em `src/lib/tabelasFiscais.ts`; "Outro código…" mantém qualquer CFOP) e modal de perfil fiscal sem NCM/CEST (`semMercadoria`; valores históricos preservados com aviso). Suíte `testar-tabelas-fiscais.mjs` 16.
 
+- DIVERGE NO FECHAMENTO CEGO (2026-11-09, local sobre 608b589): divergência real é ACEITA com justificativa; gerente opcional (credencial informada precisa ser válida). Sem gerente → `status_aprovacao=pendente`, logs sem homologação, auditoria crítica com resumo "DIVERGE …"; homologação posterior em /dashboard/auditoria-caixa. Ações devolvem `diverge`/`pendenteHomologacao`. Suíte fechamento cego 58. Sem migração.
+
 ANTES DE EDITAR:
 - Compare a tarefa com o código atual do GitHub; não misture versões/zip de outra sessão.
 - Rode o baseline do projeto conforme `CONTEXTO_ARENA.md`.

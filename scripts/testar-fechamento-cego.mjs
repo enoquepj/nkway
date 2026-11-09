@@ -20,7 +20,7 @@ const operador = randomUUID(), outroOperador = randomUUID(), gerente = randomUUI
 const senhaGerente = randomBytes(24).toString("base64url"), senhaOperador = randomBytes(24).toString("base64url"), senhaExterna = randomBytes(24).toString("base64url");
 const emailGerente = `${gerente}@teste.invalid`, emailOperador = `${operador}@teste.invalid`, emailInativo = `${gerenteInativo}@teste.invalid`, emailExterno = `${gerenteExterno}@teste.invalid`;
 const idsAcoes = new Map();
-const nomes = new Set(["fecharTurnoCego", "fecharCaixa", "registrarMovimentoCaixa", "registrarVendaSemNota", "registrarDav", "faturarDav", "cancelarVenda", "ajustarCaixaFechado"]);
+const nomes = new Set(["fecharTurnoCego", "fecharCaixa", "registrarMovimentoCaixa", "registrarVendaSemNota", "registrarDav", "faturarDav", "cancelarVenda", "ajustarCaixaFechado", "homologarQuebraCaixa"]);
 function procurarAcoes(dir) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
@@ -120,12 +120,11 @@ try {
   ok(paginaPdv.status === 200 && !htmlPdv.includes("esperadosMap") && !htmlPdv.includes("saldoDinheiroGaveta"), "/pdv mantém o saldo esperado fora do cliente");
   const entradaMista = { sessaoId: mista, valoresInformados: valores(90, 110), justificativa: just };
   const semJustificativa = await acao("fecharTurnoCego", { ...entradaMista, justificativa: "" });
-  ok(!semJustificativa.ok && semJustificativa.requerHomologacao === true, "diferenças compensadas exigem justificativa e gerente");
+  ok(!semJustificativa.ok && semJustificativa.requerHomologacao === true, "diferenças compensadas exigem justificativa (não passam em silêncio)");
   ok(!("apuracao" in semJustificativa) && !("conferencia" in semJustificativa) && !("valoresEsperados" in semJustificativa), "resposta cega não revela os valores esperados");
-  const semSenha = await acao("fecharTurnoCego", entradaMista);
-  ok(!semSenha.ok && semSenha.requerHomologacao === true, "justificativa isolada não substitui homologação");
-  const porCaixa = await acao("fecharCaixa", { ...entradaMista, confirmado: true });
-  ok(!porCaixa.ok && porCaixa.requerHomologacao === true, "caminho /caixa não contorna a homologação");
+  // Regra DIVERGE: justificativa é obrigatória; gerente é opcional. Sem gerente, o turno é aceito como pendente.
+  const soEmail = await acao("fecharTurnoCego", { ...entradaMista, gerenteEmail: emailGerente });
+  ok(!soEmail.ok && soEmail.requerHomologacao === true, "e-mail de gerente sem PIN não é aceito nem como pendente");
   const semConfirmar = await acao("fecharCaixa", { ...entradaMista, confirmado: false });
   ok(!semConfirmar.ok, "tela /caixa continua exigindo confirmação");
   for (const tentativa of [
@@ -148,6 +147,16 @@ try {
   const anterior = await lerSessao(mista);
   const antesLogs = await cliente.query("select count(*)::int n from nk_caixa_quebra_log where sessao_id=$1", [mista]);
   ok(anterior.status === "aberto" && antesLogs.rows[0].n === 0, "tentativas recusadas não fecham nem geram logs de quebra");
+  const sessaoPendente = await sessao(100, empresa, outroOperador); await venda(sessaoPendente);
+  const pendente = await acao("fecharTurnoCego", { sessaoId: sessaoPendente, valoresInformados: valores(90, 110), justificativa: just }, ckOutro);
+  const linhaPendente = await lerSessao(sessaoPendente);
+  ok(pendente.ok && pendente.diverge === true && pendente.pendenteHomologacao === true && /^DIVERGE/.test(pendente.aviso) && linhaPendente.status === "fechado" && linhaPendente.status_aprovacao === "pendente" && linhaPendente.homologado_por_usuario_id === null, "divergência justificada sem gerente é aceita como DIVERGE pendente");
+  const logsPendentes = (await cliente.query("select tipo, homologado_por_usuario_id, homologado_em from nk_caixa_quebra_log where sessao_id=$1 order by tipo", [sessaoPendente])).rows;
+  ok(logsPendentes.length === 2 && logsPendentes.every((l) => l.homologado_por_usuario_id === null && l.homologado_em === null), "logs FALTA e SOBRA ficam aguardando homologação");
+  const audPend = (await cliente.query("select resumo, alteracoes from nk_auditoria where registro_id=$1 and acao='caixa.fechamento_cego'", [sessaoPendente])).rows;
+  ok(audPend.length === 1 && audPend[0].resumo.startsWith("DIVERGE") && audPend[0].alteracoes.criticidade === "critica" && audPend[0].alteracoes.statusAprovacao === "pendente", "auditoria registra mensagem crítica DIVERGE pendente");
+  const homologaDepois = await acao("homologarQuebraCaixa", { quebraId: (await cliente.query("select id from nk_caixa_quebra_log where sessao_id=$1 limit 1", [sessaoPendente])).rows[0].id, senha: senhaGerente }, ckGerente, "/dashboard/auditoria-caixa");
+  ok(homologaDepois.ok && (await lerSessao(sessaoPendente)).status_aprovacao === "homologado", "gerente homologa depois pela auditoria de caixa");
   const aprovado = await acao("fecharTurnoCego", { ...entradaMista, ...credenciais });
   const fechada = await lerSessao(mista);
   const logs = (await cliente.query("select tipo,valor_diferenca,homologado_por_usuario_id from nk_caixa_quebra_log where sessao_id=$1 order by tipo", [mista])).rows;
@@ -160,13 +169,13 @@ try {
   ok(audit.length === 1 && audit[0].alteracoes.tipoQuebra === "MISTA" && !JSON.stringify(audit).includes(senhaGerente), "auditoria transacional registra situação mista sem credencial");
   const respostaRelatorio = await fetch(`${base}/api/relatorios/pdv?aba=caixa`, { headers: { Cookie: ckGerente } });
   const relatorio = await respostaRelatorio.json();
-  ok(respostaRelatorio.status === 200 && relatorio.indicadores.find((x) => x.rotulo === "Homologações registradas")?.valor === 1, "relatório conta uma homologação mista apenas uma vez");
+  ok(respostaRelatorio.status === 200 && relatorio.indicadores.find((x) => x.rotulo === "Homologações registradas")?.valor === 2, "relatório conta cada homologação uma vez (mista + pendente homologada depois), nunca por log");
 
   const caixa = await sessao();
   const pedidoCaixa = { sessaoId: caixa, valoresInformados: valores(90), confirmado: true, justificativa: just };
-  const negadoCaixa = await acao("fecharCaixa", pedidoCaixa);
+  const negadoCaixa = await acao("fecharCaixa", { ...pedidoCaixa, justificativa: "" });
   const aprovadoCaixa = await acao("fecharCaixa", { ...pedidoCaixa, ...credenciais });
-  ok(!negadoCaixa.ok && negadoCaixa.requerHomologacao && aprovadoCaixa.ok, "/caixa solicita e aceita homologação de gerente");
+  ok(!negadoCaixa.ok && negadoCaixa.requerHomologacao && aprovadoCaixa.ok && aprovadoCaixa.diverge === true && aprovadoCaixa.pendenteHomologacao === false, "/caixa exige justificativa e aceita homologação de gerente (DIVERGE homologado)");
   const antesAjuste = await lerSessao(caixa);
   const ajuste = await acao("ajustarCaixaFechado", { sessaoId: caixa, valoresInformados: valores(95), justificativa: just }, ckGerente);
   const depoisAjuste = await lerSessao(caixa);
@@ -203,7 +212,7 @@ try {
   ok((await acao("fecharTurnoCego", { sessaoId: sTexto4, valoresInformados: { dinheiro: "1,500.50" } })).ok, "milhar com vírgula e decimal com ponto é lido corretamente");
   const sTexto5 = await sessao(100); await venda(sTexto5, 50.5, "dinheiro");
   const faltaTexto = await acao("fecharTurnoCego", { sessaoId: sTexto5, valoresInformados: { dinheiro: "140" } });
-  ok(!faltaTexto.ok && faltaTexto.requerHomologacao === true, "falta real com valor em texto continua exigindo homologação");
+  ok(!faltaTexto.ok && faltaTexto.requerHomologacao === true, "falta real com valor em texto continua exigindo justificativa");
   ok(!(await acao("fecharTurnoCego", { sessaoId: sTexto5, valoresInformados: { dinheiro: "12a" } })).ok, "texto não numérico é recusado");
   ok((await acao("fecharTurnoCego", { sessaoId: sTexto5, valoresInformados: { dinheiro: "140" }, justificativa: just, ...credenciais })).ok, "falta em texto é homologada com justificativa e gerente");
   const vendaSessao = await sessao();
@@ -272,7 +281,7 @@ try {
   const inconsistente = await sessao(0); await venda(inconsistente, 100, "pix", 120);
   const tentativa = await acao("fecharTurnoCego", { sessaoId: inconsistente, valoresInformados: valores(0, 120) });
   const revisada = await acao("fecharTurnoCego", { sessaoId: inconsistente, valoresInformados: valores(0, 120), justificativa: just, ...credenciais });
-  ok(!tentativa.ok && tentativa.requerHomologacao && revisada.ok, "recebimento inconsistente exige justificativa e gerente");
+  ok(!tentativa.ok && tentativa.requerHomologacao && revisada.ok && revisada.diverge === true, "recebimento inconsistente exige justificativa e é marcado DIVERGE");
 
   // Ultrapassa deliberadamente a precisão do snapshot, sem alterar schema nem dados reais.
   const falhaTransacao = await sessao(9_999_999_999.99); await venda(falhaTransacao, 1, "dinheiro", 1);

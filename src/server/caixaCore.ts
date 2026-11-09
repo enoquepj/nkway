@@ -182,6 +182,10 @@ export type ResultadoFechamentoCaixa =
       sessaoId: string;
       numero: number;
       operadorNome: string;
+      /** Houve divergência/inconsistência real (turno marcado DIVERGE na auditoria). */
+      diverge?: boolean;
+      /** DIVERGE aceito sem gerente presente: aguarda homologação em /dashboard/auditoria-caixa. */
+      pendenteHomologacao?: boolean;
       apuracao: ApuracaoSessaoCaixa;
       conferencia: ReturnType<typeof calcularConferenciaCaixa>;
       justificativa: string;
@@ -228,23 +232,31 @@ export async function fecharSessaoCaixaTransacional(params: {
     const somaSobra = round2(Object.values(conferencia.diferencas).reduce((s, d) => s + Math.max(0, d), 0));
     const somaFalta = round2(Object.values(conferencia.diferencas).reduce((s, d) => s + Math.max(0, -d), 0));
     let gerenteId: string | null = null;
+    // Divergência real (fechamento cego): o turno é ACEITO e marcado "DIVERGE" (status pendente + log de quebra + auditoria crítica).
+    // O gerente pode homologar na hora (e-mail + PIN) ou depois em /dashboard/auditoria-caixa. Justificativa continua obrigatória.
+    let divergeAceito = false;
     if (params.cego && exigeHomologacao) {
       if (justificativa.length < 10) {
-        return { ok: false as const, erro: "Há divergência ou inconsistência. Informe a justificativa e solicite a homologação de um gerente.", requerHomologacao: true };
+        return { ok: false as const, erro: "Há divergência ou inconsistência. Informe a justificativa (mín. 10 caracteres); a homologação do gerente pode ser feita agora ou depois na auditoria.", requerHomologacao: true };
       }
       const email = params.cego.gerenteEmail.trim().toLowerCase();
       const senha = params.cego.gerenteSenha;
-      if (!email || !senha) {
-        return { ok: false as const, erro: "Informe o e-mail e o PIN/senha de um gerente para homologar.", requerHomologacao: true };
+      if (email || senha) {
+        // Credencial informada: precisa ser válida — credencial errada nunca é "aceita como pendente" em silêncio.
+        if (!email || !senha) {
+          return { ok: false as const, erro: "Informe e-mail e PIN/senha do gerente juntos, ou deixe ambos em branco para registrar como DIVERGE pendente.", requerHomologacao: true };
+        }
+        const [gerente] = await tx.select({ id: usuarios.id, papel: usuarios.papel, senhaHash: usuarios.senhaHash })
+          .from(usuarios)
+          .where(and(eq(usuarios.empresaId, params.empresaId), eq(usuarios.email, email), eq(usuarios.ativo, true)))
+          .limit(1).for("share");
+        if (!gerente || !temPermissao(gerente.papel, "caixa.homologar") || !confereSenha(senha, gerente.senhaHash)) {
+          return { ok: false as const, erro: "Homologação negada: credencial inválida ou usuário sem permissão. Corrija ou deixe em branco para registrar como DIVERGE pendente.", requerHomologacao: true };
+        }
+        gerenteId = gerente.id;
+      } else {
+        divergeAceito = true;
       }
-      const [gerente] = await tx.select({ id: usuarios.id, papel: usuarios.papel, senhaHash: usuarios.senhaHash })
-        .from(usuarios)
-        .where(and(eq(usuarios.empresaId, params.empresaId), eq(usuarios.email, email), eq(usuarios.ativo, true)))
-        .limit(1).for("share");
-      if (!gerente || !temPermissao(gerente.papel, "caixa.homologar") || !confereSenha(senha, gerente.senhaHash)) {
-        return { ok: false as const, erro: "Homologação negada: credencial inválida ou usuário sem permissão.", requerHomologacao: true };
-      }
-      gerenteId = gerente.id;
     } else if (!params.cego) {
       if (apuracao.inconsistencias.length > 0 && justificativa.length < 10) {
         const lista = apuracao.inconsistencias.map((i) => `${i.vendaId.slice(0, 8)}: ${i.motivo}`).join(" · ");
@@ -269,7 +281,7 @@ export async function fecharSessaoCaixaTransacional(params: {
         fechadoEm: new Date(),
         fechadoPorId: params.usuario.id,
         fechadoPorNome: params.usuario.nome,
-        ...(params.cego ? { fundoTroco: FUNDO_TROCO_PADRAO, statusAprovacao: exigeHomologacao ? "homologado" : null, homologadoPorUsuarioId: gerenteId } : {}),
+        ...(params.cego ? { fundoTroco: FUNDO_TROCO_PADRAO, statusAprovacao: exigeHomologacao ? (divergeAceito ? "pendente" : "homologado") : null, homologadoPorUsuarioId: gerenteId } : {}),
       })
       .where(
         and(eq(caixaSessoes.id, sessao.id), eq(caixaSessoes.empresaId, params.empresaId), eq(caixaSessoes.status, "aberto")),
@@ -298,7 +310,7 @@ export async function fecharSessaoCaixaTransacional(params: {
         await tx.insert(caixaQuebraLogs).values(registrosQuebra.map((q) => ({
           empresaId: params.empresaId, sessaoId: sessao.id, usuarioId: params.usuario.id,
           tipo: q.tipo, valorDiferenca: q.valorDiferenca, justificativa,
-          homologadoPorUsuarioId: gerenteId, homologadoEm,
+          homologadoPorUsuarioId: gerenteId, homologadoEm: gerenteId ? homologadoEm : null,
         })));
       }
       const tipoQuebra = somaFalta >= 0.01 && somaSobra >= 0.01 ? "MISTA" : somaFalta >= 0.01 ? "FALTA" : somaSobra >= 0.01 ? "SOBRA" : null;
@@ -308,8 +320,11 @@ export async function fecharSessaoCaixaTransacional(params: {
         acao: params.cego.origem === "caixa" ? "caixa.fechar" : "caixa.fechamento_cego",
         entidade: "caixa_sessao",
         registroId: sessao.id,
-        resumo: `Turno #${sessao.numero} encerrado às cegas · ${exigeHomologacao ? "conferência homologada" : "sem divergência"} · cofre ${moeda(recolhido)}`,
+        resumo: exigeHomologacao
+          ? `DIVERGE · Turno #${sessao.numero} encerrado às cegas com ${tipoQuebra ?? "inconsistência"} de ${moeda(round2(somaFalta + somaSobra))} · ${divergeAceito ? "PENDENTE de homologação" : "homologado pelo gerente"} · cofre ${moeda(recolhido)}`
+          : `Turno #${sessao.numero} encerrado às cegas · sem divergência · cofre ${moeda(recolhido)}`,
         alteracoes: {
+          criticidade: exigeHomologacao ? "critica" : "normal", diverge: exigeHomologacao, statusAprovacao: exigeHomologacao ? (divergeAceito ? "pendente" : "homologado") : null,
           numero: sessao.numero, operador: sessao.operadorNome, esperados: apuracao.esperadosMap,
           informados: conferencia.informados, diferencas: conferencia.diferencas,
           diferencaTotal: conferencia.diferencaTotal, tipoQuebra, somaFalta, somaSobra,
@@ -326,6 +341,8 @@ export async function fecharSessaoCaixaTransacional(params: {
       sessaoId: sessao.id,
       numero: sessao.numero,
       operadorNome: sessao.operadorNome,
+      diverge: exigeHomologacao,
+      pendenteHomologacao: divergeAceito,
       apuracao,
       conferencia,
       justificativa,

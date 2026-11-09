@@ -13,7 +13,7 @@ import { apurarSessaoNoBanco, fecharSessaoCaixaTransacional } from "@/server/cai
 import { comoErro, corpo, exigirPermissao, logico, numero, texto } from "@/server/tenant";
 
 export type ResultadoCaixa =
-  | { ok: true; id?: string; numero?: number; aviso?: string }
+  | { ok: true; id?: string; numero?: number; aviso?: string; diverge?: boolean; pendenteHomologacao?: boolean }
   | { ok: false; erro: string; requerHomologacao?: boolean };
 
 function revalidarCaixa() {
@@ -210,11 +210,13 @@ async function executarFechamentoCego(bruto: unknown, origem: "pdv" | "caixa"): 
     });
     if (!resultado.ok) return resultado;
     revalidarCaixa();
-    const homologado = resultado.conferencia.temDivergencia || resultado.apuracao.inconsistencias.length > 0;
+    const diverge = resultado.conferencia.temDivergencia || resultado.apuracao.inconsistencias.length > 0;
     return {
-      ok: true, id: resultado.sessaoId, numero: resultado.numero,
-      aviso: homologado
-        ? `Turno #${resultado.numero} encerrado com conferência homologada. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`
+      ok: true, id: resultado.sessaoId, numero: resultado.numero, diverge, pendenteHomologacao: Boolean(resultado.pendenteHomologacao),
+      aviso: diverge
+        ? (resultado.pendenteHomologacao
+          ? `DIVERGE · Turno #${resultado.numero} encerrado com divergência de ${moeda(Math.abs(resultado.conferencia.diferencaTotal))}, registrado como crítico na auditoria e PENDENTE de homologação do gerente. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado.`
+          : `DIVERGE · Turno #${resultado.numero} encerrado com divergência homologada pelo gerente e registrada na auditoria. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado.`)
         : `Turno #${resultado.numero} encerrado sem divergências. Fundo de troco de ${moeda(FUNDO_TROCO_PADRAO)} provisionado para o próximo turno.`,
     };
   } catch (e) {
