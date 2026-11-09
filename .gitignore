@@ -18,3 +18,8 @@ Thumbs.db
 
 # tipos gerados pelo Next
 .next/types/
+
+# pacotes de entrega gerados pela plataforma — não versionar
+ENTREGA_ATUAL/
+ENTREGA_ATUAL.zip
+public/downloads/ENTREGA_ATUAL.zip

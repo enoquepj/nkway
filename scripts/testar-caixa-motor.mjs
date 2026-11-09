@@ -124,6 +124,11 @@ const snap = aplicarSnapshotFechamento(ap, { dinheiro: 75, pix: 140, credito: 30
 ok("   snapshot da sessão fechada prevalece", snap.snapshotAplicado && snap.totalEsperado === 315 && snap.divergenciaRecalculo === 5 && ap.totalEsperado === 320);
 
 /* ------------------------------------------------------------ Parte B */
+{
+  const l = caixa.lerValorDinheiro;
+  const casos = [["150,50", 150.5], ["150.50", 150.5], ["1.500,50", 1500.5], ["1,500.50", 1500.5], ["1500", 1500], ["1500.5", 1500.5], ["0.01", 0.01], ["R$ 1.500,50", 1500.5], ["1.500", 1500], ["1.500.000", 1500000], ["", 0], [undefined, 0], [150.5, 150.5], ["abc", null], ["1..5", null], ["12a", null]];
+  ok("17 parser de dinheiro: ponto e vírgula como decimal, milhar e inválidos", casos.every(([e, r]) => l(e) === r), casos.map(([e, r]) => `${JSON.stringify(e)}→${l(e)}${l(e) === r ? "" : "≠" + r}`).join(" "));
+}
 console.log("→ Parte B · banco real: fechamento simultâneo (transação + FOR UPDATE)");
 const c1 = new pg.Client({ connectionString: dbUrl });
 const c2 = new pg.Client({ connectionString: dbUrl });

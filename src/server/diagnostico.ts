@@ -52,6 +52,8 @@ import {
   type VendaCaixaInput,
 } from "@/lib/caixa";
 import { fecharSessaoCaixaTransacional } from "@/server/caixaCore";
+import { conferirTabelaFiscal, TABELAS_FISCAIS } from "@/lib/tabelasFiscais";
+import { CLASS_TRIB, classTribPorCst, totalClassTrib } from "@/lib/tabelaClassTrib";
 import { aplicarPerfilTributario, crtSugeridoParaRegime, PARAMETROS_TRIBUTARIOS_VAZIOS, validarCodigoFiscal, validarParametrosTributarios, validarRegimeTributario } from "@/lib/tributacao";
 import { codigoCestDigitado, formatarCest, validarRegistroCest } from "@/lib/cest";
 import { conferirTabelasDominio } from "@/server/tabelasDominio";
@@ -1971,6 +1973,9 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   const dominio = await conferirTabelasDominio();
   const dominioTabelas = await db.execute<{ n: number }>(sql`select count(*)::int as n from information_schema.tables where table_schema='public' and table_name in ('nk_tabela_dominio','nk_tabela_dominio_meta')`);
   ok("fis-15", "Fiscal", "Tabelas de domínio oficiais disponíveis como opções (CFOP/CST/CSOSN/origem/cClassTrib), com fonte registrada", dominio.ok && Number(dominioTabelas.rows[0]?.n ?? 0) === 2, dominio.detalhe, true);
+  const tabelasRefOk = TABELAS_FISCAIS.length === 6 && TABELAS_FISCAIS.every((t) => conferirTabelaFiscal(t.id).ok) && totalClassTrib() === 173
+    && CLASS_TRIB.every(([c]) => TABELAS_FISCAIS.find((t) => t.id === "cst_ibs_cbs")!.itens.some((i) => i.codigo === c.slice(0, 3))) && classTribPorCst("200").length === 56 && classTribPorCst("410").length === 38;
+  ok("fis-16", "Fiscal", "Instantâneos oficiais embutidos íntegros (fallback dos seletores quando nk_tabela_dominio está vazia)", tabelasRefOk, "SPED 4.3.2/4.3.3/4.3.4 · IT 2025.002 v1.70 · 173 cClassTrib · sem certificar enquadramento", true);
 
   /* ---------------------------------------- DF-e / Certificado A1 / SEFAZ */
   const soapTeste = buildSoapDistNsu(empresa?.cnpj ?? "23567891000174", "42", 2);

@@ -15,6 +15,7 @@ import {
   type ApuracaoSessaoCaixa,
   type MovimentoCaixaInput,
   type VendaCaixaInput,
+  lerValorDinheiro,
 } from "@/lib/caixa";
 import { FORMAS_PAGAMENTO, moeda, round2 } from "@/lib/dominio";
 import { temPermissao } from "@/lib/permissoes";
@@ -165,9 +166,9 @@ export function lerInformados(mapaBruto: Record<string, unknown>): { ok: true; v
   let total = 0;
   for (const fp of FORMAS_PAGAMENTO) {
     const bruto = mapaBruto?.[fp.id];
-    const vazio = bruto === undefined || bruto === null || (typeof bruto === "string" && !bruto.trim());
-    const v = vazio ? 0 : typeof bruto === "number" ? bruto : typeof bruto === "string" ? Number(bruto.replace(/\./g, "").replace(",", ".")) : NaN;
-    if (!Number.isFinite(v) || v < 0 || v > 9_999_999_999.99) return { ok: false, erro: `Informe um valor válido e não negativo em ${fp.label}.` };
+    // Aceita "150,50", "150.50", "1.500,50" e "1,500.50": o último separador é o decimal (ver lerValorDinheiro).
+    const v = lerValorDinheiro(bruto);
+    if (v === null || v < 0 || v > 9_999_999_999.99) return { ok: false, erro: `Informe um valor válido e não negativo em ${fp.label}.` };
     valores[fp.id] = round2(v);
     total = round2(total + valores[fp.id]);
     if (total > 9_999_999_999.99) return { ok: false, erro: "A soma informada excede o limite permitido para o fechamento." };

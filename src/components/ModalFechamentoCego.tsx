@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Area, Badge, Button, Campo, Input, Modal, useToast } from "@/components/ui";
 import { FORMAS_PAGAMENTO } from "@/lib/dominio";
 import { fecharTurnoCego } from "@/server/acoes/caixa";
@@ -32,7 +32,20 @@ export function ModalFechamentoCego({
   const [gerenteEmail, setGerenteEmail] = useState("");
   const [gerenteSenha, setGerenteSenha] = useState("");
   const [requerHomologacao, setRequerHomologacao] = useState(false);
+  const [motivoHomologacao, setMotivoHomologacao] = useState("");
   const [ocupado, setOcupado] = useState(false);
+  const painelGerenteRef = useRef<HTMLDivElement>(null);
+
+
+  // Quando o servidor exige homologação, a etapa do gerente aparece NO TOPO, rola até ela e recebe foco.
+  useEffect(() => {
+    if (!requerHomologacao) return;
+    const t = setTimeout(() => {
+      painelGerenteRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+      painelGerenteRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+    }, 50);
+    return () => clearTimeout(t);
+  }, [requerHomologacao]);
 
   function limpar() {
     setValores({});
@@ -40,6 +53,7 @@ export function ModalFechamentoCego({
     setGerenteEmail("");
     setGerenteSenha("");
     setRequerHomologacao(false);
+    setMotivoHomologacao("");
   }
 
   function fechar() {
@@ -60,8 +74,13 @@ export function ModalFechamentoCego({
         gerenteSenha,
       });
       if (!r.ok) {
-        if (r.requerHomologacao) setRequerHomologacao(true);
-        toast(r.erro, "erro");
+        if (r.requerHomologacao) {
+          setRequerHomologacao(true);
+          setMotivoHomologacao(r.erro);
+          toast("Divergência no fechamento: preencha a justificativa e os dados do gerente.", "erro");
+        } else {
+          toast(r.erro, "erro");
+        }
         return;
       }
       toast(r.aviso ?? "Turno encerrado com sucesso.", "ok");
@@ -80,15 +99,15 @@ export function ModalFechamentoCego({
       aberto={aberto && Boolean(sessao)}
       aoFechar={fechar}
       titulo={sessao ? `Encerrar turno · Caixa #${sessao.numero} (${sessao.terminal})` : "Encerrar turno"}
-      descricao="Conte o dinheiro físico e preencha apenas o que você tem em mãos."
+      descricao={requerHomologacao ? "Etapa 2 de 2 · divergência detectada: autorização do gerente obrigatória." : "Etapa 1 de 2 · conte o dinheiro físico e preencha apenas o que você tem em mãos."}
       largura="max-w-2xl"
       rodape={
         <>
           <Button variante="secundario" onClick={fechar} disabled={ocupado}>
             Cancelar
           </Button>
-          <Button icone="check" onClick={() => void confirmar()} disabled={ocupado || !sessao}>
-            {ocupado ? "Processando…" : "Confirmar encerramento"}
+          <Button icone="check" onClick={() => void confirmar()} disabled={ocupado || !sessao || (requerHomologacao && (justificativa.trim().length < 10 || !gerenteEmail.trim() || !gerenteSenha))}>
+            {ocupado ? "Processando…" : requerHomologacao ? "Homologar e encerrar" : "Confirmar encerramento"}
           </Button>
         </>
       }
@@ -100,10 +119,42 @@ export function ModalFechamentoCego({
         </div>
 
         {requerHomologacao && (
-          <p role="alert" className="rounded-xl border border-amber-300 bg-amber-100 px-3 py-2 text-[12.5px] font-semibold text-amber-900">
-            Divergência detectada: para concluir o encerramento, preencha abaixo a justificativa e as credenciais
-            (e-mail + PIN/senha) de um gerente com permissão de homologação.
-          </p>
+          <div ref={painelGerenteRef} role="alertdialog" aria-live="assertive" aria-labelledby="titulo-homologacao" data-testid="painel-homologacao"
+            className="space-y-3 rounded-xl border-2 border-amber-300 bg-amber-50 p-3 ring-4 ring-amber-100">
+            <p id="titulo-homologacao" className="text-[13px] font-bold text-amber-900">
+              Etapa 2 de 2 · Autorização do gerente ou responsável
+            </p>
+            <p className="text-[12px] leading-snug text-amber-900">
+              {motivoHomologacao || "Foi identificada uma divergência ou inconsistência."} Os valores contados ficam preservados abaixo; confira-os, descreva o motivo e peça ao gerente que informe e-mail e PIN. Se a contagem estiver errada, corrija o valor e confirme de novo.
+            </p>
+            <Area
+              rotulo="Justificativa (mín. 10 caracteres)"
+              valor={justificativa}
+              aoMudar={setJustificativa}
+              linhas={2}
+              placeholder="Descreva o motivo da sobra ou falta..."
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Campo rotulo="E-mail do gerente" obrigatorio>
+                <Input
+                  type="email"
+                  autoComplete="off"
+                  placeholder="gerente@empresa.com.br"
+                  valor={gerenteEmail}
+                  aoMudar={setGerenteEmail}
+                />
+              </Campo>
+              <Campo rotulo="PIN / senha do gerente" obrigatorio dica="Verificado no servidor; nunca é exibido ou gravado em log.">
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="••••••"
+                  valor={gerenteSenha}
+                  aoMudar={setGerenteSenha}
+                />
+              </Campo>
+            </div>
+          </div>
         )}
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -130,40 +181,6 @@ export function ModalFechamentoCego({
           recolhido automaticamente para o cofre.
         </p>
 
-        {requerHomologacao && (
-          <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
-            <p className="text-[12px] font-semibold text-amber-900">
-              Foi identificada uma divergência ou inconsistência. Preencha a justificativa e solicite a
-              homologação de um gerente presente para concluir o encerramento.
-            </p>
-            <Area
-              rotulo="Justificativa (mín. 10 caracteres)"
-              valor={justificativa}
-              aoMudar={setJustificativa}
-              linhas={2}
-              placeholder="Descreva o motivo da sobra ou falta..."
-            />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Campo rotulo="E-mail do gerente" obrigatorio>
-                <Input
-                  type="email"
-                  placeholder="gerente@empresa.com.br"
-                  valor={gerenteEmail}
-                  aoMudar={setGerenteEmail}
-                />
-              </Campo>
-              <Campo rotulo="PIN / senha do gerente" obrigatorio dica="Verificado no servidor; nunca é exibido ou gravado em log.">
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  placeholder="••••••"
-                  valor={gerenteSenha}
-                  aoMudar={setGerenteSenha}
-                />
-              </Campo>
-            </div>
-          </div>
-        )}
       </div>
     </Modal>
   );

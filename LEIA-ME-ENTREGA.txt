@@ -1,9 +1,9 @@
-NKWAY — PACOTE DE ENTREGA · base: main 56b881b · gerado 2026-11-09T17:42Z
+NKWAY — PACOTE · base: main eca58aa · 2026-11-09T17:57Z
+COMO USAR: descompacte este ZIP DIRETAMENTE NA RAIZ da pasta do repositório nkway (onde está o package.json), sobrescrevendo.
+Não deve existir pasta intermediária. Depois, APAGUE a pasta ENTREGA_ATUAL do repositório (ela entrou por engano no commit eca58aa).
+Conferência: src/lib/tabelasFiscais.ts deve existir na raiz do repositório (não dentro de ENTREGA_ATUAL).
 
-Copie o CONTEÚDO desta pasta (src/, scripts/ e arquivos da raiz) para a pasta do repositório, sobrescrevendo.
-NÃO copie a pasta ENTREGA_ATUAL em si. Depois, confira: src/lib/tabelasFiscais.ts deve existir no repositório.
-
-Arquivos e SHA-256 (primeiros 16 caracteres):
+Arquivos (22) e SHA-256 (16 primeiros):
   src/lib/tabelasFiscais.ts                     e9d8020ca87c3a47
   src/lib/tabelaClassTrib.ts                    84f07e3bee28d923
   scripts/testar-tabelas-fiscais.mjs            4ed01f1e23181edd
@@ -16,6 +16,9 @@ Arquivos e SHA-256 (primeiros 16 caracteres):
   scripts/smoke.sh                              e33d73181b11a330
   scripts/testar-caixa-motor.mjs                bc8f5ddeee4a78eb
   scripts/testar-fechamento-cego.mjs            967ab1ddd10b8a3a
+  scripts/testar-tsconfig-entrega.mjs           afd56022d0e3d492
+  tsconfig.json                                 a25959d5e19f9d8f
+  .gitignore                                    a608df00986890bf
   package.json                                  f2b73663991ef201
   package-lock.json                             6d082366a544eac7
   CONTEXTO_ARENA.md                             99464f854567305d

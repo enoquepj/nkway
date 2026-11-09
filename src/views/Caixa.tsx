@@ -1,4 +1,5 @@
 "use client";
+import { lerValorDinheiro } from "@/lib/caixa";
 
 import { useMemo, useState } from "react";
 import { LinkPdv } from "@/components/LinkPdv";
@@ -38,10 +39,9 @@ import {
 import type { CaixaSessaoAbertaVisivel, CaixaSessaoFechadaVisivel, CaixaSessaoVisivel } from "@/lib/caixaVisivel";
 
 function parseValorInput(s: string | number | undefined): number {
-  if (typeof s === "number") return Number.isFinite(s) ? round2(s) : 0;
-  const limpo = String(s ?? "").replace(/\./g, "").replace(",", ".");
-  const n = Number(limpo);
-  return Number.isFinite(n) ? round2(Math.max(0, n)) : 0;
+  // Mesmo parser do servidor: "150.50" é 150,50 (não 15.050,00).
+  const n = lerValorDinheiro(s);
+  return n === null ? 0 : Math.max(0, n);
 }
 
 function sessaoTemDivergencia(s: CaixaSessaoVisivel): boolean {
@@ -772,12 +772,6 @@ export function CaixaView({
               Fechamento às cegas: digite apenas o valor físico contado em cada forma. Os campos
               começam vazios e o esperado é calculado no servidor, sem exibir valores ao operador.
             </p>
-            {requerHomologacaoFechar && (
-              <p role="alert" className="rounded-xl border border-amber-300 bg-amber-100 px-3 py-2 text-[12.5px] font-semibold text-amber-900">
-                Divergência detectada: para concluir, preencha abaixo a justificativa e as credenciais
-                (e-mail + PIN/senha) de um gerente com permissão de homologação.
-              </p>
-            )}
             <div className="overflow-x-auto rounded-xl border border-ink-100">
               <table className="w-full text-left text-[12.5px]">
                 <thead className="bg-ink-50 text-[11px] uppercase text-ink-400">
@@ -814,8 +808,10 @@ export function CaixaView({
             />
 
             {requerHomologacaoFechar && (
-              <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
-                <p className="text-[12px] font-semibold text-amber-900">Há divergência ou inconsistência. Solicite a homologação de um gerente para concluir o fechamento.</p>
+              <div ref={(el) => { if (el) setTimeout(() => { el.scrollIntoView({ block: "start", behavior: "smooth" }); el.querySelector<HTMLInputElement>("input[type=email]")?.focus(); }, 50); }}
+                role="alertdialog" aria-live="assertive" data-testid="painel-homologacao" className="space-y-3 rounded-xl border-2 border-amber-300 bg-amber-50 p-3 ring-4 ring-amber-100">
+                <p className="text-[13px] font-bold text-amber-900">Autorização do gerente ou responsável</p>
+                <p className="text-[12px] text-amber-900">Há divergência ou inconsistência. Confira a justificativa acima e peça ao gerente que informe e-mail e PIN para concluir o fechamento.</p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Campo rotulo="E-mail do gerente" obrigatorio>
                     <Input type="email" valor={gerenteEmailFechar} aoMudar={setGerenteEmailFechar} placeholder="gerente@empresa.com.br" />

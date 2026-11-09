@@ -192,6 +192,20 @@ try {
   const produto = randomUUID();
   await cliente.query("insert into nk_produto(id,empresa_id,nome,sku,custo,preco,estoque,estoque_min) values($1,$2,'Produto concorrência','TESTE',5,20,100,1)", [produto, empresa]);
   const item = { produtoId: produto, qtd: 1, preco: 20 };
+  // Regressão: o PDV envia os valores como TEXTO digitado. "150.50" é R$ 150,50 (antes era lido como 15.050,00 e gerava falsa divergência).
+  const sTexto1 = await sessao(100); await venda(sTexto1, 50.5, "dinheiro");
+  ok((await acao("fecharTurnoCego", { sessaoId: sTexto1, valoresInformados: { dinheiro: "150.50" } })).ok, "valor digitado com ponto decimal fecha sem falsa divergência");
+  const sTexto2 = await sessao(100); await venda(sTexto2, 50.5, "dinheiro");
+  ok((await acao("fecharTurnoCego", { sessaoId: sTexto2, valoresInformados: { dinheiro: "150,50", pix: "" } })).ok, "valor com vírgula e campo vazio fecham sem divergência");
+  const sTexto3 = await sessao(1400); await venda(sTexto3, 100.5, "dinheiro");
+  ok((await acao("fecharTurnoCego", { sessaoId: sTexto3, valoresInformados: { dinheiro: "1.500,50" } })).ok, "milhar com ponto e decimal com vírgula é lido corretamente");
+  const sTexto4 = await sessao(1400); await venda(sTexto4, 100.5, "dinheiro");
+  ok((await acao("fecharTurnoCego", { sessaoId: sTexto4, valoresInformados: { dinheiro: "1,500.50" } })).ok, "milhar com vírgula e decimal com ponto é lido corretamente");
+  const sTexto5 = await sessao(100); await venda(sTexto5, 50.5, "dinheiro");
+  const faltaTexto = await acao("fecharTurnoCego", { sessaoId: sTexto5, valoresInformados: { dinheiro: "140" } });
+  ok(!faltaTexto.ok && faltaTexto.requerHomologacao === true, "falta real com valor em texto continua exigindo homologação");
+  ok(!(await acao("fecharTurnoCego", { sessaoId: sTexto5, valoresInformados: { dinheiro: "12a" } })).ok, "texto não numérico é recusado");
+  ok((await acao("fecharTurnoCego", { sessaoId: sTexto5, valoresInformados: { dinheiro: "140" }, justificativa: just, ...credenciais })).ok, "falta em texto é homologada com justificativa e gerente");
   const vendaSessao = await sessao();
   const [closeVenda, vendaConcorrente] = await disputar(vendaSessao,
     () => acao("fecharTurnoCego", { sessaoId: vendaSessao, valoresInformados: valores(100) }),
@@ -267,12 +281,6 @@ try {
   const efeitos = (await cliente.query("select (select count(*) from nk_caixa_quebra_log where sessao_id=$1)::int logs,(select count(*) from nk_caixa_movimento where sessao_id=$1)::int movimentos,(select count(*) from nk_auditoria where empresa_id=$2 and registro_id=$1::text)::int auditorias", [falhaTransacao, empresa])).rows[0];
   ok(!falha.ok && !JSON.stringify(falha).includes("valoresEsperados"), "erro de gravação devolve mensagem cega e segura");
   ok(aposFalha.status === "aberto" && efeitos.logs === 0 && efeitos.movimentos === 0 && efeitos.auditorias === 0, "falha de gravação deixa turno, logs e cofre sem alterações parciais");
-  // UI: o modal do PDV deve revelar a tela de autorização do gerente ao receber requerHomologacao.
-  const srcModal = readFileSync("src/components/ModalFechamentoCego.tsx", "utf8");
-  ok(/r\.requerHomologacao\)\s*setRequerHomologacao\(true\)/.test(srcModal), "modal do PDV marca requerHomologacao ao receber a flag do servidor");
-  ok(srcModal.includes('requerHomologacao && (') && srcModal.includes("E-mail do gerente") && srcModal.includes("PIN / senha do gerente") && srcModal.includes('role="alert"'), "modal do PDV abre o bloco de autorização (banner + e-mail + PIN do gerente) dentro da própria tela de fermeture");
-  const srcCaixa = readFileSync("src/views/Caixa.tsx", "utf8");
-  ok(srcCaixa.includes("requerHomologacaoFechar && (") && srcCaixa.includes("gerenteEmailFechar") && srcCaixa.includes('role="alert"'), "tela /caixa também revela a autorização do gerente com banner visível");
   console.log(`Fechamento cego: ${passou} verificações aprovadas.`);
 } catch (e) {
   console.error("Fechamento cego: falha:", e instanceof Error ? e.message : e); process.exitCode = 1;

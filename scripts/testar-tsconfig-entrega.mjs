@@ -15,7 +15,7 @@ for (const grupo of ["dependencies", "devDependencies"]) {
     assert.ok(lock.packages?.[`node_modules/${nome}`], `Dependência ${nome} ausente no package-lock.json.`);
   }
 }
-const ignorados = ["ENTREGA_GITHUB", "ARQUIVOS_PARA_GITHUB", "public/downloads"];
+const ignorados = ["ENTREGA_GITHUB", "ARQUIVOS_PARA_GITHUB", "public/downloads", "ENTREGA_ATUAL"];
 const exclusoes = new Set((config.exclude ?? []).map((p) => String(p).replace(/\\/g, "/").replace(/\/$/, "")));
 for (const diretorio of ignorados) assert.ok(exclusoes.has(diretorio), `O espelho ${diretorio} precisa ficar fora do programa TypeScript.`);
 

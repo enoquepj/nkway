@@ -636,3 +636,38 @@ export function calcularConferenciaCaixa(
     temDivergencia,
   };
 }
+
+/**
+ * Lê um valor em dinheiro digitado pelo operador, aceitando os formatos reais de teclado:
+ * "150,50" · "150.50" · "1.500,50" · "1,500.50" · "1500" · "R$ 1.500,50". Devolve `null` quando não é número.
+ * Regra: o ÚLTIMO separador (vírgula ou ponto) é decimal quando seguido de 1–2 dígitos; os demais são milhar.
+ * Corrige a leitura antiga que tratava todo ponto como milhar ("150.50" virava 15.050,00 e gerava falsa divergência).
+ */
+export function lerValorDinheiro(bruto: unknown): number | null {
+  if (typeof bruto === "number") return Number.isFinite(bruto) ? round2(bruto) : null;
+  if (bruto === undefined || bruto === null) return 0;
+  if (typeof bruto !== "string") return null;
+  const texto = bruto.replace(/\s|R\$/g, "");
+  if (texto === "") return 0;
+  if (!/^-?[\d.,]+$/.test(texto) || /[.,]{2,}/.test(texto)) return null;
+  const negativo = texto.startsWith("-");
+  const corpo = negativo ? texto.slice(1) : texto;
+  const ultimoSep = Math.max(corpo.lastIndexOf(","), corpo.lastIndexOf("."));
+  let inteiro = corpo, decimal = "";
+  if (ultimoSep >= 0) {
+    const depois = corpo.slice(ultimoSep + 1);
+    const antes = corpo.slice(0, ultimoSep);
+    const sepChar = corpo[ultimoSep];
+    const outrosSeps = antes.replace(/\d/g, "");
+    // Ponto único seguido de exatamente 3 dígitos e sem vírgula ("1.500") é milhar; o resto com 1-2 dígitos é decimal.
+    const pareceMilhar = sepChar === "." && depois.length === 3 && !antes.includes(",") && outrosSeps.split("").every((c) => c === ".");
+    if (depois.length >= 1 && depois.length <= 2 && !/[.,]/.test(depois)) { inteiro = antes; decimal = depois; }
+    else if (pareceMilhar || (depois.length === 3 && !/[.,]/.test(depois))) { inteiro = corpo; decimal = ""; }
+    else return null;
+  }
+  const digitosInteiros = inteiro.replace(/[.,]/g, "");
+  if (!/^\d*$/.test(digitosInteiros) || !/^\d*$/.test(decimal)) return null;
+  const n = Number(`${digitosInteiros || "0"}.${decimal || "0"}`);
+  if (!Number.isFinite(n)) return null;
+  return round2(negativo ? -n : n);
+}

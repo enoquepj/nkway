@@ -172,10 +172,10 @@ else
     ' "$DIAG"
   fi
 
-  echo "→ motor de caixa unificado (16 cenários)"
+  echo "→ motor de caixa unificado (17 cenários)"
   node scripts/testar-caixa-motor.mjs > /tmp/nk-caixa-motor.log 2>&1
   MOTOR=$?
-  marca $MOTOR "motor de caixa unificado (16 cenários)"
+  marca $MOTOR "motor de caixa unificado (17 cenários)"
   if [[ $MOTOR -ne 0 ]]; then tail -25 /tmp/nk-caixa-motor.log; fi
 
   echo "→ relatórios de PDV (isolamento, caixa e exportação)"
@@ -187,7 +187,7 @@ else
   echo "→ fechamento cego (homologação e concorrência)"
   BASE="$BASE" node scripts/testar-fechamento-cego.mjs > /tmp/nk-fechamento-cego.log 2>&1
   FECHAMENTO=$?
-  marca $FECHAMENTO "fechamento cego (48 cenários locais)"
+  marca $FECHAMENTO "fechamento cego (55 cenários locais)"
   if [[ $FECHAMENTO -ne 0 ]]; then tail -40 /tmp/nk-fechamento-cego.log; fi
 
   echo "→ parametrização fiscal de produtos"
@@ -208,6 +208,11 @@ else
   marca $CEST "CEST local por empresa, nunca aplicado automaticamente, com auditoria"
   if [[ $CEST -ne 0 ]]; then tail -70 /tmp/nk-cest.log; fi
 
+  echo "→ tabelas fiscais de referência embutidas (CST PIS/COFINS/IPI/IBS-CBS, CST ICMS, CSOSN, cClassTrib v1.70)"
+  node scripts/testar-tabelas-fiscais.mjs > /tmp/nk-tabelas-fiscais.log 2>&1
+  TABREF=$?
+  marca $TABREF "instantâneos oficiais com fonte declarada e seletores no formulário; seleção não certifica enquadramento"
+  if [[ $TABREF -ne 0 ]]; then tail -30 /tmp/nk-tabelas-fiscais.log; fi
   echo "→ tabelas de domínio oficiais (script por etapas, idempotência e leitura)"
   node scripts/testar-tabelas-dominio.mjs > /tmp/nk-tabelas-dominio.log 2>&1
   TABELAS=$?

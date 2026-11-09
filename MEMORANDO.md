@@ -38,6 +38,8 @@ Nesta retomada, o health de produção respondeu HTTP 200 sem identificar o comm
 | Parametrização fiscal de produtos | Código já no `main` `cf0200d`; publicação e homologação fiscal não são comprovadas por health 200. |
 | Consulta oficial NCM — etapa 1 | Entrega local: Produtos → Consultar NCM; API autenticada `/api/fiscal/ncm`; cache `nk_catalogo_ncm` por empresa, atualização administrativa explícita, dados e auditoria preservados em falhas. Migração aditiva exige backup/revisão antes do deploy. Sem certificação automática do enquadramento. |
 | App | Next.js 16.4.5 + Drizzle no Vercel (atualizado de 16.2.6 em 2026-11-09 após avaliação do alerta crítico do `npm audit`; validação completa verde) |
+| Seletores fiscais | Correção local 2026-11-09: CSTs e cClassTrib como listas com descrição nos perfis/produtos; dados do banco quando carregados, senão instantâneo oficial embutido. Ver `FISCAL_PRODUTOS.md`. |
+| Fechamento de caixa | Correção local 2026-11-09: leitura de valores com ponto decimal e painel do gerente visível no topo do modal (PDV e `/caixa`). Ver seção 6 de `CONTEXTO_ARENA.md`. |
 | Banco | PostgreSQL do Supabase existente, pooler 6543 |
 | Acesso do app | `DATABASE_URL` Secret; usuário PostgreSQL dedicado `nkway_app` |
 | Tabelas | legado sem prefixo preservado + Next `nk_*` em produção (assistente somente-leitura em `/migracao`) |

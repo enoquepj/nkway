@@ -50,6 +50,8 @@
     "supabase",
     "ENTREGA_GITHUB",
     "ARQUIVOS_PARA_GITHUB",
-    "public/downloads"
+    "public/downloads",
+    "ENTREGA_ATUAL",
+    "ENTREGA_ATUAL.zip"
   ]
 }
