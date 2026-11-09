@@ -267,6 +267,12 @@ try {
   const efeitos = (await cliente.query("select (select count(*) from nk_caixa_quebra_log where sessao_id=$1)::int logs,(select count(*) from nk_caixa_movimento where sessao_id=$1)::int movimentos,(select count(*) from nk_auditoria where empresa_id=$2 and registro_id=$1::text)::int auditorias", [falhaTransacao, empresa])).rows[0];
   ok(!falha.ok && !JSON.stringify(falha).includes("valoresEsperados"), "erro de gravação devolve mensagem cega e segura");
   ok(aposFalha.status === "aberto" && efeitos.logs === 0 && efeitos.movimentos === 0 && efeitos.auditorias === 0, "falha de gravação deixa turno, logs e cofre sem alterações parciais");
+  // UI: o modal do PDV deve revelar a tela de autorização do gerente ao receber requerHomologacao.
+  const srcModal = readFileSync("src/components/ModalFechamentoCego.tsx", "utf8");
+  ok(/r\.requerHomologacao\)\s*setRequerHomologacao\(true\)/.test(srcModal), "modal do PDV marca requerHomologacao ao receber a flag do servidor");
+  ok(srcModal.includes('requerHomologacao && (') && srcModal.includes("E-mail do gerente") && srcModal.includes("PIN / senha do gerente") && srcModal.includes('role="alert"'), "modal do PDV abre o bloco de autorização (banner + e-mail + PIN do gerente) dentro da própria tela de fermeture");
+  const srcCaixa = readFileSync("src/views/Caixa.tsx", "utf8");
+  ok(srcCaixa.includes("requerHomologacaoFechar && (") && srcCaixa.includes("gerenteEmailFechar") && srcCaixa.includes('role="alert"'), "tela /caixa também revela a autorização do gerente com banner visível");
   console.log(`Fechamento cego: ${passou} verificações aprovadas.`);
 } catch (e) {
   console.error("Fechamento cego: falha:", e instanceof Error ? e.message : e); process.exitCode = 1;

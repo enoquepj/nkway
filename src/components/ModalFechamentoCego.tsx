@@ -99,6 +99,13 @@ export function ModalFechamentoCego({
           O sistema calcula o esperado no servidor e não mostra valores antes da confirmação.
         </div>
 
+        {requerHomologacao && (
+          <p role="alert" className="rounded-xl border border-amber-300 bg-amber-100 px-3 py-2 text-[12.5px] font-semibold text-amber-900">
+            Divergência detectada: para concluir o encerramento, preencha abaixo a justificativa e as credenciais
+            (e-mail + PIN/senha) de um gerente com permissão de homologação.
+          </p>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2">
           {FORMAS_PAGAMENTO.map((fp) => (
             <Campo
