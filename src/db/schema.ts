@@ -136,6 +136,44 @@ export const catalogoCest = pgTable("nk_catalogo_cest", {
   atualizadoEm: timestamp("atualizado_em", { withTimezone: true }),
 });
 
+/**
+ * Tabelas de domínio OFICIAIS (nacionais) usadas como opções selecionáveis na parametrização fiscal.
+ * Dados públicos de referência (CFOP, CSTs, CSOSN, origem, cClassTrib, cCredPres, cBenef por UF),
+ * semeados por script a partir da fonte oficial e nunca por empresa. Não guardam dados de tenant.
+ */
+export const tabelaDominio = pgTable(
+  "nk_tabela_dominio",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tipo: text("tipo").notNull(),
+    codigo: text("codigo").notNull(),
+    descricao: text("descricao").notNull().default(""),
+    uf: text("uf").notNull().default(""),
+    vigIni: date("vig_ini"),
+    vigFim: date("vig_fim"),
+    fonte: text("fonte").notNull().default(""),
+    versao: text("versao").notNull().default(""),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm: timestamp("criado_em", { withTimezone: true }).notNull().defaultNow(),
+    atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("nk_tabela_dominio_tipo_codigo_uf_uidx").on(t.tipo, t.codigo, t.uf),
+    index("nk_tabela_dominio_tipo_idx").on(t.tipo),
+  ],
+);
+
+/** Metadados (fonte, referência/versão do ato, contagem e data) de cada tipo de tabela de domínio. */
+export const tabelaDominioMeta = pgTable("nk_tabela_dominio_meta", {
+  tipo: text("tipo").primaryKey(),
+  fonte: text("fonte").notNull().default(""),
+  referencia: text("referencia").notNull().default(""),
+  url: text("url").notNull().default(""),
+  versao: text("versao").notNull().default(""),
+  total: integer("total").notNull().default(0),
+  atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Códigos mantidos pela empresa e perfis fiscais reutilizáveis; não é tabela oficial. */
 export const parametrosFiscais = pgTable(
   "nk_fiscal_parametro",

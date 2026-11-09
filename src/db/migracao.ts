@@ -245,5 +245,36 @@ export async function garantirMigracoesNk() {
       atualizado_em timestamptz
     )
   `);
+  // Tabelas de domínio oficiais (CFOP/CST/CSOSN/origem/cClassTrib/cBenef) — dados públicos de referência,
+  // semeados por script; aditivo/idempotente, sem tocar em produtos, notas, parâmetros ou legado.
+  await db.execute(sql`
+    create table if not exists nk_tabela_dominio (
+      id uuid primary key default gen_random_uuid(),
+      tipo text not null,
+      codigo text not null,
+      descricao text not null default '',
+      uf text not null default '',
+      vig_ini date,
+      vig_fim date,
+      fonte text not null default '',
+      versao text not null default '',
+      ativo boolean not null default true,
+      criado_em timestamptz not null default now(),
+      atualizado_em timestamptz not null default now()
+    )
+  `);
+  await db.execute(sql`create unique index if not exists nk_tabela_dominio_tipo_codigo_uf_uidx on nk_tabela_dominio(tipo, codigo, uf)`);
+  await db.execute(sql`create index if not exists nk_tabela_dominio_tipo_idx on nk_tabela_dominio(tipo)`);
+  await db.execute(sql`
+    create table if not exists nk_tabela_dominio_meta (
+      tipo text primary key,
+      fonte text not null default '',
+      referencia text not null default '',
+      url text not null default '',
+      versao text not null default '',
+      total integer not null default 0,
+      atualizado_em timestamptz not null default now()
+    )
+  `);
   aplicado = true;
 }

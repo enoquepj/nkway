@@ -207,6 +207,12 @@ else
   CEST=$?
   marca $CEST "CEST local por empresa, nunca aplicado automaticamente, com auditoria"
   if [[ $CEST -ne 0 ]]; then tail -70 /tmp/nk-cest.log; fi
+
+  echo "→ tabelas de domínio oficiais (script por etapas, idempotência e leitura)"
+  node scripts/testar-tabelas-dominio.mjs > /tmp/nk-tabelas-dominio.log 2>&1
+  TABELAS=$?
+  marca $TABELAS "tabelas de domínio oficiais (CFOP/CST/CSOSN/origem/IBS-CBS) como opções selecionáveis"
+  if [[ $TABELAS -ne 0 ]]; then tail -40 /tmp/nk-tabelas-dominio.log; fi
 fi
 
 echo

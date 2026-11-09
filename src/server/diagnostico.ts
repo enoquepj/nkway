@@ -54,6 +54,7 @@ import {
 import { fecharSessaoCaixaTransacional } from "@/server/caixaCore";
 import { aplicarPerfilTributario, crtSugeridoParaRegime, PARAMETROS_TRIBUTARIOS_VAZIOS, validarCodigoFiscal, validarParametrosTributarios, validarRegimeTributario } from "@/lib/tributacao";
 import { codigoCestDigitado, formatarCest, validarRegistroCest } from "@/lib/cest";
+import { conferirTabelasDominio } from "@/server/tabelasDominio";
 import { normalizarPerfil, perfilValido, temPermissao } from "@/lib/permissoes";
 import { confereSenha, hashSenha } from "@/lib/session";
 import { extrairEntradasZip, gerarZipBuffer } from "@/lib/zip";
@@ -1965,6 +1966,11 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   const cestRegInvalido = (() => { try { validarRegistroCest({ cest: "123", descricao: "x" }); return false; } catch { return true; } })();
   const cestOk = Number(tabelaCest.rows[0]?.n ?? 0) === 1 && Number(cestProdutos.rows[0]?.ruins ?? 0) === 0 && cestRegOk && cestRegInvalido && codigoCestDigitado("03.002.00") === "0300200" && codigoCestDigitado("123") === null && formatarCest("0300200") === "03.002.00";
   ok("fis-14", "Fiscal", "CEST: referência local por empresa, prefixos NCM/SH e formato preservado (nada aplicado automaticamente)", cestOk, `tabela nk_catalogo_cest · produtos com CEST fora de 7 dígitos: ${Number(cestProdutos.rows[0]?.ruins ?? 0)} · não é validação oficial`, true);
+
+  // Tabelas de domínio oficiais (opções selecionáveis do módulo fiscal), semeadas por script a partir de fonte oficial.
+  const dominio = await conferirTabelasDominio();
+  const dominioTabelas = await db.execute<{ n: number }>(sql`select count(*)::int as n from information_schema.tables where table_schema='public' and table_name in ('nk_tabela_dominio','nk_tabela_dominio_meta')`);
+  ok("fis-15", "Fiscal", "Tabelas de domínio oficiais disponíveis como opções (CFOP/CST/CSOSN/origem/cClassTrib), com fonte registrada", dominio.ok && Number(dominioTabelas.rows[0]?.n ?? 0) === 2, dominio.detalhe, true);
 
   /* ---------------------------------------- DF-e / Certificado A1 / SEFAZ */
   const soapTeste = buildSoapDistNsu(empresa?.cnpj ?? "23567891000174", "42", 2);

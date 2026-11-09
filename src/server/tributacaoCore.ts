@@ -3,6 +3,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { parametrosFiscais, produtos, produtoTributacoes } from "@/db/schema";
 import { avisosTributarios, CAMPOS_TRIBUTARIOS, crtSugeridoParaRegime, PARAMETROS_TRIBUTARIOS_VAZIOS, type ParametrosTributarios, type RegimeFiscalPerfil, type TipoCodigoFiscal } from "@/lib/tributacao";
+import { listarTabelasDominio, listarMetasDominio, type LinhaDominioDto, type MetaDominioDto } from "@/server/tabelasDominio";
 
 export type CodigoFiscalDto = { id: string; tipo: TipoCodigoFiscal; codigo: string; nome: string; ativo: boolean };
 export type PerfilFiscalDto = { id: string; nome: string; regime: RegimeFiscalPerfil; ativo: boolean; dados: ParametrosTributarios };
@@ -16,6 +17,9 @@ export type PainelTributacaoDto = {
   produtos: ProdutoFiscalDto[];
   perfis: PerfilFiscalDto[];
   codigos: CodigoFiscalDto[];
+  /** Tabelas de domínio oficiais (CFOP, CSTs, CSOSN, origem, cClassTrib...) como opções selecionáveis. */
+  tabelas: Record<string, LinhaDominioDto[]>;
+  metasTabelas: MetaDominioDto[];
 };
 
 export function lerParametrosSalvos(bruto: unknown): ParametrosTributarios {
@@ -60,11 +64,13 @@ export async function listarPainelTributacao(empresaId: string, nomeEmpresa: str
       icmsAliq: String(p.icmsAliq), pisAliq: String(p.pisAliq), cofinsAliq: String(p.cofinsAliq), ibsAliq: String(p.ibsAliq), cbsAliq: String(p.cbsAliq) });
     return { id: p.id, nome: p.nome, sku: p.sku, categoria: p.categoria, ativo: p.ativo, perfilId: complemento?.perfilId ?? null, dados, avisos: avisosTributarios(dados, crtAtual.crt) };
   });
+  const [tabelas, metasTabelas] = await Promise.all([listarTabelasDominio(), listarMetasDominio()]);
   return {
     empresa: nomeEmpresa, regime, crt: crtAtual.crt, crtConfigurado: crtAtual.configurado, crtSugerido: crtAtual.sugerido,
     produtos: resultado,
     perfis: registros.filter((r) => r.tipo === "perfil").map((r) => ({ id: r.id, nome: r.nome, regime: r.regime as RegimeFiscalPerfil, ativo: r.ativo, dados: lerParametrosSalvos(r.dados) })),
     codigos: registros.filter((r) => r.tipo !== "perfil").map((r) => ({ id: r.id, tipo: r.tipo as TipoCodigoFiscal, codigo: r.codigo, nome: r.nome, ativo: r.ativo })),
+    tabelas, metasTabelas,
   };
 }
 

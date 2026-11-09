@@ -27,7 +27,7 @@ const REFORMA: CampoFiscal[] = [
   { campo: "cbsAliq", rotulo: "CBS (%)", aliquota: true, placeholder: "Não informado" },
 ];
 
-export function CamposTributarios({ dados, aoMudar, codigos, prefixo, crt }: { dados: ParametrosTributarios; aoMudar: (d: ParametrosTributarios) => void; codigos: CodigoFiscalDto[]; prefixo: string; crt: number }) {
+export function CamposTributarios({ dados, aoMudar, codigos, prefixo, crt, tabelas }: { dados: ParametrosTributarios; aoMudar: (d: ParametrosTributarios) => void; codigos: CodigoFiscalDto[]; prefixo: string; crt: number; tabelas?: Record<string, { codigo: string; descricao: string }[]> }) {
   const campo = (item: CampoFiscal) => {
     const idLista = item.tipo ? `${prefixo}-${item.tipo}` : undefined;
     return <Campo key={item.campo} rotulo={item.rotulo} dica={item.dica}>
@@ -39,9 +39,12 @@ export function CamposTributarios({ dados, aoMudar, codigos, prefixo, crt }: { d
     <div className="space-y-4">
       {tiposListas.map((tipo) => {
         const sugestoes = new Map<string, string>();
-        if (tipo === "csosn") CSOSN_FISCAIS.forEach((c) => sugestoes.set(c, `CSOSN ${c}`));
-        if (tipo === "cst_icms") CST_ICMS_FISCAIS.forEach((c) => sugestoes.set(c, `CST ICMS ${c}`));
-        codigos.filter((c) => c.ativo && c.tipo === tipo).forEach((c) => sugestoes.set(c.codigo, c.nome));
+        // Primeiro as opções da tabela oficial de domínio (fonte registrada em nk_tabela_dominio_meta)...
+        (tabelas?.[tipo] ?? []).forEach((l) => sugestoes.set(l.codigo, `${l.codigo} — ${l.descricao}`));
+        // ...depois os códigos locais ativos da empresa (complemento, nunca substituem a oficial).
+        codigos.filter((c) => c.ativo && c.tipo === tipo).forEach((c) => { if (!sugestoes.has(c.codigo)) sugestoes.set(c.codigo, `${c.codigo} — ${c.nome} (local)`); });
+        if (tipo === "csosn" && !tabelas?.csosn?.length) CSOSN_FISCAIS.forEach((c) => sugestoes.set(c, `CSOSN ${c}`));
+        if (tipo === "cst_icms" && !tabelas?.cst_icms?.length) CST_ICMS_FISCAIS.forEach((c) => sugestoes.set(c, `CST ICMS ${c}`));
         return <datalist key={tipo} id={`${prefixo}-${tipo}`}>{[...sugestoes].map(([codigo, nome]) => <option key={codigo} value={codigo}>{nome}</option>)}</datalist>;
       })}
       <section className="rounded-xl border border-ink-100 bg-ink-50/35 p-3.5">
