@@ -208,6 +208,12 @@ else
   marca $CEST "CEST local por empresa, nunca aplicado automaticamente, com auditoria"
   if [[ $CEST -ne 0 ]]; then tail -70 /tmp/nk-cest.log; fi
 
+  echo "→ PDV offline (idempotência da fila, recibo provisório, service worker, auto-sync)"
+  node scripts/testar-pdv-offline.mjs > /tmp/nk-pdv-offline.log 2>&1
+  OFFLINE=$?
+  marca $OFFLINE "PDV offline: reenvio da fila não duplica venda; SW só cacheia shell/assets (11 cenários)"
+  if [[ $OFFLINE -ne 0 ]]; then tail -30 /tmp/nk-pdv-offline.log; fi
+
   echo "→ estoque (giro, cobertura, ABC, reposição, inventário transacional)"
   node scripts/testar-estoque.mjs > /tmp/nk-estoque.log 2>&1
   ESTOQUE=$?

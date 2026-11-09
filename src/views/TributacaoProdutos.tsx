@@ -7,7 +7,7 @@ import { CamposTributarios } from "@/components/CamposTributarios";
 import { Tabela, type Coluna } from "@/components/Tabela";
 import { Abas, Badge, Button, Campo, Card, CardTitulo, Icon, Input, Kpi, Modal, PageHeader, Select, useToast } from "@/components/ui";
 import { aplicarPerfilTributario, avisosTributarios, crtSugeridoParaRegime, PARAMETROS_TRIBUTARIOS_VAZIOS, REGIMES_FISCAIS, rotuloRegimeFiscal, TIPOS_CODIGO_FISCAL, type ParametrosTributarios, type RegimeFiscalPerfil, type TipoCodigoFiscal } from "@/lib/tributacao";
-import { alterarStatusParametroFiscal, salvarCodigoFiscal, salvarPerfilFiscal, salvarTributacaoProduto } from "@/server/acoes/tributacao";
+import { alterarStatusParametroFiscal, carregarTabelasFiscaisReferencia, salvarCodigoFiscal, salvarPerfilFiscal, salvarTributacaoProduto } from "@/server/acoes/tributacao";
 import type { CodigoFiscalDto, PainelTributacaoDto, PerfilFiscalDto, ProdutoFiscalDto } from "@/server/tributacaoCore";
 
 type CodigoEdicao = { id: string; tipo: TipoCodigoFiscal; codigo: string; nome: string };
@@ -86,13 +86,22 @@ export function TributacaoProdutosView({ dados, produtoInicial }: { dados: Paine
     <PageHeader titulo="Parametrização fiscal de produtos" subtitulo={`${dados.empresa} · cadastros e perfis tributários por empresa`} etiquetas={<><Badge tom="info">{rotuloRegimeFiscal(dados.regime)}</Badge><Badge tom="neutro">CRT {dados.crt}{dados.crtConfigurado ? " configurado" : " sugerido"}</Badge></>} acao={<Link href="/config"><Button tamanho="sm" variante="secundario" icone="voltar">Voltar às configurações</Button></Link>} />
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Kpi rotulo="Produtos" valor={String(dados.produtos.length)} detalhe="Todos os cadastros da empresa" icone="etiqueta" /><Kpi rotulo="Precisam de revisão" valor={String(precisaRevisao)} detalhe="Dados ausentes ou inconsistentes" icone="alerta" tom={precisaRevisao ? "alerta" : "ok"} /><Kpi rotulo="Perfis ativos" valor={String(perfisAtivos.length)} detalhe="Modelos de preenchimento" icone="documento" tom="info" /><Kpi rotulo="Códigos próprios" valor={String(dados.codigos.filter((c) => c.ativo).length)} detalhe="Referências cadastradas pela empresa" icone="grafico" /></div>
     <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-[12px] leading-relaxed text-amber-900"><strong>Revise com sua contabilidade.</strong> Os códigos e alíquotas devem ser confirmados pela empresa. Valores já existentes podem ser padrões legados ou de teste, não uma validação fiscal. O sistema verifica formato e compatibilidade básica, mas não comprova vigência nem calcula automaticamente ICMS-ST, FCP ou incidência tributária. Os dados seguem no contrato canônico; o mapeamento do provedor exige homologação. Perfis são cópias explícitas e não atualizam produtos sozinhos. <a className="font-semibold underline" href="https://www.nfe.fazenda.gov.br/portal/listaConteudo.aspx?tipoConteudo=%2FNJarYc9nus%3D" target="_blank" rel="noopener noreferrer">Consultar tabelas oficiais NF-e</a>.</div>
-    {dados.metasTabelas && dados.metasTabelas.length > 0 && (
-      <div className="rounded-xl border border-ink-100 bg-ink-50/50 px-4 py-2.5 text-[11.5px] leading-relaxed text-ink-600">
-        <strong>Tabelas oficiais carregadas como opções:</strong>{" "}
-        {dados.metasTabelas.map((m) => `${m.tipo} (${m.total})`).join(" · ")}{" "}
-        — fontes: {Array.from(new Set(dados.metasTabelas.map((m) => m.referencia || m.fonte))).join(" · ")}. Semeadas por script a partir do portal oficial; revise a vigência antes de operar.
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-ink-100 bg-ink-50/50 px-4 py-2.5 text-[11.5px] leading-relaxed text-ink-600">
+      <div className="min-w-0 flex-1">
+        {dados.metasTabelas && dados.metasTabelas.length > 0 ? (
+          <><strong>Tabelas oficiais carregadas como opções:</strong>{" "}
+          {dados.metasTabelas.map((m) => `${m.tipo} (${m.total})`).join(" · ")}{" "}
+          — fontes: {Array.from(new Set(dados.metasTabelas.map((m) => m.referencia || m.fonte))).join(" · ")}. Revise a vigência antes de operar.</>
+        ) : (
+          <><strong>Tabelas oficiais ainda não carregadas neste ambiente.</strong> Os seletores usam o instantâneo embutido no sistema (CST, CFOP, cClassTrib). Carregar as tabelas permite gerenciá-las pelo banco e registra fonte e data.</>
+        )}
       </div>
-    )}
+      <Button tamanho="sm" variante="secundario" icone="atualizar" disabled={ocupado} onClick={async () => {
+        if (!window.confirm("Carregar/atualizar as tabelas fiscais de referência (CST PIS/COFINS/IPI/IBS-CBS, CST ICMS, CSOSN, CFOP, cClassTrib, origem) a partir do instantâneo oficial embutido? Nada é apagado; códigos existentes são atualizados.")) return;
+        setOcupado(true); const r = await carregarTabelasFiscaisReferencia(); setOcupado(false);
+        if (!r.ok) { toast(r.erro, "erro"); return; } toast(r.aviso); router.refresh();
+      }}>{dados.metasTabelas && dados.metasTabelas.length > 0 ? "Atualizar tabelas" : "Carregar tabelas oficiais"}</Button>
+    </div>
     {dados.crtSugerido && dados.crtConfigurado && dados.crt !== dados.crtSugerido && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">O CRT configurado ({dados.crt}) difere do normalmente associado ao regime informado ({dados.crtSugerido}). Revise a empresa e o CRT em Configurações antes de aplicar regras.</div>}
     {!dados.crtConfigurado && <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-800">{dados.crtSugerido ? `CRT ${dados.crtSugerido} sugerido pelo regime cadastrado.` : "Regime não identificado para sugerir o CRT."} Confirme o regime e o CRT em Configurações fiscais; eles não foram alterados automaticamente.</div>}
     <Abas atual={aba} aoTrocar={(v) => { setAba(v); setBusca(""); }} abas={[{ id: "produtos", rotulo: "Produtos", contagem: dados.produtos.length }, { id: "perfis", rotulo: "Perfis fiscais", contagem: dados.perfis.length }, { id: "codigos", rotulo: "Códigos da empresa", contagem: dados.codigos.length }]} />

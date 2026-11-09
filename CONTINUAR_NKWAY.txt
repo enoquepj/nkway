@@ -66,6 +66,10 @@ ESTADO DO PRODUTO NO GITHUB:
 
 - ESTOQUE (2026-11-09, local sobre 537014c): posição com giro/cobertura/ABC/reposição, aba Reposição (sugestão de compra), kardex com extrato por produto e filtro por usuário, inventário com leitor de código de barras, rótulo da contagem, modos e CSV; `ajustarEstoque`/`lancarInventario` transacionais com FOR UPDATE. `src/lib/estoqueIndicadores.ts`, `vendasPorProdutoRecentes` em dados.ts. Suíte `testar-estoque.mjs` (11). Sem migração.
 
+- PDV OFFLINE (2026-11-09, local sobre ef73091): idempotência da fila por `idFila` (marca `[fila:id]` em observacao, origem pdv_offline, reenvio devolve `duplicada:true` sem gravar); auto-sync ao voltar online e a cada 60 s; faixa de status offline/fila; comprovante provisório; `public/sw.js` reescrito para o Next e registrado no layout do PDV. Suíte `testar-pdv-offline.mjs` (11). Sem migração.
+
+- CARGA DAS TABELAS FISCAIS (2026-11-09, local sobre ef73091): botão "Carregar/Atualizar tabelas oficiais" na central fiscal (`carregarTabelasFiscaisReferencia`, config.gerenciar) faz upsert idempotente de `nk_tabela_dominio`/`_meta` a partir dos instantâneos embutidos, com auditoria; nada apagado. Em produção: clicar uma vez depois do deploy. Suíte tabelas 19.
+
 ANTES DE EDITAR:
 - Compare a tarefa com o código atual do GitHub; não misture versões/zip de outra sessão.
 - Rode o baseline do projeto conforme `CONTEXTO_ARENA.md`.

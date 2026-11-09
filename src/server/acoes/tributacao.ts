@@ -7,6 +7,7 @@ import { parametrosFiscais, produtos, produtoTributacoes } from "@/db/schema";
 import { CAMPOS_TRIBUTARIOS, REGIMES_FISCAIS, aplicarPerfilTributarioPreservando, crtSugeridoParaRegime, diffPerfilTributario, validarCodigoFiscal, validarParametrosTributarios, validarRegimeTributario, type ParametrosTributarios } from "@/lib/tributacao";
 import { registrarAuditoria } from "@/server/auditoria";
 import { hashPerfilFiscal, lerParametrosSalvos, resolverCrtFiscal } from "@/server/tributacaoCore";
+import { carregarTabelasDominioEmbutidas, type ResultadoCargaDominio } from "@/server/tabelasDominio";
 import { corpo, exigirPermissao, texto } from "@/server/tenant";
 
 export type ResultadoTributacao = { ok: true; id: string; aviso: string } | { ok: false; erro: string };
@@ -243,4 +244,15 @@ function avisosTributariosLocal(dados: ParametrosTributarios, crt: number): stri
 function perfilDadosTemClassificacao(dados: unknown): boolean {
   const d = dados && typeof dados === "object" ? dados as Record<string, unknown> : {};
   return Boolean(String(d.ncm ?? "") || String(d.cest ?? ""));
+}
+
+/** Carga administrativa das tabelas fiscais de referência (CST, CFOP, cClassTrib, origem) a partir dos instantâneos embutidos. Idempotente e auditada. */
+export async function carregarTabelasFiscaisReferencia(): Promise<{ ok: true; resultados: ResultadoCargaDominio[]; aviso: string } | { ok: false; erro: string }> {
+  try {
+    const { empresaId, usuario } = await exigirPermissao("config.gerenciar");
+    const resultados = await carregarTabelasDominioEmbutidas(db, { empresaId, id: usuario.id, nome: usuario.nome, papel: usuario.papel });
+    atualizarTelas();
+    const novas = resultados.reduce((s, r) => s + r.inseridas, 0), mudadas = resultados.reduce((s, r) => s + r.atualizadas, 0);
+    return { ok: true, resultados, aviso: `Tabelas de referência carregadas: ${novas} código(s) novo(s), ${mudadas} atualizado(s), ${resultados.length} tabelas. Seleção de código não certifica enquadramento.` };
+  } catch (e) { const f = falha(e); return { ok: false, erro: f.ok ? "Falha inesperada." : f.erro }; }
 }

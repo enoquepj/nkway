@@ -76,8 +76,7 @@ import {
   validarCancelamentoDocumentoPdv,
   validarMovimentoGavetaPdv,
   type ItemFilaOfflinePdv,
-  type ReciboTermicoPdv,
-} from "@/lib/operacoesPdv";
+  type ReciboTermicoPdv, gerarIdFilaPdv, idadeFilaOfflineHoras } from "@/lib/operacoesPdv";
 import {
   calcularResumoPagamentoPdv,
   editarParcelaPagamentoPdv,
@@ -286,6 +285,7 @@ export function PdvView({
 
   // Etapa 5 — Estado de conectividade e fila offline
   const [online, setOnline] = useState(true);
+  const sincronizandoRef = useRef(false);
   const [ocupado, setOcupado] = useState(false);
   const [fila, setFila] = useState<number>(0);
   const [editando, setEditando] = useState<string | null>(null);
@@ -1133,6 +1133,8 @@ export function PdvView({
         unidade: l.unidade,
       }));
 
+      // Id único da operação: vai junto com a venda e, se a resposta se perder, o reenvio da fila não duplica no servidor.
+      const idFilaOperacao = gerarIdFilaPdv();
       setOcupado(true);
       try {
         const r =
@@ -1143,6 +1145,7 @@ export function PdvView({
                 clienteNome: cliente?.nome ?? "CONSUMIDOR",
                 desconto,
                 validade: validadeDav,
+                idFila: idFilaOperacao,
               })
             : davCarregado && podeFaturarDav
               ? await faturarDav({
@@ -1162,6 +1165,7 @@ export function PdvView({
                     clienteNome: cliente?.nome ?? "CONSUMIDOR",
                     desconto,
                     pagamentos: payloadPagamentos,
+                    idFila: idFilaOperacao,
                   })
                 : await registrarVenda({
                     itens,
@@ -1171,6 +1175,7 @@ export function PdvView({
                     pagamentos: payloadPagamentos,
                     tipo: "fiscal",
                     modelo,
+                    idFila: idFilaOperacao,
                   });
 
         if (!r.ok) return toast(r.erro, "erro");
@@ -1215,6 +1220,7 @@ export function PdvView({
         const novaLista = sanitizarFilaOfflinePdv([
           ...filaAtual,
           {
+            idFila: idFilaOperacao,
             tipo: tipoFila,
             itens,
             clienteId,
@@ -1224,13 +1230,22 @@ export function PdvView({
             modelo,
             validade: modo === "dav" ? validadeDav : undefined,
             criadoEm: Date.now(),
+            operadorNome: usuario.nome,
+            terminal: sessaoCaixa?.terminal ?? "",
           },
         ]);
         persistirFilaOffline(novaLista);
         setModalFinalizar(false);
         setConfirmandoEmissaoNfce(false);
+        setCupom(montarReciboDeFechamentoPdv({
+          id: idFilaOperacao, modo, numeroVenda: 0, numeroNota: null, modelo: modo === "emitir_nfce" ? modelo : null,
+          situacaoFiscal: "nao_emitida", chave: null, protocolo: null, clienteNome: cliente?.nome ?? "CONSUMIDOR", clienteDocumento: cliente?.documento ?? "",
+          operador: usuario.nome, terminal: sessaoCaixa?.terminal ?? "CAIXA 1", ambiente: empresa.ambiente, itens: itensSnapshot, subtotal, desconto, total,
+          pagamentosBrutos: payloadPagamentos, troco: round2(Math.max(0, somaPagamentos - total)), validadeDav: modo === "dav" ? validadeDav : null,
+          offline: true,
+        }));
         descartarVendaLocal();
-        toast(`Sem conexão com o servidor. Venda nº ${novaLista.length} guardada na fila offline.`, "erro");
+        toast(`Sem conexão. Venda guardada na fila offline (${novaLista.length} pendente${novaLista.length === 1 ? "" : "s"}); será enviada automaticamente quando a conexão voltar.`, "erro");
       } finally {
         setOcupado(false);
       }
@@ -1765,8 +1780,11 @@ export function PdvView({
     }
     if (listaAtual.length === 0) return;
 
+    if (sincronizandoRef.current) return;
+    sincronizandoRef.current = true;
     setOcupado(true);
     let ok = 0;
+    let duplicadas = 0;
     let ultimoErroMsg = "";
     const restante: ItemFilaOfflinePdv[] = [];
 
@@ -1785,9 +1803,11 @@ export function PdvView({
           pagamentos: item.pagamentos,
           modelo: item.modelo,
           validade: item.validade,
+          idFila: item.idFila,
         });
         if (r.ok) {
           ok++;
+          if (r.duplicada) duplicadas++;
         } else {
           ultimoErroMsg = r.erro;
           restante.push({
@@ -1808,17 +1828,29 @@ export function PdvView({
 
     persistirFilaOffline(restante);
     setOcupado(false);
+    sincronizandoRef.current = false;
     if (restante.length === 0) {
       setModalFilaOffline(false);
     }
     toast(
       ok
-        ? `${ok} venda(s) da fila sincronizada(s) com sucesso.`
+        ? `${ok} venda(s) da fila sincronizada(s)${duplicadas ? ` (${duplicadas} já constava no servidor, sem duplicar)` : ""}.`
         : ultimoErroMsg || "Nada sincronizado — verifique caixa aberto ou conexão.",
       ok ? "ok" : "erro",
     );
     if (ok > 0) router.refresh();
   }
+  const sincronizarRef = useRef(sincronizar);
+  sincronizarRef.current = sincronizar;
+
+  // Auto-sincronização: ao voltar a conexão (e a cada 60 s com fila pendente), reenvia sem o operador precisar clicar.
+  useEffect(() => {
+    const tentar = () => { if (navigator.onLine && fila > 0 && !ocupado) void sincronizarRef.current(); };
+    const onOnline = () => setTimeout(tentar, 1500);
+    window.addEventListener("online", onOnline);
+    const timer = window.setInterval(tentar, 60_000);
+    return () => { window.removeEventListener("online", onOnline); window.clearInterval(timer); };
+  }, [fila, ocupado]);
 
   function abrirImpressaoDeVenda(v: VendaDto) {
     setImprimindo({
@@ -2010,8 +2042,24 @@ export function PdvView({
   const atalhosBarraInferior = useMemo(() => ATALHOS_PDV.filter((a) => a.exibirNaBarra), []);
   const resumoFilaOffline = useMemo(() => resumirFilaOfflinePdv(itensFilaOffline), [itensFilaOffline]);
 
+  const idadeFilaHoras = idadeFilaOfflineHoras(itensFilaOffline);
   return (
     <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-[#eef0f4]">
+      {(!online || fila > 0) && (
+        <div role="status" aria-live="polite" data-testid="faixa-offline"
+          className={cn("flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-3 py-1 text-center text-[12px] font-semibold",
+            !online ? "bg-rose-600 text-white" : "bg-amber-400 text-ink-900")}>
+          {!online ? (
+            <span>SEM CONEXÃO — vendendo em modo offline. As vendas ficam guardadas neste terminal e serão enviadas automaticamente quando a internet voltar. Não feche esta aba.</span>
+          ) : (
+            <span>{fila} venda(s) aguardando envio{idadeFilaHoras !== null && idadeFilaHoras >= 1 ? ` · a mais antiga há ${idadeFilaHoras} h` : ""}. Sincronizando automaticamente…</span>
+          )}
+          {fila > 0 && online && (
+            <button type="button" className="rounded bg-ink-900/10 px-2 py-0.5 text-[11px] font-bold hover:bg-ink-900/20" onClick={() => void sincronizar()} disabled={ocupado}>Enviar agora</button>
+          )}
+          {idadeFilaHoras !== null && idadeFilaHoras >= 12 && <span className="rounded bg-rose-600 px-2 py-0.5 text-[11px] text-white">Fila antiga: confira antes do fechamento do caixa</span>}
+        </div>
+      )}
       {/* ETAPA 2 & ETAPA 5 — BARRA ESCURA SUPERIOR FIXA */}
       <header className="sem-impressao flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-ink-800 bg-ink-900 px-3 py-2 text-white">
         <div className="flex flex-wrap items-center gap-2.5">

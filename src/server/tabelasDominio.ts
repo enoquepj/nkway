@@ -51,3 +51,55 @@ export async function conferirTabelasDominio(): Promise<{ ok: boolean; detalhe: 
   const ok = ruins.length === 0 && faltando.length === 0;
   return { ok, detalhe: `${metas.length} metas · ${contagem.rows.length} tipos com linhas · incoerentes: ${ruins.map((r) => r.tipo).join(",") || "nenhuma"} · faltando: ${faltando.join(",") || "nenhum"}` };
 }
+
+/* ------------------------------------------------------------------ carga a partir dos instantâneos embutidos */
+
+import { CFOP_FONTE, CFOP_SAIDA_VAREJO, TABELAS_FISCAIS } from "@/lib/tabelasFiscais";
+import { CLASS_TRIB, CLASS_TRIB_VERSAO } from "@/lib/tabelaClassTrib";
+import { ORIGENS_MERCADORIA } from "@/lib/tributacao";
+import { registrarAuditoria } from "@/server/auditoria";
+
+export type ResultadoCargaDominio = { tipo: string; inseridas: number; atualizadas: number; total: number; fonte: string; referencia: string };
+
+/**
+ * Carrega/atualiza `nk_tabela_dominio` + `nk_tabela_dominio_meta` a partir dos instantâneos oficiais embutidos no código
+ * (mesmos usados como fallback pelos seletores). Idempotente: upsert por (tipo, codigo, uf); não apaga linhas existentes
+ * (códigos que saírem do instantâneo apenas deixam de ser reativados). Tabelas de referência pública: não têm tenant.
+ * Executada por ação administrativa autenticada; nunca por script com credencial fora do servidor.
+ */
+export async function carregarTabelasDominioEmbutidas(executor: Pick<typeof db, "transaction">, usuario: { empresaId: string; id: string; nome: string; papel: string }): Promise<ResultadoCargaDominio[]> {
+  type Lote = { tipo: TipoTabelaDominio; fonte: string; referencia: string; url: string; versao: string; linhas: { codigo: string; descricao: string }[] };
+  const lotes: Lote[] = [
+    ...TABELAS_FISCAIS.map((t) => ({ tipo: t.id as TipoTabelaDominio, fonte: t.fonte, referencia: t.ato, url: t.url, versao: t.conferidaEm, linhas: t.itens.map((i) => ({ codigo: i.codigo, descricao: i.descricao })) })),
+    { tipo: "cclass_trib", fonte: CLASS_TRIB_VERSAO.fonte, referencia: `IT 2025.002 v${CLASS_TRIB_VERSAO.versao}`, url: CLASS_TRIB_VERSAO.url, versao: CLASS_TRIB_VERSAO.versao, linhas: CLASS_TRIB.map(([codigo, nome]) => ({ codigo, descricao: nome })) },
+    { tipo: "cfop", fonte: CFOP_FONTE.fonte, referencia: CFOP_FONTE.ato, url: CFOP_FONTE.url, versao: CFOP_FONTE.conferidaEm, linhas: CFOP_SAIDA_VAREJO.map((i) => ({ codigo: i.codigo, descricao: i.descricao })) },
+    { tipo: "origem", fonte: "Convênio SINIEF s/nº 1970 — Tabela A (origem da mercadoria)", referencia: "Ajuste SINIEF 20/2012", url: "https://www.confaz.fazenda.gov.br/legislacao/ajustes/2012/AJ_020_12", versao: "2026-11-09", linhas: ORIGENS_MERCADORIA.map((o) => ({ codigo: o.id, descricao: o.rotulo.replace(/^\d\s+—\s+/, "") })) },
+  ];
+  return executor.transaction(async (tx) => {
+    const resultados: ResultadoCargaDominio[] = [];
+    for (const lote of lotes) {
+      const existentes = await tx.select({ codigo: tabelaDominio.codigo, descricao: tabelaDominio.descricao, ativo: tabelaDominio.ativo }).from(tabelaDominio).where(sql`${tabelaDominio.tipo} = ${lote.tipo} and ${tabelaDominio.uf} = ''`);
+      const mapa = new Map(existentes.map((e) => [e.codigo, e]));
+      let inseridas = 0, atualizadas = 0;
+      for (const l of lote.linhas) {
+        const atual = mapa.get(l.codigo);
+        if (!atual) {
+          await tx.insert(tabelaDominio).values({ tipo: lote.tipo, codigo: l.codigo, descricao: l.descricao, uf: "", fonte: lote.fonte, versao: lote.versao, ativo: true });
+          inseridas++;
+        } else if (atual.descricao !== l.descricao || !atual.ativo) {
+          await tx.update(tabelaDominio).set({ descricao: l.descricao, ativo: true, fonte: lote.fonte, versao: lote.versao, atualizadoEm: new Date() }).where(sql`${tabelaDominio.tipo} = ${lote.tipo} and ${tabelaDominio.codigo} = ${l.codigo} and ${tabelaDominio.uf} = ''`);
+          atualizadas++;
+        }
+      }
+      const [{ n }] = (await tx.execute<{ n: number }>(sql`select count(*)::int as n from nk_tabela_dominio where tipo = ${lote.tipo} and ativo`)).rows;
+      const total = Number(n); // total ativo real (inclui linhas preexistentes de outras cargas, que são preservadas)
+      await tx.insert(tabelaDominioMeta).values({ tipo: lote.tipo, fonte: lote.fonte, referencia: lote.referencia, url: lote.url, versao: lote.versao, total, atualizadoEm: new Date() })
+        .onConflictDoUpdate({ target: tabelaDominioMeta.tipo, set: { fonte: lote.fonte, referencia: lote.referencia, url: lote.url, versao: lote.versao, total, atualizadoEm: new Date() } });
+      resultados.push({ tipo: lote.tipo, inseridas, atualizadas, total, fonte: lote.fonte, referencia: lote.referencia });
+    }
+    await registrarAuditoria({ empresaId: usuario.empresaId, usuario: { id: usuario.id, nome: usuario.nome, papel: usuario.papel }, acao: "fiscal.tabelas_dominio_carregar", entidade: "tabela_dominio", registroId: "embutidas",
+      resumo: `Tabelas fiscais de referência carregadas a partir dos instantâneos embutidos: ${resultados.map((r) => `${r.tipo} ${r.total}`).join(" · ")}`,
+      alteracoes: { resultados, observacao: "Tabelas públicas sem tenant; carga idempotente; nada apagado" } }, tx);
+    return resultados;
+  });
+}

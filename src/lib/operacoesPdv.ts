@@ -211,12 +211,15 @@ export function montarReciboDeFechamentoPdv(params: {
   troco: number;
   validadeDav?: string | null;
   dataIso?: string;
+  /** Venda guardada na fila offline: comprovante provisório, sem número definitivo nem validade fiscal. */
+  offline?: boolean;
 }): ReciboTermicoPdv {
   const tipo: "fiscal" | "sem_nota" | "dav" =
     params.modo === "dav" ? "dav" : params.modo === "sem_nota" ? "sem_nota" : "fiscal";
   const modeloEfetivo = tipo === "fiscal" ? params.modelo ?? "NFC-e" : null;
-  const documentoRotulo =
-    tipo === "dav"
+  const documentoRotulo = params.offline
+    ? `COMPROVANTE PROVISÓRIO · OFFLINE · ${params.id.slice(-8).toUpperCase()}`
+    : tipo === "dav"
       ? `DAV #${params.numeroVenda}`
       : tipo === "sem_nota"
         ? `Venda #${params.numeroVenda} (sem nota)`
@@ -296,7 +299,9 @@ export function montarReciboDeFechamentoPdv(params: {
     chave: cab.chave,
     chaveFormatada: cab.chaveFormatada,
     protocolo: cab.protocolo,
-    avisoFiscal: cab.avisoFiscal,
+    avisoFiscal: params.offline
+      ? "SEM CONEXÃO: venda registrada na fila offline deste terminal e ainda NÃO enviada ao servidor. Este comprovante é provisório, sem número definitivo e sem validade fiscal; a numeração e a NFC-e (se houver) serão geradas na sincronização."
+      : cab.avisoFiscal,
     validadeDav: tipo === "dav" ? (params.validadeDav ?? null) : null,
   };
 }
@@ -810,7 +815,22 @@ export type ItemFilaOfflinePdv = {
   ultimoErro: string | null;
   totalEstimado: number;
   qtdUnidades: number;
+  operadorNome?: string;
+  terminal?: string;
 };
+
+/** Id único da operação gerado no navegador (idempotência no servidor). Só caracteres seguros para a marca `[fila:...]`. */
+export function gerarIdFilaPdv(agora = Date.now()): string {
+  const aleatorio = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID().replace(/-/g, "").slice(0, 12) : Math.random().toString(36).slice(2, 14);
+  return `pdv-${agora.toString(36)}-${aleatorio}`;
+}
+
+/** Horas desde o item mais antigo da fila (null se vazia). Usado para alertar fila "esquecida". */
+export function idadeFilaOfflineHoras(itens: readonly ItemFilaOfflinePdv[], agora = Date.now()): number | null {
+  if (!itens.length) return null;
+  const maisAntigo = Math.min(...itens.map((i) => i.criadoEm));
+  return Math.max(0, Math.round(((agora - maisAntigo) / 3_600_000) * 10) / 10);
+}
 
 /**
  * Sanitiza os registros armazenados em `localStorage["nkway.fila"]`, preservando 100% de compatibilidade
@@ -863,6 +883,8 @@ export function sanitizarFilaOfflinePdv(bruto: unknown): ItemFilaOfflinePdv[] {
         ultimoErro: typeof v.ultimoErro === "string" && v.ultimoErro ? v.ultimoErro : null,
         totalEstimado,
         qtdUnidades,
+        ...(typeof v.operadorNome === "string" && v.operadorNome ? { operadorNome: v.operadorNome } : {}),
+        ...(typeof v.terminal === "string" && v.terminal ? { terminal: v.terminal } : {}),
       };
     })
     .filter((item) => item.itens.length > 0);

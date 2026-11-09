@@ -51,6 +51,8 @@ export type ResultadoVenda =
       situacaoFiscal: SituacaoFiscalVenda;
       troco: number;
       aviso?: string;
+      /** Venda já existia (reenvio da fila offline): nada foi gravado de novo. */
+      duplicada?: boolean;
     }
   | { ok: false; erro: string };
 
@@ -92,7 +94,21 @@ async function gravarOperacaoPdv(params: {
   davOrigemId?: string;
   operador?: string;
   caixa?: string;
+  /** Id gerado no navegador para a fila offline; impede gravar a mesma venda duas vezes num reenvio. */
+  idFila?: string;
 }): Promise<ResultadoVenda> {
+  const idFila = params.idFila && /^[A-Za-z0-9_.-]{6,80}$/.test(params.idFila) ? params.idFila : undefined;
+  if (idFila) {
+    const marca = `[fila:${idFila}]`;
+    const [existente] = await db.select({ id: vendas.id, total: vendas.total, numero: vendas.numero, numeroNota: vendas.numeroNota, chave: vendas.chave, protocolo: vendas.protocolo, situacaoFiscal: vendas.situacaoFiscal, pagamentos: vendas.pagamentos })
+      .from(vendas).where(and(eq(vendas.empresaId, params.empresaId), sql`${vendas.observacao} like ${"%" + marca + "%"}`)).limit(1);
+    if (existente) {
+      const pagos = round2((Array.isArray(existente.pagamentos) ? (existente.pagamentos as { valor?: unknown }[]) : []).reduce((t, pg) => t + (Number(pg?.valor) || 0), 0));
+      return { ok: true, id: existente.id, total: Number(existente.total), numero: existente.numero, numeroNota: existente.numeroNota ?? null, chave: existente.chave ?? null, protocolo: existente.protocolo ?? null,
+        situacaoFiscal: (existente.situacaoFiscal ?? "nao_emitida") as SituacaoFiscalVenda, troco: round2(Math.max(0, pagos - Number(existente.total))), duplicada: true,
+        aviso: `Venda #${existente.numero} já estava gravada (reenvio da fila offline); nada foi duplicado.` };
+    }
+  }
   const itens = (Array.isArray(params.itens) ? params.itens : [])
     .map((i) => ({
       produtoId: texto((i as { produtoId?: unknown })?.produtoId),
@@ -282,13 +298,13 @@ async function gravarOperacaoPdv(params: {
           : "",
       autorizadaEm: null,
       validade: ehDav ? params.validade || somaDias(hojeISO(), 3) : null,
-      observacao: params.observacao || null,
+      observacao: [params.observacao || "", idFila ? `[fila:${idFila}]` : ""].filter(Boolean).join(" ") || null,
       operador: params.operador || params.usuario.nome || "Operador (provisório)",
       operadorId: params.usuario.id,
       caixaSessaoId: sessaoAberta?.id ?? null,
       caixa: sessaoAberta?.terminal || params.caixa || "CAIXA 1",
       ambiente,
-      origem: params.davOrigemId ? "dav" : "pdv",
+      origem: params.davOrigemId ? "dav" : idFila ? "pdv_offline" : "pdv",
       davOrigemId: params.davOrigemId ?? null,
       data: new Date(),
     })
@@ -556,6 +572,7 @@ export async function registrarDav(bruto: unknown): Promise<ResultadoVenda> {
       modelo: "NFC-e",
       validade: texto(input.validade) || undefined,
       observacao: texto(input.observacao) || undefined,
+          idFila: typeof (bruto as { idFila?: unknown })?.idFila === "string" ? (bruto as { idFila: string }).idFila : undefined,
     });
   } catch (e) {
     return comoErro(e);
@@ -588,6 +605,7 @@ export async function registrarVendaSemNota(bruto: unknown): Promise<ResultadoVe
       pagamentos: input.pagamentos ?? [],
       modelo: "NFC-e",
       observacao: texto(input.observacao) || undefined,
+          idFila: typeof (bruto as { idFila?: unknown })?.idFila === "string" ? (bruto as { idFila: string }).idFila : undefined,
     });
   } catch (e) {
     return comoErro(e);
@@ -665,6 +683,7 @@ export async function registrarVenda(bruto: unknown): Promise<ResultadoVenda> {
       pagamentos: input.pagamentos ?? [],
       modelo,
       observacao: texto(input.observacao) || undefined,
+          idFila: typeof (bruto as { idFila?: unknown })?.idFila === "string" ? (bruto as { idFila: string }).idFila : undefined,
     });
   } catch (e) {
     return comoErro(e);

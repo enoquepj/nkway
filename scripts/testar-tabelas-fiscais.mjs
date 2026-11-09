@@ -71,4 +71,53 @@ caso("formulário: CFOP vira seletor e o perfil oculta NCM/CEST preservando valo
   const f = fs.readFileSync("src/components/CamposTributarios.tsx", "utf8"); assert.match(f, /SeletorCfop/); assert.match(f, /semMercadoria/); assert.match(f, /não é aplicada aos produtos/);
   const v = fs.readFileSync("src/views/TributacaoProdutos.tsx", "utf8"); assert.match(v, /prefixo="perfil-fiscal" semMercadoria/); assert.match(v, /prefixo="produto-fiscal"(?! semMercadoria)/);
 });
-console.log(`NKWAY tabelas fiscais de referência: ${passou} cenários aprovados (sem banco, sem rede).`);
+/* ---------------- carga administrativa em banco local (idempotente, nada apagado, permissão) */
+{
+  const dotenv = require("dotenv"); const pg = require("pg"); const { drizzle } = require("drizzle-orm/node-postgres"); const { eq, sql } = require("drizzle-orm"); const { randomUUID } = require("node:crypto");
+  const env = dotenv.parse(fs.readFileSync(".env", "utf8")); const url = process.env.DATABASE_URL || env.DATABASE_URL;
+  assert.ok(url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname), "Testes de banco bloqueados fora do ambiente local.");
+  const pool = new pg.Pool({ connectionString: url }); const db = drizzle(pool);
+  let sessao = null;
+  const memo2 = new Map();
+  function carregarDb(arquivo) {
+    const abs = path.resolve(arquivo); if (memo2.has(abs)) return memo2.get(abs);
+    const mod = { exports: {} }; const codigo = ts.transpileModule(fs.readFileSync(abs, "utf8"), { fileName: abs, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
+    const importar = (n) => { if (n === "@/db") return { db }; if (n === "@/lib/session") return { contexto: async () => sessao }; if (n === "next/cache") return { revalidatePath: () => {} };
+      if (n.startsWith("@/") || n.startsWith(".")) { const b = n.startsWith("@/") ? path.resolve("src", n.slice(2)) : path.resolve(path.dirname(abs), n); return carregarDb([b, b + ".ts", b + ".tsx"].find((p) => fs.existsSync(p) && fs.statSync(p).isFile())); } return require(n); };
+    new Function("module", "exports", "require", codigo)(mod, mod.exports, importar); memo2.set(abs, mod.exports); return mod.exports;
+  }
+  const s = carregarDb("src/db/schema.ts"); const acoes = carregarDb("src/server/acoes/tributacao.ts");
+  const emp = randomUUID(), adm = randomUUID(), op = randomUUID();
+  const contar = async (tipo) => Number((await db.execute(sql`select count(*)::int as n from nk_tabela_dominio where tipo = ${tipo} and ativo`)).rows[0].n);
+  const marcador = `ZZ-fixture-${randomUUID().slice(0, 8)}`;
+  try {
+    await db.insert(s.empresas).values({ id: emp, nome: "Fixture carga", cnpj: "00000000000000", plano: "loja_mais", regime: "simples" });
+    await db.insert(s.usuarios).values([{ id: adm, empresaId: emp, nome: "Admin carga", email: `${adm}@t.invalid`, senhaHash: "x", papel: "administrador", ativo: true }, { id: op, empresaId: emp, nome: "Op", email: `${op}@t.invalid`, senhaHash: "x", papel: "operador", ativo: true }]);
+    const [empresa] = await db.select().from(s.empresas).where(eq(s.empresas.id, emp));
+    // linha "estranha" preexistente: não pode ser apagada pela carga
+    await db.insert(s.tabelaDominio).values({ tipo: "cst_pis", codigo: marcador, descricao: "linha preexistente", uf: "", fonte: "fixture", versao: "x", ativo: true });
+    sessao = { empresaId: emp, empresa, usuario: { id: op, nome: "Op", papel: "operador" } };
+    await (async () => { const r = await acoes.carregarTabelasFiscaisReferencia(); assert.equal(r.ok, false); })();
+    console.log("  ok carga: operador sem config.gerenciar é recusado");
+    passou++;
+    sessao = { empresaId: emp, empresa, usuario: { id: adm, nome: "Admin carga", papel: "administrador" } };
+    const r1 = await acoes.carregarTabelasFiscaisReferencia(); assert.equal(r1.ok, true, r1.erro);
+    const porTipo = Object.fromEntries(r1.resultados.map((x) => [x.tipo, x]));
+    assert.equal(porTipo.cclass_trib.total, 173); assert.equal(porTipo.cfop.total >= 104, true); assert.equal(porTipo.cst_ibs_cbs.total, 18); assert.equal(porTipo.origem.total, 9);
+    assert.ok(await contar("cst_pis") >= 34, "33 oficiais + a linha preexistente preservada");
+    const metas = await db.select().from(s.tabelaDominioMeta).where(eq(s.tabelaDominioMeta.tipo, "cclass_trib")); assert.match(metas[0].referencia, /1\.70/); assert.equal(metas[0].total, 173);
+    console.log("  ok carga: 10 tabelas gravadas com metadados (cClassTrib 173, CST IBS/CBS 18, origem 9) e linha preexistente preservada");
+    passou++;
+    const r2 = await acoes.carregarTabelasFiscaisReferencia(); assert.equal(r2.ok, true);
+    assert.equal(r2.resultados.reduce((t, x) => t + x.inseridas + x.atualizadas, 0), 0, "segunda carga não insere nem altera nada");
+    const aud = await db.select().from(s.auditorias).where(eq(s.auditorias.acao, "fiscal.tabelas_dominio_carregar")); assert.ok(aud.length >= 2); assert.match(aud.at(-1).resumo, /cclass_trib 173/);
+    console.log("  ok carga: idempotente (segunda execução = 0 mudanças) e auditada");
+    passou++;
+  } finally {
+    // remove a fixture e recarrega para a meta voltar a refletir o total real (diagnóstico fis-15 confere meta × linhas)
+    await db.execute(sql`delete from nk_tabela_dominio where codigo = ${marcador}`);
+    try { sessao = { empresaId: emp, empresa: (await db.select().from(s.empresas).where(eq(s.empresas.id, emp)))[0], usuario: { id: adm, nome: "Admin carga", papel: "administrador" } }; await acoes.carregarTabelasFiscaisReferencia(); } catch { /* best effort */ }
+    try { await db.delete(s.empresas).where(eq(s.empresas.id, emp)); } finally { await pool.end(); }
+  }
+}
+console.log(`NKWAY tabelas fiscais de referência: ${passou} cenários aprovados (puros + carga em banco local).`);
