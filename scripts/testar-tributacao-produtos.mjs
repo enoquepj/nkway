@@ -209,6 +209,30 @@ try {
   ok(!(await acao("excluirProduto", produtoB)).ok && Number((await client.query("select count(*)::int n from nk_movimento where produto_id=$1 and empresa_id=$2",[produtoB,empresaB])).rows[0].n) === 1, "exclusão de outra empresa não apaga seu kardex");
   const auditoria = (await client.query("select acao,empresa_id from nk_auditoria where empresa_id = any($1::uuid[]) and acao like 'fiscal.%'",[[empresaA,empresaB]])).rows;
   ok(auditoria.some((x)=>x.acao === "fiscal.produto_parametrizar" && x.empresa_id === empresaA) && auditoria.some((x)=>x.acao === "fiscal.perfil_criar" && x.empresa_id === empresaB), "alterações ficam auditadas no tenant correto");
+
+  // Etapa 3 — perfil fiscal no próprio cadastro de produtos (salvarProduto), com preservação de NCM/CEST.
+  const baseProd = { id: produtoA2, nome: "Produto fiscal A2", sku: "SKU", gtin: "SEM GTIN", categoria: "Teste", marca: "", unidade: "UN", custo: 5, preco: 20, estoque: 10, estoqueMin: 1, pesavel: false, ativo: true, ncm: "00000000", cest: "1111111", cfop: "5102", csosn: "102", icmsAliq: 0 };
+  ok(!(await acao("salvarProduto", { ...baseProd, perfilId: perfil.id }, ckOp)).ok, "usuário sem permissão não vincula perfil fiscal no cadastro");
+  ok(!(await acao("salvarProduto", { ...baseProd, perfilId: normal.id })).ok, "perfil de outra empresa é recusado no cadastro");
+  const vinc = await acao("salvarProduto", { ...baseProd, perfilId: perfil.id });
+  ok(vinc.ok, "admin vincula perfil no cadastro do produto (aplicação explícita)");
+  let compl = (await client.query("select perfil_id, dados from nk_produto_tributacao where produto_id=$1 and empresa_id=$2", [produtoA2, empresaA])).rows[0];
+  ok(compl && compl.perfil_id === perfil.id, "vínculo de perfil persistido no complemento");
+  let prodRow = (await client.query("select ncm, cest from nk_produto where id=$1", [produtoA2])).rows[0];
+  ok(prodRow.ncm === "00000000" && prodRow.cest === "1111111", "aplicar perfil PRESERVA NCM/CEST por padrão");
+  ok(compl.dados.csosn === "102" && String(compl.dados.pisAliq) === "1.65", "perfil aplicou os campos preenchidos no complemento");
+  ok((await acao("salvarProduto", { ...baseProd, preco: 21 })).ok, "salvar sem perfilId (chamada antiga) funciona");
+  compl = (await client.query("select perfil_id from nk_produto_tributacao where produto_id=$1", [produtoA2])).rows[0];
+  ok(compl.perfil_id === perfil.id, "campo perfilId ausente em chamada antiga NÃO desvincula");
+  ok((await acao("salvarProduto", { ...baseProd, perfilId: null })).ok, "desvincular é explícito");
+  compl = (await client.query("select perfil_id, dados from nk_produto_tributacao where produto_id=$1", [produtoA2])).rows[0];
+  ok(compl.perfil_id === null && compl.dados && compl.dados.csosn === "102", "desvincular preserva os valores já copiados");
+  ok((await acao("salvarProduto", { ...baseProd, perfilId: perfil.id, sobrescreverNcmCest: true })).ok, "reaplicar com sobrescrita explícita de NCM/CEST é permitido");
+  prodRow = (await client.query("select ncm, cest from nk_produto where id=$1", [produtoA2])).rows[0];
+  ok(prodRow.ncm === "10063021" && prodRow.cest === "1200100", "NCM/CEST do perfil só sobrescrevem o produto com flag explícita");
+  const logsPerfil = (await client.query("select acao, alteracoes from nk_auditoria where registro_id=$1 and acao like 'produto.perfil%' order by created_at", [produtoA2])).rows;
+  ok(logsPerfil.some((l) => l.acao === "produto.perfil_aplicado" && l.alteracoes.validacaoOficial === false && Array.isArray(l.alteracoes.camposAfetados)), "aplicação de perfil auditada (campos afetados, sem certificação oficial)");
+  ok(logsPerfil.some((l) => l.acao === "produto.perfil_desvinculado" && l.alteracoes.dadosPreservados === true), "desvinculação auditada com dados preservados");
   console.log(`Tributação de produtos: ${passou} verificações aprovadas.`);
 } catch (e) { console.error("Tributação de produtos: falha:", e instanceof Error ? e.message : e); process.exitCode = 1; }
 finally {

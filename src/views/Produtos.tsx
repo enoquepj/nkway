@@ -4,6 +4,9 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ConsultaNcm } from "@/components/ConsultaNcm";
 import { ConsultaCest, type OrigemCest } from "@/components/ConsultaCest";
+import { PerfilFiscalProduto } from "@/components/PerfilFiscalProduto";
+import type { ComplementoProdutoDto, PerfilFiscalResumoDto } from "@/server/dados";
+import { PARAMETROS_TRIBUTARIOS_VAZIOS } from "@/lib/tributacao";
 import {
   Badge,
   BarraFiltros,
@@ -70,11 +73,19 @@ export function ProdutosView({
   categorias,
   plano,
   podeFiscal = false,
+  perfis = [],
+  complementos = {},
+  regime = "todos",
+  crt = 1,
 }: {
   produtos: ProdutoDto[];
   categorias: string[];
   plano: { nome: string; limite: number; atuais: number };
   podeFiscal?: boolean;
+  perfis?: PerfilFiscalResumoDto[];
+  complementos?: Record<string, ComplementoProdutoDto>;
+  regime?: string;
+  crt?: number;
 }) {
   const toast = useToast();
   const [busca, setBusca] = useState("");
@@ -176,6 +187,8 @@ export function ProdutosView({
   ];
 
   const [editando, setEditando] = useState<(ProdutoInput & { id?: string }) | null>(null);
+  const [perfilSel, setPerfilSel] = useState("");
+  const [sobrescreverNcmCest, setSobrescreverNcmCest] = useState(false);
   const [formErro, setFormErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [manutencao, setManutencao] = useState(false);
@@ -263,7 +276,7 @@ export function ProdutosView({
       render: (p) => (
         <div className="flex justify-end gap-1">
           {podeFiscal && <Link href={`/config/fiscal/produtos?produto=${encodeURIComponent(p.id)}`} title="Parametrizar impostos" aria-label={`Parametrizar impostos de ${p.nome}`} className="rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-way-700"><Icon name="documento" className="size-4" /></Link>}
-          <button type="button" title="Editar" onClick={() => setEditando({ ...p })} className="rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-800">
+          <button type="button" title="Editar" onClick={() => { setEditando({ ...p }); setPerfilSel(complementos[p.id]?.perfilId ?? ""); setSobrescreverNcmCest(false); }} className="rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-800">
             <Icon name="etiqueta" className="size-4" />
           </button>
           <button
@@ -307,7 +320,7 @@ export function ProdutosView({
             <Button
               icone="mais"
               onClick={() => {
-                setEditando({ ...VAZIO });
+                setEditando({ ...VAZIO }); setPerfilSel(""); setSobrescreverNcmCest(false);
                 setFormErro("");
               }}
             >
@@ -495,6 +508,22 @@ export function ProdutosView({
             </div>
             <ConsultaNcm valor={editando.ncm} aoMudar={(ncm) => setEditando({ ...editando, ncm })} podeAtualizar={podeFiscal} disabled={ocupado} />
             <ConsultaCest valor={editando.cest ?? ""} ncm={editando.ncm} aoMudar={(cest, origem: OrigemCest) => setEditando({ ...editando, cest, cestOrigem: origem })} podeGerenciar={podeFiscal} disabled={ocupado} />
+            {podeFiscal && (
+              <PerfilFiscalProduto
+                produtoId={editando.id ?? null}
+                perfilIdVinculado={editando.id ? (complementos[editando.id]?.perfilId ?? null) : null}
+                perfis={perfis}
+                perfilSelecionado={perfilSel}
+                aoSelecionarPerfil={setPerfilSel}
+                sobrescreverNcmCest={sobrescreverNcmCest}
+                aoMudarSobrescrever={setSobrescreverNcmCest}
+                aoAplicarRascunho={(hash) => setEditando({ ...editando, perfilId: perfilSel || null, sobrescreverNcmCest, perfilHash: hash })}
+                aoDesvincularRascunho={() => { setPerfilSel(""); setEditando({ ...editando, perfilId: null, sobrescreverNcmCest: false, perfilHash: "" }); }}
+                dadosBase={{ ...PARAMETROS_TRIBUTARIOS_VAZIOS, ncm: editando.ncm, cest: editando.cest ?? "", cfop: editando.cfop, csosn: editando.csosn, icmsAliq: String(editando.icmsAliq) }}
+                regime={regime}
+                disabled={ocupado}
+              />
+            )}
             <div className="grid gap-3 sm:grid-cols-4">
               <Campo rotulo="Estoque atual">
                 <Input dinheiro valor={String(editando.estoque)} aoMudar={(v) => setEditando({ ...editando, estoque: Number(v.replace(",", ".")) || 0 })} disabled={!!editando.id} />

@@ -30,11 +30,25 @@ const REFORMA: CampoFiscal[] = [
 export function CamposTributarios({ dados, aoMudar, codigos, prefixo, crt, tabelas }: { dados: ParametrosTributarios; aoMudar: (d: ParametrosTributarios) => void; codigos: CodigoFiscalDto[]; prefixo: string; crt: number; tabelas?: Record<string, { codigo: string; descricao: string }[]> }) {
   const campo = (item: CampoFiscal) => {
     const idLista = item.tipo ? `${prefixo}-${item.tipo}` : undefined;
+    // Quando há tabela oficial de domínio para o tipo, o campo vira SELEÇÃO (Select) dentro da tabela;
+    // sem tabela, continua como texto com datalist dos códigos locais.
+    const linhasTabela = item.tipo ? (tabelas?.[item.tipo] ?? []) : [];
+    if (item.tipo && !item.aliquota && linhasTabela.length > 0) {
+      const atual = dados[item.campo];
+      const opcoes = [
+        { valor: "", rotulo: "Não informado" },
+        ...linhasTabela.map((l) => ({ valor: l.codigo, rotulo: `${l.codigo} — ${l.descricao}` })),
+        ...(atual && !linhasTabela.some((l) => l.codigo === atual) ? [{ valor: atual, rotulo: `${atual} — valor atual (fora da tabela)` }] : []),
+      ];
+      return <Campo key={item.campo} rotulo={item.rotulo} dica={item.dica}>
+        <Select valor={atual} aoMudar={(v) => aoMudar({ ...dados, [item.campo]: v })} opcoes={opcoes} />
+      </Campo>;
+    }
     return <Campo key={item.campo} rotulo={item.rotulo} dica={item.dica}>
       <Input valor={dados[item.campo]} aoMudar={(v) => aoMudar({ ...dados, [item.campo]: v })} list={idLista} inputMode={item.aliquota ? "decimal" : item.campo === "beneficioFiscal" ? "text" : "numeric"} placeholder={item.placeholder} className="font-mono" maxLength={item.aliquota ? 6 : 20} />
     </Campo>;
   };
-  const tiposListas = Array.from(new Set<TipoCodigoFiscal>(["csosn", "cst_icms", ...codigos.filter((c) => c.ativo).map((c) => c.tipo)]));
+  const tiposListas = Array.from(new Set<string>(["csosn", "cst_icms", ...codigos.filter((c) => c.ativo).map((c) => c.tipo), ...Object.keys(tabelas ?? {})])) as TipoCodigoFiscal[];
   return (
     <div className="space-y-4">
       {tiposListas.map((tipo) => {
