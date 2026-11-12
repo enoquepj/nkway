@@ -42,7 +42,7 @@ A rota `/config/fiscal/produtos` reúne **Produtos**, **Perfis fiscais** e **Có
 
 ## NCM por fonte pública — etapa 1 (2026-11-08)
 
-**Base reconferida:** `main cf0200d` já contém a central e os perfis descritos acima. A consulta NCM desta etapa e a identificação de deploy anterior são entregas locais ainda não publicadas. O health público respondeu 200, mas isso não comprova a versão ativa nem o funcionamento fiscal autenticado. CEST (etapa 2), perfil no formulário principal (etapa 3) e aceite global do roteiro permanecem pendentes.
+**Base atual:** `main a16fe24` (produção comprovada no commit em 2026-11-12 via `/api/health` + `/api/versao`). NCM (etapa 1, `8186ae1`), CEST (etapa 2) e perfil no cadastro (etapa 3, ambas em `bf2931d`) já estão versionados. O aceite contábil/SEFAZ global (etapa 4) permanece pendente; sem teste autenticado fiscal em produção nesta sessão.
 
 ### Fonte, proveniência, frequência e licença
 
@@ -88,7 +88,7 @@ Migração **aditiva e idempotente** `supabase/migrations/20261108_catalogo_ncm.
 
 `scripts/testar-ncm.mjs` usa `scripts/fixtures/ncm.json` e geradores sintéticos **somente em empresas temporárias de banco local**, removidas ao fim. Cobre 85 cenários de modelo/fonte simulada/interface/banco, mais 6 em `--http`: zero inicial, hierarquia, descrição com acentos/ancestrais, limites, falhas e atualização diária, recuo, concorrência, resposta/erro atrasado, auditoria/rollback, permissões, isolamento, criação/edição sem aplicação de perfil e preservação literal de legado. Hashes confirmam que produtos, notas/XMLs, movimentos e parâmetros preexistentes não mudaram. Os testes dos handlers da interface são unitários; não são prova de homologação fiscal ou de uso autenticado em produção.
 
-O smoke chama o modo `--http` após o build/prévia. As suítes existentes de caixa, relatórios, fechamento cego, tributação e identificação de deploy permanecem. O modo opcional `--fonte-real` é uma consulta separada à Receita, sem banco e sem credenciais; não faz parte do build nem torna a validação automatizada dependente da internet. Nenhuma emissão real foi feita. CEST e aplicação de perfil no cadastro **não estão implementados por esta etapa**; IBS/CBS continua parcial, conforme os limites anteriores.
+O smoke chama o modo `--http` após o build/prévia. As suítes existentes permanecem. O modo `--fonte-real` é consulta separada à Receita, sem banco e sem credenciais; não faz parte do build. Nenhuma emissão real foi feita. CEST e perfil no cadastro estão implementados nas etapas 2 e 3 (ver abaixo); IBS/CBS continua parcial, conforme os limites anteriores.
 
 ## Tabelas de domínio oficiais como opções selecionáveis (2026-11-09)
 
@@ -117,3 +117,20 @@ O smoke chama o modo `--http` após o build/prévia. As suítes existentes de ca
 - **CFOP de saída e CFOP interestadual** viraram seletores "código — descrição" em `CamposTributarios` (perfil e tributação do produto). Fonte: `CFOP_SAIDA_VAREJO` em `src/lib/tabelasFiscais.ts` — **subconjunto do varejo/comércio com 104 códigos** dos grupos 5, 6 e 7 (vendas, transferências, devoluções de compra, ST, bonificação, remessas, baixas, "outras saídas"), redação do Anexo CFOP do Convênio SINIEF s/nº 1970 (Ajuste SINIEF 07/2001 e alterações). Não é a tabela completa: prestações de serviço e CFOPs de indústria/energia/combustíveis/comunicação ficam de fora, e qualquer CFOP válido continua digitável por **Outro código…**. Cascata: `nk_tabela_dominio` (tipo `cfop`) tem prioridade quando carregada. O CFOP interestadual lista só o grupo 6.
 - **Modal de perfil fiscal sem NCM/CEST** (`semMercadoria` em `CamposTributarios`, ligado só em `prefixo="perfil-fiscal"`): os campos saem do formulário do perfil porque são atributos da mercadoria, não da operação. Perfis históricos que já têm NCM/CEST **não são alterados**: o valor fica preservado no JSON e um aviso informa que ele não é aplicado aos produtos salvo escolha explícita (regra da Etapa 3 mantida). A ficha do produto continua mostrando NCM/CEST.
 - Sem mudança de servidor, validação, emissão, banco ou variáveis. Testes: `scripts/testar-tabelas-fiscais.mjs` passou a 16 cenários.
+
+## CEST assistido — etapa 2 (código no `main` `bf2931d`, produção `a16fe24`)
+
+- **Decisão de fonte:** o CONFAZ publica o CEST apenas nos anexos em PDF do Convênio ICMS 92/2015 (atualizados por 52/2017, 142/2018 e seguintes), sem fonte oficial estruturada. Nenhuma tabela de terceiro foi adotada sem revisão de licença. A etapa implementa **referência local por empresa**, com proveniência declarada por registro — nunca apresentada como tabela oficial e nunca aplicada automaticamente.
+- **Modelo:** `src/lib/cest.ts` (puro, sem rede/banco): CEST de 7 dígitos `SS.III.DD`, descrição, NCMs relacionados (prefixos de 2/4/6/8 dígitos, como nos anexos), fonte/ato/vigência, busca normalizada. Limites: 5.000 registros/empresa, 50 NCMs/registro, 20 itens/página.
+- **Persistência aditiva:** `nk_catalogo_cest` (`empresa_id` PK, `supabase/migrations/20261109_catalogo_cest.sql` + `src/db/migracao.ts`). Não altera produtos, notas, parâmetros, legado, RLS ou conexão.
+- **API/servidor:** `GET /api/fiscal/cest` (leitura, sessão + `cadastros.produtos` ou `config.gerenciar`, snapshot consistente, sem enviar catálogo inteiro); gravação só via `config.gerenciar` com auditoria. `src/server/cestCore.ts`: consulta por prefixo de CEST (1–7 dígitos), prefixo/exato de NCM/SH ou texto livre; CRUD valida unicidade e preserva integridade em falha.
+- **Tela:** `src/components/ConsultaCest.tsx` no cadastro de Produtos: busca, paginação, proveniência visível, seleção explícita só no rascunho + salvar. Preenchimento manual continua possível.
+- **Testes:** `scripts/testar-cest.mjs` (modelo, validação, isolamento por empresa, permissões, concorrência, rollback, HTTP local) no smoke; diagnóstico `fis-14`. Limite: referência local não é validação oficial do enquadramento — conferir anexos/atos vigentes com a contabilidade.
+
+## Perfil fiscal no cadastro — etapa 3 (código no `main` `bf2931d`, produção `a16fe24`)
+
+- **Princípio:** NCM/CEST são da mercadoria; perfil é modelo reutilizável da operação. Seleção ≠ aplicação: nada muda até "Aplicar no rascunho" + "Salvar produto".
+- **Componente:** `src/components/PerfilFiscalProduto.tsx` no cadastro: seletor de perfil (com regime e estado ativo/inativo), botão "Ver prévia antes/depois" (para produto existente a prévia é recalculada no servidor via `preverPerfilProduto`, com hash e avisos de compatibilidade), botão "Aplicar no rascunho" e desvinculação explícita ("Nenhum perfil" + salvar desvincula sem apagar valores já copiados).
+- **Proteção NCM/CEST:** `aplicarPerfilTributarioPreservando` mantém a classificação atual por padrão; se o perfil contiver NCM/CEST diferentes, uma caixa de seleção explícita ("sobrescrita auditada") é exigida para aplicá-los. Campos vazios do perfil nunca apagam dados. Perfis históricos com NCM/CEST não foram alterados.
+- **Servidor:** `src/server/acoes/tributacao.ts` (`preverPerfilProduto`, aplicação transacional com auditoria) + `src/server/acoes/cadastros.ts` (`salvarProduto` grava produto/estoque/tributação/auditoria em transação). Tenant sempre da sessão; sem RLS, variável ou conexão nova.
+- **Limite:** a prévia/aplicação não certifica enquadramento; a etapa 4 geral (aceite contábil + homologação SEFAZ/provedor) continua pendente.

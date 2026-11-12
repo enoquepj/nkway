@@ -12,6 +12,14 @@ import {
   type Emitente,
   type MdfeImpresso,
 } from "@/lib/danfe";
+import {
+  PDV_IMPRESSAO_PADRAO,
+  deveImprimirConfissao,
+  iniciaisLogoPdv,
+  rotulosViasPdv,
+  type PdvImpressaoConfig,
+} from "@/lib/pdvImpressao";
+import type { ItemCanceladoPdv } from "@/lib/operacoesPdv";
 
 /* --------------------------------------------------------------- folha A4 */
 const Linha = ({ children, className }: { children: React.ReactNode; className?: string }) => (
@@ -28,17 +36,48 @@ const Caixa = ({ titulo, children, className }: { titulo: string; children: Reac
 );
 
 /* ------------------------------------------------------- DANFE NFC-e 80 mm */
-function CupomNfce({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: string }) {
+function CupomNfce({
+  doc,
+  emit,
+  qr,
+  cfg = PDV_IMPRESSAO_PADRAO,
+  cancelados = [],
+}: {
+  doc: DocFiscal;
+  emit: Emitente;
+  qr: string;
+  cfg?: PdvImpressaoConfig;
+  cancelados?: ItemCanceladoPdv[];
+}) {
   const tributos = tributosDoDoc(doc.itens, new Map());
+  const formas = doc.pagamentos.length ? doc.pagamentos.map((p) => p.forma) : [doc.forma];
+  const comConfissao = deveImprimirConfissao(cfg, formas, "fiscal");
+  const umaLinha = cfg.imprimirUmaLinha;
+  const fonte = cfg.tamanhoFonte === "grande" ? "text-[11.5px]" : "text-[10px]";
+  const logoTexto = cfg.logoTexto || emit.fantasia || emit.nome;
   return (
-    <div className="mx-auto w-[302px] bg-white px-3 py-3 font-mono text-[10px] leading-[1.35] text-ink-900">
+    <div className={cn("mx-auto w-[302px] bg-white px-3 py-3 font-mono leading-[1.35] text-ink-900", fonte)}>
+      {cfg.imprimeLogo && (
+        <div className="mb-1.5 flex flex-col items-center gap-1 text-center">
+          <span className="grid size-10 place-items-center rounded-full bg-ink-900 text-[13px] font-bold text-white">
+            {iniciaisLogoPdv(logoTexto)}
+          </span>
+          <p className="text-[12px] font-bold uppercase tracking-wide">{logoTexto}</p>
+        </div>
+      )}
       <div className="text-center">
         <p className="text-[11px] font-bold uppercase">{emit.fantasia || emit.nome}</p>
-        <p>{emit.nome}</p>
-        <p>
-          {emit.endereco} · {emit.municipio}/{emit.uf}
-        </p>
-        <p>CNPJ {emit.cnpj} · IE {emit.ie || "ISENTO"}</p>
+        {cfg.imprimeCabecalho ? (
+          <>
+            <p>{emit.nome}</p>
+            <p>
+              {emit.endereco} · {emit.municipio}/{emit.uf}
+            </p>
+            <p>CNPJ {emit.cnpj} · IE {emit.ie || "ISENTO"}</p>
+          </>
+        ) : (
+          <p>CNPJ {emit.cnpj}</p>
+        )}
       </div>
 
       <p className="my-2 border-y border-dashed border-ink-300 py-1 text-center font-bold uppercase">
@@ -53,33 +92,74 @@ function CupomNfce({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: stri
         {doc.ambiente === 2 && <p className="text-center font-bold uppercase">Emitida em homologação — sem valor fiscal</p>}
       </div>
 
-      <table className="mt-2 w-full border-y border-dashed border-ink-300 text-[9.5px]">
-        <thead>
-          <tr className="text-[8px] uppercase">
-            <th className="py-0.5 text-left">#</th>
-            <th className="py-0.5 text-left">Descrição</th>
-            <th className="py-0.5 text-right">Qtd</th>
-            <th className="py-0.5 text-right">Unit</th>
-            <th className="py-0.5 text-right">Total</th>
-          </tr>
-        </thead>
-        <tbody>
+      {umaLinha ? (
+        <div className="mt-2 space-y-0.5 border-y border-dashed border-ink-300 py-1">
           {doc.itens.map((i, k) => (
-            <tr key={k} className="border-t border-ink-100">
-              <td className="align-top py-0.5">{k + 1}</td>
-              <td className="align-top py-0.5">
-                {i.nome}
-                <span className="block text-[8px] text-ink-400">
-                  {i.unidade} · un {moeda(i.precoUnit)}
-                </span>
-              </td>
-              <td className="align-top py-0.5 text-right">{num(i.qtd, 3)}</td>
-              <td className="align-top py-0.5 text-right">{moeda(i.precoUnit)}</td>
-              <td className="align-top py-0.5 text-right font-bold">{moeda(i.total)}</td>
-            </tr>
+            <p key={k} className="flex justify-between gap-2">
+              <span className="min-w-0 flex-1 truncate">
+                {k + 1} {i.nome} {num(i.qtd, 3)}×{moeda(i.precoUnit)}
+                {cfg.imprimirDescontoAcrescimoItens && (i.desconto || i.acrescimo) ? (
+                  <span className="text-ink-500">
+                    {" "}
+                    ({(i.desconto ?? 0) > 0 ? `desc −${moeda(i.desconto ?? 0)}` : ""}
+                    {(i.desconto ?? 0) > 0 && (i.acrescimo ?? 0) > 0 ? " · " : ""}
+                    {(i.acrescimo ?? 0) > 0 ? `acr +${moeda(i.acrescimo ?? 0)}` : ""})
+                  </span>
+                ) : null}
+              </span>
+              <span className="shrink-0 font-bold">{moeda(i.total)}</span>
+            </p>
           ))}
-        </tbody>
-      </table>
+        </div>
+      ) : (
+        <table className="mt-2 w-full border-y border-dashed border-ink-300 text-[9.5px]">
+          <thead>
+            <tr className="text-[8px] uppercase">
+              <th className="py-0.5 text-left">#</th>
+              <th className="py-0.5 text-left">Descrição</th>
+              <th className="py-0.5 text-right">Qtd</th>
+              <th className="py-0.5 text-right">Unit</th>
+              <th className="py-0.5 text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {doc.itens.map((i, k) => (
+              <tr key={k} className="border-t border-ink-100">
+                <td className="align-top py-0.5">{k + 1}</td>
+                <td className="align-top py-0.5">
+                  {i.nome}
+                  <span className="block text-[8px] text-ink-400">
+                    {i.unidade} · un {moeda(i.precoUnit)}
+                  </span>
+                  {cfg.imprimirDescontoAcrescimoItens && ((i.desconto ?? 0) > 0 || (i.acrescimo ?? 0) > 0) && (
+                    <span className="block text-[8px] text-ink-500">
+                      {(i.desconto ?? 0) > 0 ? `Desc −${moeda(i.desconto ?? 0)}` : ""}
+                      {(i.desconto ?? 0) > 0 && (i.acrescimo ?? 0) > 0 ? " · " : ""}
+                      {(i.acrescimo ?? 0) > 0 ? `Acr +${moeda(i.acrescimo ?? 0)}` : ""}
+                    </span>
+                  )}
+                </td>
+                <td className="align-top py-0.5 text-right">{num(i.qtd, 3)}</td>
+                <td className="align-top py-0.5 text-right">{moeda(i.precoUnit)}</td>
+                <td className="align-top py-0.5 text-right font-bold">{moeda(i.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {cfg.imprimirItensCancelados && cancelados.length > 0 && (
+        <div className="mt-1.5 border border-dashed border-ink-300 p-1.5">
+          <p className="text-center text-[8.5px] font-bold uppercase text-ink-500">Itens cancelados (sem valor)</p>
+          {cancelados.map((c, k) => (
+            <p key={k} className="flex justify-between gap-2 text-[9px] text-ink-500 line-through">
+              <span className="truncate">
+                {c.nome} · {num(c.qtd, 3)} {c.unidade}
+              </span>
+              <span>{moeda(c.total)}</span>
+            </p>
+          ))}
+        </div>
+      )}
 
       <div className="mt-1.5 space-y-0.5">
         <Linha className="justify-between"><Rotulo>QTD. TOTAL DE ITENS</Rotulo><span>{doc.itens.length}</span></Linha>
@@ -103,11 +183,13 @@ function CupomNfce({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: stri
         {doc.troco > 0 && <Linha className="justify-between"><span>Troco</span><span>{moeda(doc.troco)}</span></Linha>}
       </div>
 
-      <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1.5 text-center">
-        <p className="font-bold uppercase">Tributos aproximados</p>
-        <p>Federal {moeda(round2(tributos.total - tributos.itens[0].valor))} · Municipal/Estadual {moeda(tributos.itens[0].valor)}</p>
-        <p className="text-[9px]">Total estimado {moeda(tributos.total)} — Lei 12.741/2012</p>
-      </div>
+      {cfg.exibirTributos && (
+        <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1.5 text-center">
+          <p className="font-bold uppercase">Tributos aproximados</p>
+          <p>Federal {moeda(round2(tributos.total - tributos.itens[0].valor))} · Municipal/Estadual {moeda(tributos.itens[0].valor)}</p>
+          <p className="text-[9px]">Total estimado {moeda(tributos.total)} — Lei 12.741/2012</p>
+        </div>
+      )}
 
       <div className="mt-2 border-t border-dashed border-ink-300 pt-2 text-center">
         <p className="text-[9px] leading-tight">
@@ -130,19 +212,63 @@ function CupomNfce({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: stri
         )}
       </div>
 
-      <p className="mt-2 border-t border-dashed border-ink-300 pt-1 text-center text-[8.5px]">
-        {doc.observacao || `Consumidor: ${doc.cliente} · Operador: ${doc.operador || "—"}`}
+      {comConfissao && (
+        <div className="mt-2 border border-ink-300 p-1.5 text-left">
+          <p className="text-center text-[9px] font-bold uppercase">Confissão de dívida (crediário)</p>
+          <p className="mt-1 text-[8.5px] leading-snug">
+            {cfg.confissaoTexto} Valor: <strong>{moeda(doc.total)}</strong> · Cliente: <strong>{doc.cliente}</strong>.
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-4 text-center text-[8.5px]">
+            <p className="border-t border-ink-400 pt-0.5">Assinatura do cliente</p>
+            <p className="border-t border-ink-400 pt-0.5">Assinatura do operador</p>
+          </div>
+        </div>
+      )}
+      {cfg.mensagemRodape && (
+        <p className="mt-2 border-t border-dashed border-ink-300 pt-1 text-center text-[9px] font-bold">{cfg.mensagemRodape}</p>
+      )}
+      <p className="mt-1 text-center text-[8.5px]">
+        {doc.observacao || (
+          <>
+            {cfg.exibirCliente ? `Consumidor: ${doc.cliente}` : ""}
+            {cfg.exibirCliente && cfg.exibirOperadorCaixa ? " · " : ""}
+            {cfg.exibirOperadorCaixa ? `Operador: ${doc.operador || "—"}` : ""}
+          </>
+        )}
       </p>
     </div>
   );
 }
 
 /* ---------------------------------------------------- DANFE NF-e A4 simplificado */
-function DanfeA4({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: string }) {
+function DanfeA4({
+  doc,
+  emit,
+  qr,
+  cfg = PDV_IMPRESSAO_PADRAO,
+  cancelados = [],
+}: {
+  doc: DocFiscal;
+  emit: Emitente;
+  qr: string;
+  cfg?: PdvImpressaoConfig;
+  cancelados?: ItemCanceladoPdv[];
+}) {
   const tributos = tributosDoDoc(doc.itens, new Map());
   const totQtd = doc.itens.reduce((s, i) => s + i.qtd, 0);
+  const formas = doc.pagamentos.length ? doc.pagamentos.map((p) => p.forma) : [doc.forma];
+  const comConfissao = deveImprimirConfissao(cfg, formas, "fiscal");
+  const logoTexto = cfg.logoTexto || emit.fantasia || emit.nome;
   return (
     <div className="mx-auto w-[780px] bg-white p-5 text-[10px] leading-tight text-ink-900">
+      {cfg.imprimeLogo && (
+        <div className="mb-2 flex items-center gap-2 rounded border border-ink-200 bg-ink-50/50 px-3 py-1.5">
+          <span className="grid size-9 shrink-0 place-items-center rounded-full bg-ink-900 text-[12px] font-bold text-white">
+            {iniciaisLogoPdv(logoTexto)}
+          </span>
+          <p className="text-[13px] font-bold uppercase tracking-wide">{logoTexto}</p>
+        </div>
+      )}
       <div className="flex gap-2">
         <div className="w-28 shrink-0 space-y-1 text-center">
           <div className="rounded border border-ink-300 p-1">
@@ -243,7 +369,16 @@ function DanfeA4({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: string
           {doc.itens.map((i, k) => (
             <tr key={k}>
               <td className="border border-ink-200 px-1 py-0.5">{String(k + 1).padStart(6, "0")}</td>
-              <td className="border border-ink-200 px-1 py-0.5">{i.nome}</td>
+              <td className="border border-ink-200 px-1 py-0.5">
+                {i.nome}
+                {cfg.imprimirDescontoAcrescimoItens && ((i.desconto ?? 0) > 0 || (i.acrescimo ?? 0) > 0) && (
+                  <span className="block text-[7.5px] text-ink-500">
+                    {(i.desconto ?? 0) > 0 ? `Desc −${moeda(i.desconto ?? 0)}` : ""}
+                    {(i.desconto ?? 0) > 0 && (i.acrescimo ?? 0) > 0 ? " · " : ""}
+                    {(i.acrescimo ?? 0) > 0 ? `Acr +${moeda(i.acrescimo ?? 0)}` : ""}
+                  </span>
+                )}
+              </td>
               <td className="border border-ink-200 px-1 py-0.5">{i.ncm || "—"}</td>
               <td className="border border-ink-200 px-1 py-0.5">{i.cfop || "—"}</td>
               <td className="border border-ink-200 px-1 py-0.5">{i.csosn || "—"}</td>
@@ -256,6 +391,19 @@ function DanfeA4({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: string
           ))}
         </tbody>
       </table>
+      {cfg.imprimirItensCancelados && cancelados.length > 0 && (
+        <div className="mt-1 rounded border border-dashed border-ink-300 p-1.5">
+          <p className="text-[8px] font-bold uppercase text-ink-500">Itens cancelados (sem valor)</p>
+          {cancelados.map((c, k) => (
+            <p key={k} className="flex justify-between text-[8.5px] text-ink-500 line-through">
+              <span>
+                {c.nome} · {num(c.qtd, 3)} {c.unidade}
+              </span>
+              <span>{moeda(c.total)}</span>
+            </p>
+          ))}
+        </div>
+      )}
       <div className="mt-1 grid grid-cols-4 gap-1">
         <Caixa titulo="Quantidade total de itens"><span className="text-[10px] font-bold">{num(totQtd, 3)}</span></Caixa>
         <Caixa titulo="Forma de pagamento"><span className="text-[9.5px]">{rotuloFormaImpresso(doc.forma)}</span></Caixa>
@@ -287,8 +435,22 @@ function DanfeA4({ doc, emit, qr }: { doc: DocFiscal; emit: Emitente; qr: string
         </Caixa>
       </div>
 
-      <p className="mt-2 text-center text-[7.5px] text-ink-400">
-        Emitido pelo NKWAY · {emit.fantasia || emit.nome} · {doc.operador || "—"} · {dataHoraBR(new Date())}
+      {comConfissao && (
+        <div className="mt-2 rounded border border-ink-300 p-2">
+          <p className="text-center text-[9px] font-bold uppercase">Confissão de dívida (crediário)</p>
+          <p className="mt-1 text-[8.5px] leading-snug">
+            {cfg.confissaoTexto} Valor: <strong>{moeda(doc.total)}</strong> · Cliente: <strong>{doc.cliente}</strong>.
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-8 text-center text-[8.5px]">
+            <p className="border-t border-ink-400 pt-0.5">Assinatura do cliente</p>
+            <p className="border-t border-ink-400 pt-0.5">Assinatura do operador</p>
+          </div>
+        </div>
+      )}
+      {cfg.mensagemRodape && <p className="mt-2 text-center text-[9px] font-bold">{cfg.mensagemRodape}</p>}
+      <p className="mt-1 text-center text-[7.5px] text-ink-400">
+        Emitido pelo NKWAY · {emit.fantasia || emit.nome}
+        {cfg.exibirOperadorCaixa ? ` · ${doc.operador || "—"}` : ""} · {dataHoraBR(new Date())}
       </p>
     </div>
   );
@@ -390,20 +552,29 @@ export type AlvoImpresso =
   | { tipo: "nfe"; doc: DocFiscal; emit: Emitente; cscId: string }
   | { tipo: "mdfe"; mdfe: MdfeImpresso; emit: Emitente };
 
-/** Modal de impressão: escolhe 80 mm (cupom) ou A4 conforme o documento */
-export function Impressao({ alvo, aoFechar }: { alvo: AlvoImpresso | null; aoFechar: () => void }) {
+/** Modal de impressão: 80 mm (cupom) ou A4 conforme o documento e a config do PDV (vias incluídas). */
+export function Impressao({
+  alvo,
+  aoFechar,
+  cfg = PDV_IMPRESSAO_PADRAO,
+  cancelados = [],
+}: {
+  alvo: AlvoImpresso | null;
+  aoFechar: () => void;
+  cfg?: PdvImpressaoConfig;
+  cancelados?: ItemCanceladoPdv[];
+}) {
   if (!alvo) return null;
-  const cupom = alvo.tipo === "nfe" && (alvo.doc.modelo === "NFC-e" || alvo.doc.modelo === "SAT");
+  const ehNfce = alvo.tipo === "nfe" && (alvo.doc.modelo === "NFC-e" || alvo.doc.modelo === "SAT");
+  // Etapa 1 (item 9): a config pode forçar o cupom NFC-e em A4.
+  const cupom = ehNfce && cfg.layoutCupom !== "A4";
   const qr = alvo.tipo === "nfe" ? payloadQrNfce(alvo.doc, alvo.emit, alvo.cscId) : "";
-  const nome =
-    alvo.tipo === "mdfe"
-      ? `damdfe-${alvo.mdfe.numero}`
-      : `danfe-${alvo.doc.modelo.toLowerCase()}-${String(alvo.doc.numero).padStart(9, "0")}`;
+  const vias = alvo.tipo === "nfe" ? rotulosViasPdv(cfg.nroVias) : [""];
 
   return (
     <Modal aberto aoFechar={aoFechar} largura={cupom ? "max-w-xl" : "max-w-[940px]"}
       titulo="Pré-visualização do documento"
-      descricao="Layout pronto para impressão">
+      descricao={vias.length > 1 ? `Layout pronto para impressão · ${vias.length} vias` : "Layout pronto para impressão"}>
       <div className="no-print mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="grid size-7 place-items-center rounded-lg bg-way-50 text-way-700">
@@ -414,7 +585,7 @@ export function Impressao({ alvo, aoFechar }: { alvo: AlvoImpresso | null; aoFec
               {alvo.tipo === "mdfe" ? "DAMDFE" : `DANFE ${alvo.doc.modelo}`}
             </p>
             <p className="text-[11.5px] text-ink-400">
-              {cupom ? "Bobina de 80 mm" : "Papel A4"} · use “Imprimir” e escolha o tamanho correto do papel
+              {cupom ? "Bobina de 80 mm" : "Papel A4"} · {vias.length} via{vias.length > 1 ? "s" : ""} · use “Imprimir” e escolha o tamanho correto do papel
             </p>
           </div>
         </div>
@@ -423,21 +594,30 @@ export function Impressao({ alvo, aoFechar }: { alvo: AlvoImpresso | null; aoFec
             Fechar
           </Button>
           <Button icone="imprimir" onClick={() => window.print()}>
-            Imprimir
+            Imprimir{cfg.nroVias > 1 && alvo.tipo === "nfe" ? ` (${cfg.nroVias} vias)` : ""}
           </Button>
         </div>
       </div>
 
-      <div className="print-area max-h-[72vh] overflow-auto rounded-xl bg-ink-100 p-3">
-        {alvo.tipo === "nfe" ? (
-          cupom ? (
-            <CupomNfce doc={alvo.doc} emit={alvo.emit} qr={qr} />
-          ) : (
-            <DanfeA4 doc={alvo.doc} emit={alvo.emit} qr={qr} />
-          )
-        ) : (
-          <DamdfeA4 mdfe={alvo.mdfe} emit={alvo.emit} />
-        )}
+      <div className="print-area max-h-[72vh] space-y-4 overflow-auto rounded-xl bg-ink-100 p-3">
+        {vias.map((rotuloVia, idx) => (
+          <div key={idx} className={idx > 0 ? "break-before-page border-t-4 border-dashed border-ink-300 pt-4" : ""}>
+            {rotuloVia && (
+              <p className="mx-auto mb-1 w-fit rounded bg-ink-900 px-2 py-0.5 font-mono text-[9px] font-bold uppercase text-white">
+                {rotuloVia}
+              </p>
+            )}
+            {alvo.tipo === "nfe" ? (
+              cupom ? (
+                <CupomNfce doc={alvo.doc} emit={alvo.emit} qr={qr} cfg={cfg} cancelados={cancelados} />
+              ) : (
+                <DanfeA4 doc={alvo.doc} emit={alvo.emit} qr={qr} cfg={cfg} cancelados={cancelados} />
+              )
+            ) : (
+              <DamdfeA4 mdfe={alvo.mdfe} emit={alvo.emit} />
+            )}
+          </div>
+        ))}
       </div>
     </Modal>
   );

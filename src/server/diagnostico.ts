@@ -118,6 +118,12 @@ import {
   validarMovimentoGavetaPdv,
 } from "@/lib/operacoesPdv";
 import {
+  PDV_IMPRESSAO_PADRAO,
+  deveImprimirConfissao,
+  rotulosViasPdv,
+  sanitizarConfigPdvImpressao,
+} from "@/lib/pdvImpressao";
+import {
   calcularResumoPagamentoPdv,
   editarParcelaPagamentoPdv,
   normalizarPagamentosLiquidosPdv,
@@ -1738,6 +1744,37 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("pdv-56", "PDV", "F10 seleciona DAV, Sem nota e Emitir fiscal com ↑ ↓ / 1..3 + Enter", teste56SetasOpcoesDocumentoOk, "100% operável por teclado sem uso de mouse", true);
   ok("pdv-57", "PDV", "Confirmação fiscal no F10 navega com setas, Enter confirma e Esc volta", teste57ConfirmacaoTecladoOk, "Voltar às opções ↔ Confirmar e emitir", true);
   ok("pdv-58", "PDV", "Modal F10 possui foco real nas 5 zonas e listener global único", teste58DomZonasF10Ok, "formas, valor, modelo, opções e confirmação sincronizados", true);
+
+  // Etapa 1 PDV/impressão — config por empresa, vias/confissão e recibo com cancelados
+  const cfgPadraoOk =
+    PDV_IMPRESSAO_PADRAO.nroVias === 1 &&
+    PDV_IMPRESSAO_PADRAO.layoutCupom === "80mm" &&
+    PDV_IMPRESSAO_PADRAO.confirmarAntesImprimir === true &&
+    PDV_IMPRESSAO_PADRAO.imprimeCabecalho === true;
+  const cfgSanitOk =
+    sanitizarConfigPdvImpressao({ nroVias: 99, layoutCupom: "XX" }).nroVias === 1 &&
+    sanitizarConfigPdvImpressao({ nroVias: 2 }).nroVias === 2 &&
+    sanitizarConfigPdvImpressao({ layoutCupom: "A4" }).layoutCupom === "A4";
+  const cfgViasOk =
+    rotulosViasPdv(1).length === 1 &&
+    rotulosViasPdv(2)[0] === "Via 1 de 2 — Consumidor" &&
+    deveImprimirConfissao({ ...PDV_IMPRESSAO_PADRAO, confissaoDivida: true }, ["prazo"], "fiscal") === true &&
+    deveImprimirConfissao({ ...PDV_IMPRESSAO_PADRAO, confissaoDivida: true }, ["prazo"], "dav") === false;
+  const tabelaPdvCfg = await db.execute<{ n: number }>(sql`select count(*)::int as n from information_schema.tables where table_schema='public' and table_name='nk_pdv_config'`);
+  const reciboCfgOk = (() => {
+    try {
+      const r = montarReciboDeFechamentoPdv({ id: "pdv-cfg-1", modo: "sem_nota", numeroVenda: 1, numeroNota: null, modelo: null, situacaoFiscal: "nao_emitida", chave: null, protocolo: null, clienteNome: "C", operador: "O", terminal: "T", ambiente: "2", itens: [{ nome: "X", qtd: 1, precoUnit: 10, desconto: 1 }], subtotal: 10, desconto: 0, total: 10, pagamentosBrutos: [], troco: 0, itensCancelados: [{ nome: "Y", qtd: 1, unidade: "UN", total: 5 }] });
+      return r.itens[0].desconto === 1 && r.itensCancelados?.length === 1 && r.total === 10;
+    } catch { return false; }
+  })();
+  const pdvCfgTelaOk =
+    pdvTxt.includes("pdvConfig?: PdvImpressaoConfig") &&
+    pdvTxt.includes("modalConfirmarImpressao") &&
+    pdvTxt.includes("rotulosViasPdv(pdvConfig.nroVias)") &&
+    pdvTxt.includes("cfg={pdvConfig}");
+  ok("pdv-59", "PDV", "Config de impressão tem padrão seguro e sanitização (vias/layout)", cfgPadraoOk && cfgSanitOk, "1 via · 80mm · confirmação ligada", true);
+  ok("pdv-60", "PDV", "Vias e confissão de dívida respeitam crediário (nunca em DAV)", cfgViasOk, "prazo/boleto com assinaturas; DAV excluído", true);
+  ok("pdv-61", "PDV", "Tabela nk_pdv_config existe; recibo carrega cancelados/desconto; tela usa cfg", Number(tabelaPdvCfg.rows[0]?.n ?? 0) === 1 && reciboCfgOk && pdvCfgTelaOk, "persistência por empresa + comprovante configurável", true);
 
   /* -------------------------------------------------------------- estoque */
   const ordemKardex = [...movs].sort((a, b) => new Date(a.data ?? 0).getTime() - new Date(b.data ?? 0).getTime());

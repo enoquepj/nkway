@@ -3,9 +3,9 @@
 **Objetivo:** em qualquer momento (você, TI, contador ou um chat novo de IA), saber **onde está** cada instrução e **o que fazer** sem recomeçar do zero.
 
 **Repositório:** https://github.com/enoquepj/nkway · branch `main`  
-**Base desta retomada:** `main` `cf0200d` (`atualiza_tributação`; parametrização fiscal já versionada). Entregas locais ainda não publicadas: identificação de deploy e etapa 1 de consulta oficial NCM. CEST e perfil no formulário seguem pendentes nas etapas 2 e 3.
+**Base desta retomada:** `main` `a16fe24` (`PDV_ofline`; NCM, CEST, perfil no cadastro, seletores/CFOP, DIVERGE, menu, estoque, PDV offline e carga das tabelas já versionados). Produção comprovada no mesmo commit em 2026-11-12.
 
-Nesta retomada, o health de produção respondeu HTTP 200 sem identificar o commit; `/api/versao` respondeu HTTP 404. O baseline do main foi validado em prévia e banco **locais**: tipos, build, smoke 47/47, diagnóstico 225/225, motor de caixa 16 cenários, relatórios 50, fechamento cego 48, tributação 66 e 206 chamadas de ações sem erro 500. A entrega acrescenta identificação pública sanitizada, cabeçalhos no health e conferência em `/prontidao`, sem mudar o corpo do health, schema, ações, dependências ou infraestrutura. Não houve publicação nem teste autenticado em produção; o aceite fiscal continua pendente. Detalhes no item 26 de `CONTEXTO_ARENA.md`.
+Nesta retomada, o health de produção respondeu HTTP 200 com `X-NKWAY-Commit: a16fe24…`/`production`; `/api/versao` respondeu HTTP 200 identificado no mesmo commit. O baseline do main foi validado em prévia e banco **locais**: tipos, build, smoke 55/55, diagnóstico 228/228, motor 17, relatórios 50, fechamento cego 58 e 210 chamadas de ações sem erro 500. Sem código novo nesta consolidação; sem mudança de schema, ações, dependências ou infraestrutura. Sem teste autenticado fiscal em produção; o aceite contábil/SEFAZ (etapa 4 geral) continua pendente. Detalhes no item 41 de `CONTEXTO_ARENA.md`.
 
 ---
 
@@ -33,10 +33,12 @@ Nesta retomada, o health de produção respondeu HTTP 200 sem identificar o comm
 | Item | Estado |
 |---|---|
 | Site | `https://nkway.vercel.app` |
-| Health | `GET /api/health` = HTTP 200 `{"ok":true}`; reconferido nesta retomada, ainda sem commit no cabeçalho |
-| Identificação de deploy | Entrega local sobre `cf0200d`: `GET /api/versao`, cabeçalhos do health e conferência em `/prontidao`. Produção ainda respondeu 404 na nova API. Sem metadados, informa não identificado; não altera variáveis. |
-| Parametrização fiscal de produtos | Código já no `main` `cf0200d`; publicação e homologação fiscal não são comprovadas por health 200. |
-| Consulta oficial NCM — etapa 1 | Entrega local: Produtos → Consultar NCM; API autenticada `/api/fiscal/ncm`; cache `nk_catalogo_ncm` por empresa, atualização administrativa explícita, dados e auditoria preservados em falhas. Migração aditiva exige backup/revisão antes do deploy. Sem certificação automática do enquadramento. |
+| Health | `GET /api/health` = HTTP 200 `{"ok":true}` com `X-NKWAY-Commit`/`X-NKWAY-Ambiente`; produção `a16fe24`/`production` comprovada em 2026-11-12 |
+| Identificação de deploy | Código no `main` e comprovado em produção: `GET /api/versao` (200, identificado), cabeçalhos do health e conferência em `/prontidao`. Sem metadados locais, informa não identificado; não altera variáveis. |
+| Parametrização fiscal de produtos | Código no `main` desde `cf0200d`; commit de produção comprovado (`a16fe24`); homologação fiscal segue pendente de aceite contábil/SEFAZ. |
+| Consulta oficial NCM — etapa 1 | Código no `main` (`8186ae1`): Produtos → Consultar NCM; API `/api/fiscal/ncm`; cache `nk_catalogo_ncm` por empresa, atualização administrativa explícita, integridade preservada em falhas. Sem certificação automática do enquadramento. |
+| CEST assistido — etapa 2 | Código no `main` (`bf2931d`): referência local por empresa (`nk_catalogo_cest`, proveniência declarada); sem tabela oficial inventada, sem seleção automática. API `/api/fiscal/cest` + `ConsultaCest.tsx`; `fis-14`. |
+| Perfil no cadastro — etapa 3 | Código no `main` (`bf2931d`): `PerfilFiscalProduto.tsx` com seleção ≠ aplicação, prévia antes/depois no servidor e NCM/CEST preservados por padrão. Transacional + auditado. |
 | App | Next.js 16.4.5 + Drizzle no Vercel (atualizado de 16.2.6 em 2026-11-09 após avaliação do alerta crítico do `npm audit`; validação completa verde) |
 | Seletores fiscais | Correção local 2026-11-09: CSTs e cClassTrib como listas com descrição nos perfis/produtos; dados do banco quando carregados, senão instantâneo oficial embutido. Ver `FISCAL_PRODUTOS.md`. |
 | Fechamento de caixa | 2026-11-09: valores com ponto/vírgula equivalentes; divergência real é aceita como **DIVERGE** (justificativa obrigatória, gerente opcional; pendente até homologação em Auditoria de Caixa; auditoria crítica). Ver seção 6 de `CONTEXTO_ARENA.md`. |
@@ -78,6 +80,7 @@ Opcional (bridge antigo por chave pontual): `VITE_NFE_BRIDGE_URL=`
 | PDV Frente de Caixa em Tela Cheia (`100dvh`, sem `<Shell />`, abertura em fullscreen pelo menu via `LinkPdv`/`abrirPdv.ts`, multiplicador `X + Qtd + Enter`, pagamento dividido + troco em dinheiro + crédito em `pagamentoPdv.ts`, consulta `F7` + espera `F9` + etiqueta balança `2…` em `balcaoPdv.ts`, bobina 80 mm `.print-area` + editar/cancelar em `F3` + gaveta `Alt+G` + fila offline em `operacoesPdv.ts`, navegação 100% por setas no `F10` em `navegacaoFinalizarPdv.ts`, `← Voltar`, `ATALHOS_PDV`) | Rota `/pdv` · `src/app/(pdv)/layout.tsx`, `src/app/(pdv)/pdv/page.tsx`, `src/views/Pdv.tsx`, `src/components/LinkPdv.tsx`, `src/lib/abrirPdv.ts`, `src/lib/multiplicadorPdv.ts`, `src/lib/pagamentoPdv.ts`, `src/lib/balcaoPdv.ts`, `src/lib/operacoesPdv.ts`, `src/lib/navegacaoFinalizarPdv.ts`, `src/lib/atalhosPdv.ts`, `src/lib/situacaoFiscal.ts`, `src/server/acoes/pdv.ts` |
 | Entrada de mercadoria (XML, chave SEFAZ, manual, tratamento) | Rota `/entradas` · `src/views/Entradas.tsx` + `src/server/acoes/entradas.ts` + `src/lib/xmlNfe.ts` |
 | Emissor Fiscal SEFAZ 4.00, contingência e webhook | Rota `/emissor` + `/api/fiscal/webhook` · `src/views/EmissorFiscal.tsx` + `src/server/emissorFiscalCore.ts` |
+| PDV e impressão configuráveis (Etapa 1) | Aba “PDV e impressão” em `/config` · `src/lib/pdvImpressao.ts` + `nk_pdv_config` + `obterConfigPdv`/`salvarConfigPdv` · confirmação, vias, logo, cancelados, confissão, 80mm/A4 |
 | Produtos e manutenção de preços | Rota `/produtos` · `src/views/Produtos.tsx` + `src/server/acoes/cadastros.ts` |
 | Script consolidado aditivo de tabelas/colunas `nk_*` | `ATUALIZAR_SUPABASE_AGORA.sql` + `src/db/migracao.ts` |
 | Central de prontidão (o que está pronto e o que falta por chave externa, sem expor valores) | Rota `/prontidao` + `GET /api/prontidao` · `src/lib/prontidao.ts` + `src/server/prontidaoCore.ts` + `src/views/Prontidao.tsx` |
@@ -173,9 +176,9 @@ Assim a próxima configuração futura parte **sempre** do repositório, não da
 
 *NKWAY · memorando de acesso e configuração · manter na raiz do repositório*
 
-## Retomada do roteiro NCM / CEST / perfil (2026-11-08)
+## Retomada do roteiro NCM / CEST / perfil (consolidado em 2026-11-12 sobre `a16fe24`)
 
-1. **Etapa 1 implementada localmente:** consulta NCM oficial da Receita, fonte/datas separadas, cache persistente com concorrência, preenchimento manual e gravação auditada/transacional. Fonte real reconferida separadamente dos testes. Guia técnico e limites em `FISCAL_PRODUTOS.md`; implementação e aceite no item 27 de `CONTEXTO_ARENA.md`.
-2. **Etapa 2 pendente:** conferir CONFAZ e qualidade, manutenção, vigência/licença de fonte estruturada de CEST; usar alternativa manual honesta se não houver base confiável. Nenhum catálogo CEST foi adotado nesta etapa.
-3. **Etapa 3 pendente:** seleção/aplicação/desvinculação de perfil no formulário principal, prévia e proteção explícita de NCM/CEST do produto. Perfis históricos e comportamento da central não foram apagados ou modificados nesta etapa.
-4. **Etapa 4 geral pendente:** haverá validação específica após cada etapa, além do aceite final integrado. A suíte NCM não é uma homologação fiscal ou validação de todas as etapas. Nenhuma configuração de produção ou segredo foi alterado.
+1. **Etapa 1 no main (`8186ae1`):** consulta NCM oficial da Receita, fonte/datas separadas, cache persistente com concorrência, preenchimento manual e gravação auditada/transacional. Guia em `FISCAL_PRODUTOS.md`; item 27 de `CONTEXTO_ARENA.md`.
+2. **Etapa 2 no main (`bf2931d`):** CEST como referência local por empresa (`nk_catalogo_cest`, proveniência declarada); CONFAZ só publica em PDF, sem fonte estruturada adotada, sem seleção automática. Guia em `FISCAL_PRODUTOS.md`; item 41.
+3. **Etapa 3 no main (`bf2931d`):** perfil no cadastro com seleção ≠ aplicação, prévia antes/depois e NCM/CEST preservados por padrão. Históricos não apagados. Guia em `FISCAL_PRODUTOS.md`; item 41.
+4. **Etapa 4 geral pendente:** aceite contábil + homologação SEFAZ/provedor + chaves live. As suítes por etapa não são homologação fiscal integral. Produção comprovada no commit (`a16fe24`/`production`); sem teste autenticado fiscal nesta sessão; nenhum segredo alterado.

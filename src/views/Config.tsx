@@ -19,8 +19,9 @@ import {
 } from "@/components/ui";
 import { UFS, dataBR, moeda } from "@/lib/dominio";
 import { gerarSqlConsolidadoSupabaseNk } from "@/lib/migracaoLegado";
+import { PDV_IMPRESSAO_PADRAO, type PdvImpressaoConfig } from "@/lib/pdvImpressao";
 import { PERFIS_USUARIO, ROTULO_PERFIL, normalizarPerfil, temPermissao, type PerfilUsuario } from "@/lib/permissoes";
-import { criarOperador, removerOperador, salvarEmpresa, salvarFiscal } from "@/server/acoes/config";
+import { criarOperador, removerOperador, salvarConfigPdv, salvarEmpresa, salvarFiscal } from "@/server/acoes/config";
 import { trocarSenha } from "@/server/acoes/auth";
 import type { AssinaturaPainelDto } from "@/server/dados";
 import { PainelAssinatura } from "@/views/Assinatura";
@@ -59,6 +60,7 @@ type FiscalCfg = {
 export function ConfigView({
   empresa,
   fiscal,
+  pdv = PDV_IMPRESSAO_PADRAO,
   equipe,
   usuarioAtual,
   usuarioPapel = "administrador",
@@ -67,6 +69,7 @@ export function ConfigView({
 }: {
   empresa: EmpresaCfg;
   fiscal: FiscalCfg;
+  pdv?: PdvImpressaoConfig;
   plano?: { id: string; nome: string; preco: number; limiteProdutos: number; limiteUsuarios: number };
   equipe: { id: string; nome: string; email: string; papel: string; ativo?: boolean }[];
   usuarioAtual: string;
@@ -80,6 +83,7 @@ export function ConfigView({
   const [aba, setAba] = useState(podeConfig ? "empresa" : "equipe");
   const [e, setE] = useState(empresa);
   const [f, setF] = useState(fiscal);
+  const [p, setP] = useState<PdvImpressaoConfig>(pdv);
   const [novoOp, setNovoOp] = useState({ nome: "", email: "", senha: "", papel: "operador" });
   const [senha, setSenha] = useState("");
   const [ocupado, setOcupado] = useState(false);
@@ -118,6 +122,7 @@ export function ConfigView({
       <Abas
         abas={[
           { id: "empresa", rotulo: "Empresa" },
+          { id: "pdv", rotulo: "PDV e impressão" },
           { id: "fiscal", rotulo: "Fiscal e certificado" },
           { id: "plano", rotulo: "Assinatura" },
           { id: "equipe", rotulo: "Equipe", contagem: equipe.length },
@@ -201,6 +206,109 @@ export function ConfigView({
             </Button>
           </div>
         </Card>
+      )}
+
+      {aba === "pdv" && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardTitulo titulo="1–4 · Fluxo e cabeçalho" descricao="Confirmação, vias, logo e cabeçalho do cupom" icone="imprimir" />
+            <div className="space-y-3">
+              <label className="flex items-start gap-2 text-[12.5px]">
+                <input type="checkbox" checked={p.confirmarAntesImprimir} onChange={(ev) => setP({ ...p, confirmarAntesImprimir: ev.target.checked })} className="mt-0.5 size-4 accent-way-600" />
+                <span><strong>1 · Confirmar antes de imprimir</strong><br /><span className="text-[11.5px] text-ink-400">Pergunta “Imprimir agora?” com o nº de vias antes de abrir o diálogo. Padrão dos ERPs de balcão.</span></span>
+              </label>
+              <label className="flex items-start gap-2 text-[12.5px]">
+                <input type="checkbox" checked={p.imprimeLogo} onChange={(ev) => setP({ ...p, imprimeLogo: ev.target.checked })} className="mt-0.5 size-4 accent-way-600" />
+                <span><strong>2 · Imprime logo</strong><br /><span className="text-[11.5px] text-ink-400">Iniciais + nome em destaque no topo do cupom e da DANFE.</span></span>
+              </label>
+              {p.imprimeLogo && (
+                <Campo rotulo="Texto do logo (opcional, até 40 letras)" dica="Vazio = usa a fantasia da empresa">
+                  <Input valor={p.logoTexto} aoMudar={(v) => setP({ ...p, logoTexto: v.slice(0, 40) })} placeholder="Ex.: MERCADO SÃO JORGE" />
+                </Campo>
+              )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Campo rotulo="3 · Nº de vias" dica="Via 1 Consumidor · 2 Caixa · 3 Contabilidade">
+                  <Select valor={String(p.nroVias)} aoMudar={(v) => setP({ ...p, nroVias: (Number(v) === 3 ? 3 : Number(v) === 2 ? 2 : 1) as 1 | 2 | 3 })} opcoes={[{ valor: "1", rotulo: "1 via" }, { valor: "2", rotulo: "2 vias" }, { valor: "3", rotulo: "3 vias" }]} />
+                </Campo>
+                <Campo rotulo="9 · Layout do cupom" dica="A4 força a DANFE em folha cheia até na NFC-e">
+                  <Select valor={p.layoutCupom} aoMudar={(v) => setP({ ...p, layoutCupom: v === "A4" ? "A4" : "80mm" })} opcoes={[{ valor: "80mm", rotulo: "Bobina 80 mm" }, { valor: "A4", rotulo: "Folha A4" }]} />
+                </Campo>
+              </div>
+              <label className="flex items-start gap-2 text-[12.5px]">
+                <input type="checkbox" checked={p.imprimeCabecalho} onChange={(ev) => setP({ ...p, imprimeCabecalho: ev.target.checked })} className="mt-0.5 size-4 accent-way-600" />
+                <span><strong>4 · Imprime cabeçalho completo</strong><br /><span className="text-[11.5px] text-ink-400">Razão, endereço, município e IE. Desligado = só fantasia + CNPJ.</span></span>
+              </label>
+            </div>
+          </Card>
+          <Card>
+            <CardTitulo titulo="5–8 · Itens e crediário" descricao="Cancelados, desconto por item, modo compacto e confissão" icone="documento" />
+            <div className="space-y-3">
+              <label className="flex items-start gap-2 text-[12.5px]">
+                <input type="checkbox" checked={p.imprimirItensCancelados} onChange={(ev) => setP({ ...p, imprimirItensCancelados: ev.target.checked })} className="mt-0.5 size-4 accent-way-600" />
+                <span><strong>5 · Imprimir itens cancelados</strong><br /><span className="text-[11.5px] text-ink-400">Lista o que foi removido no caixa como “CANCELADO”, sem valor.</span></span>
+              </label>
+              <label className="flex items-start gap-2 text-[12.5px]">
+                <input type="checkbox" checked={p.imprimirDescontoAcrescimoItens} onChange={(ev) => setP({ ...p, imprimirDescontoAcrescimoItens: ev.target.checked })} className="mt-0.5 size-4 accent-way-600" />
+                <span><strong>6 · Desconto/acréscimo por item na NFC-e</strong><br /><span className="text-[11.5px] text-ink-400">Linha “Desc −R$ / Acr +R$” abaixo do produto quando houver.</span></span>
+              </label>
+              <label className="flex items-start gap-2 text-[12.5px]">
+                <input type="checkbox" checked={p.imprimirUmaLinha} onChange={(ev) => setP({ ...p, imprimirUmaLinha: ev.target.checked })} className="mt-0.5 size-4 accent-way-600" />
+                <span><strong>7 · Imprimir em uma linha</strong><br /><span className="text-[11.5px] text-ink-400">Modo compacto: “1 Maçã 2×R$5,00 = R$10,00”. Economiza bobina.</span></span>
+              </label>
+              <label className="flex items-start gap-2 text-[12.5px]">
+                <input type="checkbox" checked={p.confissaoDivida} onChange={(ev) => setP({ ...p, confissaoDivida: ev.target.checked })} className="mt-0.5 size-4 accent-way-600" />
+                <span><strong>8 · Confissão de dívida no crediário</strong><br /><span className="text-[11.5px] text-ink-400">Bloco + assinaturas quando há prazo/boleto. DAV nunca imprime.</span></span>
+              </label>
+              {p.confissaoDivida && (
+                <Campo rotulo="Texto da confissão (até 600 letras)">
+                  <textarea rows={3} value={p.confissaoTexto} onChange={(ev) => setP({ ...p, confissaoTexto: ev.target.value.slice(0, 600) })} className="w-full rounded-lg border border-ink-200 bg-white px-2.5 py-2 text-[12px] leading-snug" />
+                </Campo>
+              )}
+            </div>
+          </Card>
+          <Card>
+            <CardTitulo titulo="10 · Essenciais de balcão" descricao="Rodapé, tributos, operador, cliente e automação" icone="caixa" />
+            <div className="space-y-3">
+              <Campo rotulo="Mensagem de rodapé (até 140 letras)" dica="Vazio = sem rodapé">
+                <Input valor={p.mensagemRodape} aoMudar={(v) => setP({ ...p, mensagemRodape: v.slice(0, 140) })} placeholder="Obrigado pela preferência! Volte sempre." />
+              </Campo>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex items-center gap-2 text-[12.5px]"><input type="checkbox" checked={p.exibirTributos} onChange={(ev) => setP({ ...p, exibirTributos: ev.target.checked })} className="size-4 accent-way-600" />Tributos (Lei 12.741)</label>
+                <label className="flex items-center gap-2 text-[12.5px]"><input type="checkbox" checked={p.exibirOperadorCaixa} onChange={(ev) => setP({ ...p, exibirOperadorCaixa: ev.target.checked })} className="size-4 accent-way-600" />Operador e caixa</label>
+                <label className="flex items-center gap-2 text-[12.5px]"><input type="checkbox" checked={p.exibirCliente} onChange={(ev) => setP({ ...p, exibirCliente: ev.target.checked })} className="size-4 accent-way-600" />Cliente no cupom</label>
+                <label className="flex items-center gap-2 text-[12.5px]"><input type="checkbox" checked={p.impressaoAutomatica} onChange={(ev) => setP({ ...p, impressaoAutomatica: ev.target.checked })} className="size-4 accent-way-600" />Impressão automática</label>
+              </div>
+              <Campo rotulo="Tamanho da fonte (80 mm)">
+                <Select valor={p.tamanhoFonte} aoMudar={(v) => setP({ ...p, tamanhoFonte: v === "grande" ? "grande" : "normal" })} opcoes={[{ valor: "normal", rotulo: "Normal" }, { valor: "grande", rotulo: "Grande (leitura fácil)" }]} />
+              </Campo>
+              <p className="rounded-lg bg-ink-50 px-3 py-2 text-[11.5px] text-ink-500">A impressão automática respeita a confirmação: com “Confirmar” ligado, o PDV pergunta antes mesmo no automático.</p>
+            </div>
+          </Card>
+          <Card>
+            <CardTitulo titulo="Prévia e gravação" descricao="Resumo do que vai sair no cupom" icone="check" />
+            <ul className="space-y-1 text-[12px] text-ink-600">
+              <li>• {p.nroVias} via{p.nroVias > 1 ? "s" : ""} · {p.layoutCupom} · fonte {p.tamanhoFonte}</li>
+              <li>• {p.confirmarAntesImprimir ? "Pergunta antes de imprimir" : "Imprime direto"} · {p.impressaoAutomatica ? "automático após a venda" : "manual no comprovante"}</li>
+              <li>• {p.imprimeLogo ? `Logo “${p.logoTexto || e.nomeFantasia || e.nome}”` : "Sem logo"} · {p.imprimeCabecalho ? "cabeçalho completo" : "cabeçalho resumido"}</li>
+              <li>• Itens: {p.imprimirUmaLinha ? "uma linha" : "detalhado"}{p.imprimirDescontoAcrescimoItens ? " + desconto/acréscimo" : ""}{p.imprimirItensCancelados ? " + cancelados" : ""}</li>
+              <li>• {p.confissaoDivida ? "Confissão no prazo/boleto" : "Sem confissão"} · {p.exibirTributos ? "com tributos" : "sem tributos"}</li>
+            </ul>
+            <div className="mt-3 flex justify-end">
+              <Button
+                disabled={ocupado || !podeConfig}
+                onClick={async () => {
+                  setOcupado(true);
+                  const r = await salvarConfigPdv(p);
+                  setOcupado(false);
+                  toast(r.ok ? (r.aviso ?? "Configuração do PDV salva.") : r.erro, r.ok ? "ok" : "erro");
+                }}
+              >
+                Salvar PDV e impressão
+              </Button>
+            </div>
+            {!podeConfig && <p className="mt-2 text-[11.5px] text-rose-600">Somente quem gerencia a configuração pode alterar o PDV.</p>}
+          </Card>
+        </div>
       )}
 
       {aba === "fiscal" && (

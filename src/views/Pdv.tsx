@@ -29,6 +29,13 @@ import {
 import { ATALHOS_PDV, FORMAS_ATALHO_ALT } from "@/lib/atalhosPdv";
 import type { Emitente } from "@/lib/danfe";
 import {
+  PDV_IMPRESSAO_PADRAO,
+  deveImprimirConfissao,
+  iniciaisLogoPdv,
+  rotulosViasPdv,
+  type PdvImpressaoConfig,
+} from "@/lib/pdvImpressao";
+import {
   CHAVE_ESPERA_PDV,
   CHAVE_ETIQUETA_BALANCA_PDV,
   calcularTributosProdutoPdv,
@@ -151,6 +158,7 @@ export function PdvView({
   empresa,
   emitente,
   cscId = "00000000",
+  pdvConfig = PDV_IMPRESSAO_PADRAO,
   usuario = { nome: "Operador", papel: "administrador" },
   sessaoCaixa = null,
   operadores = [],
@@ -168,6 +176,7 @@ export function PdvView({
   };
   emitente?: Emitente;
   cscId?: string;
+  pdvConfig?: PdvImpressaoConfig;
   usuario?: { nome: string; papel: PerfilUsuario };
   /** Blind balance: só o estado lógico chega ao cliente, nunca valores esperados. */
   sessaoCaixa?: {
@@ -231,6 +240,10 @@ export function PdvView({
   const [modelo, setModelo] = useState<"NFC-e" | "NF-e" | "SAT">("NFC-e");
   const [validadeDav, setValidadeDav] = useState(somaDias(hojeISO(), 3));
   const [cupom, setCupom] = useState<ReciboTermicoPdv | null>(null);
+  /** Etapa 1 PDV/impressão — itens removidos no caixa (vão ao cupom se a config permitir). */
+  const [itensCanceladosCaixa, setItensCanceladosCaixa] = useState<{ nome: string; qtd: number; unidade: string; total: number }[]>([]);
+  /** Etapa 1 PDV/impressão — confirmação "Imprimir agora?" antes do diálogo. */
+  const [modalConfirmarImpressao, setModalConfirmarImpressao] = useState(false);
   /** Etapa 3 — fechamento às cegas direto na tela de vendas */
   const [modalFechamentoCego, setModalFechamentoCego] = useState(false);
 
@@ -464,6 +477,20 @@ export function PdvView({
     };
   }, [aguardandoGestoTelaCheia]);
 
+  // Etapa 1 PDV/impressão (item 10e): impressão automática após concluir a venda.
+  // Respeita a confirmação: com "Confirmar" ligado, abre a pergunta em vez de imprimir direto.
+  const ultimoCupomAutoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!cupom || !pdvConfig.impressaoAutomatica) return;
+    if (ultimoCupomAutoRef.current === cupom.id) return;
+    ultimoCupomAutoRef.current = cupom.id;
+    const t = setTimeout(() => {
+      if (pdvConfig.confirmarAntesImprimir) setModalConfirmarImpressao(true);
+      else window.print();
+    }, 450);
+    return () => clearTimeout(t);
+  }, [cupom, pdvConfig.impressaoAutomatica, pdvConfig.confirmarAntesImprimir]);
+
   const alternarTelaCheia = useCallback(async () => {
     try {
       if (!document.fullscreenElement) {
@@ -520,6 +547,7 @@ export function PdvView({
   const descartarVendaLocal = useCallback(() => {
     atualizarLinhas([]);
     setPilhaDesfazer([]);
+    setItensCanceladosCaixa([]);
     setPagamentos([]);
     setDescontoValor("");
     setRecebido("");
@@ -734,6 +762,7 @@ export function PdvView({
       if (atual.length === 0) return atual;
       const removido = atual[atual.length - 1];
       setPilhaDesfazer((pilha) => [...pilha, removido]);
+      setItensCanceladosCaixa((lista) => [...lista, { nome: removido.nome, qtd: removido.qtd, unidade: removido.unidade, total: round2(removido.qtd * removido.preco) }]);
       toast(`Item removido: ${removido.nome} (Ctrl+Z para desfazer).`, "info");
       return atual.slice(0, -1);
     });
@@ -751,6 +780,12 @@ export function PdvView({
           return copia;
         }
         return [...atual, restaurado];
+      });
+      setItensCanceladosCaixa((lista) => {
+        const i = [...lista].reverse().findIndex((c) => c.nome === restaurado.nome);
+        if (i < 0) return lista;
+        const pos = lista.length - 1 - i;
+        return lista.filter((_, k) => k !== pos);
       });
       toast(`Item restaurado: ${restaurado.nome}.`, "ok");
       return pilha.slice(0, -1);
@@ -1201,6 +1236,7 @@ export function PdvView({
           pagamentosBrutos: payloadPagamentos,
           troco: r.troco,
           validadeDav: modo === "dav" ? validadeDav : null,
+          itensCancelados: itensCanceladosCaixa,
         });
 
         setModalFinalizar(false);
@@ -1242,7 +1278,7 @@ export function PdvView({
           situacaoFiscal: "nao_emitida", chave: null, protocolo: null, clienteNome: cliente?.nome ?? "CONSUMIDOR", clienteDocumento: cliente?.documento ?? "",
           operador: usuario.nome, terminal: sessaoCaixa?.terminal ?? "CAIXA 1", ambiente: empresa.ambiente, itens: itensSnapshot, subtotal, desconto, total,
           pagamentosBrutos: payloadPagamentos, troco: round2(Math.max(0, somaPagamentos - total)), validadeDav: modo === "dav" ? validadeDav : null,
-          offline: true,
+          offline: true, itensCancelados: itensCanceladosCaixa,
         }));
         descartarVendaLocal();
         toast(`Sem conexão. Venda guardada na fila offline (${novaLista.length} pendente${novaLista.length === 1 ? "" : "s"}); será enviada automaticamente quando a conexão voltar.`, "erro");
@@ -1270,6 +1306,7 @@ export function PdvView({
       usuario.nome,
       empresa.ambiente,
       itensFilaOffline,
+      itensCanceladosCaixa,
       persistirFilaOffline,
       toast,
       descartarVendaLocal,
@@ -1388,6 +1425,7 @@ export function PdvView({
     modalEspera ||
     modalGaveta ||
     modalFilaOffline ||
+    modalConfirmarImpressao ||
     Boolean(docCancelando) ||
     Boolean(cupom) ||
     Boolean(imprimindo);
@@ -1648,7 +1686,7 @@ export function PdvView({
       }
 
       // Pós-venda: Enter no recibo térmico inicia imediatamente a próxima venda
-      if (cupom && !imprimindo && e.key === "Enter" && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      if (cupom && !imprimindo && !modalConfirmarImpressao && e.key === "Enter" && !e.altKey && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         setCupom(null);
         setTimeout(() => buscaRef.current?.focus(), 20);
@@ -2587,6 +2625,7 @@ export function PdvView({
                       type="button"
                       onClick={() => {
                         setPilhaDesfazer((p) => [...p, l]);
+                        setItensCanceladosCaixa((lista) => [...lista, { nome: l.nome, qtd: l.qtd, unidade: l.unidade, total: round2(l.qtd * l.preco) }]);
                         atualizarLinhas((atual) => atual.filter((x) => x.produtoId !== l.produtoId));
                       }}
                       className="shrink-0 rounded-md p-1 text-ink-300 hover:bg-rose-50 hover:text-rose-600"
@@ -3945,7 +3984,7 @@ export function PdvView({
         </ul>
       </Modal>
 
-      {/* COMPLEMENTO 3 — COMPROVANTE / BOBINA TÉRMICA 80 MM COMPLETA (.print-area) */}
+      {/* COMPROVANTE CONFIGURÁVEL — 80 mm ou A4, vias, logo, cabeçalho, cancelados, confissão (.print-area) */}
       <Modal
         aberto={!!cupom}
         aoFechar={() => {
@@ -3953,13 +3992,25 @@ export function PdvView({
           buscaRef.current?.focus();
         }}
         titulo={cupom ? `Comprovante · ${cupom.documentoRotulo}` : "Operação registrada"}
-        descricao="Bobina térmica 80 mm pronta para impressão — pressione Enter para iniciar nova venda"
-        largura="max-w-lg"
+        descricao={
+          pdvConfig.layoutCupom === "A4"
+            ? `Folha A4 pronta para impressão · ${pdvConfig.nroVias} via${pdvConfig.nroVias > 1 ? "s" : ""} — Enter inicia nova venda`
+            : `Bobina térmica 80 mm pronta para impressão · ${pdvConfig.nroVias} via${pdvConfig.nroVias > 1 ? "s" : ""} — Enter inicia nova venda`
+        }
+        largura={pdvConfig.layoutCupom === "A4" ? "max-w-3xl" : "max-w-lg"}
         rodape={
           <div className="no-print flex w-full flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
-              <Button variante="secundario" icone="imprimir" onClick={() => window.print()}>
-                Imprimir 80 mm
+              <Button
+                variante="secundario"
+                icone="imprimir"
+                onClick={() => {
+                  if (pdvConfig.confirmarAntesImprimir) setModalConfirmarImpressao(true);
+                  else window.print();
+                }}
+              >
+                {pdvConfig.layoutCupom === "A4" ? "Imprimir A4" : "Imprimir 80 mm"}
+                {pdvConfig.nroVias > 1 ? ` (${pdvConfig.nroVias} vias)` : ""}
               </Button>
               {cupom?.tipo === "fiscal" && (
                 <Button
@@ -3993,138 +4044,266 @@ export function PdvView({
           </div>
         }
       >
-        {cupom && (
-          <div className={cn("max-h-[70vh] overflow-auto rounded-xl bg-ink-100 p-3", !imprimindo && "print-area")}>
-            <div className="mx-auto w-[302px] rounded bg-white px-3 py-3 font-mono text-[10.5px] leading-[1.35] text-ink-900 shadow-sm">
-              <div className="text-center">
-                <p className="text-[12px] font-bold uppercase">{(empresa.fantasia || empresa.nome).toUpperCase()}</p>
-                <p className="text-[10px]">{empresa.nome}</p>
-                <p className="text-[9.5px] text-ink-600">
-                  {[empresa.endereco, empresa.municipio].filter(Boolean).join(" · ")}
-                </p>
-                <p className="text-[10px]">CNPJ {empresa.documento}</p>
-              </div>
+        {cupom &&
+          (() => {
+            const vias = rotulosViasPdv(pdvConfig.nroVias);
+            const logoTexto = pdvConfig.logoTexto || empresa.fantasia || empresa.nome;
+            const formasCupom = cupom.parcelas.length ? cupom.parcelas.map((pl) => pl.forma) : [cupom.formaPrincipal];
+            const comConfissao = deveImprimirConfissao(pdvConfig, formasCupom, cupom.tipo);
+            const larguraVia = pdvConfig.layoutCupom === "A4" ? "w-full max-w-[680px]" : "w-[302px]";
+            const fonteVia = pdvConfig.tamanhoFonte === "grande" ? "text-[11.5px]" : "text-[10.5px]";
+            return (
+              <div className={cn("max-h-[70vh] space-y-4 overflow-auto rounded-xl bg-ink-100 p-3", !imprimindo && "print-area")}>
+                {vias.map((rotuloVia, idxVia) => (
+                  <div key={idxVia} className={idxVia > 0 ? "break-before-page border-t-4 border-dashed border-ink-300 pt-4" : ""}>
+                    {rotuloVia && (
+                      <p className="mx-auto mb-1 w-fit rounded bg-ink-900 px-2 py-0.5 font-mono text-[9px] font-bold uppercase text-white">
+                        {rotuloVia}
+                      </p>
+                    )}
+                    <div className={cn("mx-auto rounded bg-white px-3 py-3 font-mono leading-[1.35] text-ink-900 shadow-sm", larguraVia, fonteVia)}>
+                      {pdvConfig.imprimeLogo && (
+                        <div className="mb-1.5 flex flex-col items-center gap-1 text-center">
+                          <span className="grid size-10 place-items-center rounded-full bg-ink-900 text-[13px] font-bold text-white">
+                            {iniciaisLogoPdv(logoTexto)}
+                          </span>
+                          <p className="text-[12px] font-bold uppercase tracking-wide">{logoTexto}</p>
+                        </div>
+                      )}
+                      <div className="text-center">
+                        <p className="text-[12px] font-bold uppercase">{(empresa.fantasia || empresa.nome).toUpperCase()}</p>
+                        {pdvConfig.imprimeCabecalho ? (
+                          <>
+                            <p className="text-[10px]">{empresa.nome}</p>
+                            <p className="text-[9.5px] text-ink-600">
+                              {[empresa.endereco, empresa.municipio].filter(Boolean).join(" · ")}
+                            </p>
+                            <p className="text-[10px]">CNPJ {empresa.documento}</p>
+                          </>
+                        ) : (
+                          <p className="text-[10px]">CNPJ {empresa.documento}</p>
+                        )}
+                      </div>
 
-              <div className="my-2 border-y border-dashed border-ink-300 py-1 text-center">
-                <p className="font-bold uppercase">{cupom.tituloBobina}</p>
-                <p className="text-[9px] text-ink-600">{cupom.subtituloBobina}</p>
-              </div>
+                      <div className="my-2 border-y border-dashed border-ink-300 py-1 text-center">
+                        <p className="font-bold uppercase">{cupom.tituloBobina}</p>
+                        <p className="text-[9px] text-ink-600">{cupom.subtituloBobina}</p>
+                      </div>
 
-              <div className="space-y-0.5 text-[10px]">
-                <div className="flex justify-between">
-                  <span>{cupom.documentoRotulo}</span>
-                  <span>{dataHoraBR(cupom.dataIso)}</span>
-                </div>
-                <div className="flex justify-between text-[9.5px] text-ink-600">
-                  <span>{cupom.terminal}</span>
-                  <span>Op.: {cupom.operador}</span>
-                </div>
-                <p className="truncate">
-                  Cliente: <strong>{cupom.clienteNome}</strong>
-                  {cupom.clienteDocumento ? ` (${cupom.clienteDocumento})` : ""}
-                </p>
-              </div>
+                      <div className="space-y-0.5 text-[10px]">
+                        <div className="flex justify-between">
+                          <span>{cupom.documentoRotulo}</span>
+                          <span>{dataHoraBR(cupom.dataIso)}</span>
+                        </div>
+                        {pdvConfig.exibirOperadorCaixa && (
+                          <div className="flex justify-between text-[9.5px] text-ink-600">
+                            <span>{cupom.terminal}</span>
+                            <span>Op.: {cupom.operador}</span>
+                          </div>
+                        )}
+                        {pdvConfig.exibirCliente && (
+                          <p className="truncate">
+                            Cliente: <strong>{cupom.clienteNome}</strong>
+                            {cupom.clienteDocumento ? ` (${cupom.clienteDocumento})` : ""}
+                          </p>
+                        )}
+                      </div>
 
-              <table className="mt-2 w-full border-y border-dashed border-ink-300 text-[9.5px]">
-                <thead>
-                  <tr className="text-[8.5px] uppercase text-ink-500">
-                    <th className="py-0.5 text-left">#</th>
-                    <th className="py-0.5 text-left">Item</th>
-                    <th className="py-0.5 text-right">Qtd×Un</th>
-                    <th className="py-0.5 text-right">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cupom.itens.map((it) => (
-                    <tr key={`${it.numero}-${it.nome}`} className="border-t border-ink-100">
-                      <td className="py-0.5 pr-1 align-top">{it.numero}</td>
-                      <td className="py-0.5 pr-1 align-top">
-                        <span className="block font-semibold">{it.nome}</span>
-                        <span className="text-[8.5px] text-ink-500">
-                          {it.unidade} · {moeda(it.precoUnit)}
-                        </span>
-                      </td>
-                      <td className="tabular py-0.5 pr-1 text-right align-top">{formatarQtdPdv(it.qtd)}</td>
-                      <td className="tabular py-0.5 text-right align-top font-bold">{moeda(it.total)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      {pdvConfig.imprimirUmaLinha ? (
+                        <div className="mt-2 space-y-0.5 border-y border-dashed border-ink-300 py-1 text-[9.5px]">
+                          {cupom.itens.map((it) => (
+                            <p key={`${it.numero}-${it.nome}`} className="flex justify-between gap-2">
+                              <span className="min-w-0 flex-1 truncate">
+                                {it.numero} {it.nome} {formatarQtdPdv(it.qtd)}×{moeda(it.precoUnit)}
+                                {pdvConfig.imprimirDescontoAcrescimoItens && ((it.desconto ?? 0) > 0 || (it.acrescimo ?? 0) > 0) ? (
+                                  <span className="text-ink-500">
+                                    {" "}
+                                    ({(it.desconto ?? 0) > 0 ? `desc −${moeda(it.desconto ?? 0)}` : ""}
+                                    {(it.desconto ?? 0) > 0 && (it.acrescimo ?? 0) > 0 ? " · " : ""}
+                                    {(it.acrescimo ?? 0) > 0 ? `acr +${moeda(it.acrescimo ?? 0)}` : ""})
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="shrink-0 font-bold">{moeda(it.total)}</span>
+                            </p>
+                          ))}
+                        </div>
+                      ) : (
+                        <table className="mt-2 w-full border-y border-dashed border-ink-300 text-[9.5px]">
+                          <thead>
+                            <tr className="text-[8.5px] uppercase text-ink-500">
+                              <th className="py-0.5 text-left">#</th>
+                              <th className="py-0.5 text-left">Item</th>
+                              <th className="py-0.5 text-right">Qtd×Un</th>
+                              <th className="py-0.5 text-right">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {cupom.itens.map((it) => (
+                              <tr key={`${it.numero}-${it.nome}`} className="border-t border-ink-100">
+                                <td className="py-0.5 pr-1 align-top">{it.numero}</td>
+                                <td className="py-0.5 pr-1 align-top">
+                                  <span className="block font-semibold">{it.nome}</span>
+                                  <span className="text-[8.5px] text-ink-500">
+                                    {it.unidade} · {moeda(it.precoUnit)}
+                                  </span>
+                                  {pdvConfig.imprimirDescontoAcrescimoItens && ((it.desconto ?? 0) > 0 || (it.acrescimo ?? 0) > 0) && (
+                                    <span className="block text-[8.5px] text-ink-500">
+                                      {(it.desconto ?? 0) > 0 ? `Desc −${moeda(it.desconto ?? 0)}` : ""}
+                                      {(it.desconto ?? 0) > 0 && (it.acrescimo ?? 0) > 0 ? " · " : ""}
+                                      {(it.acrescimo ?? 0) > 0 ? `Acr +${moeda(it.acrescimo ?? 0)}` : ""}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="tabular py-0.5 pr-1 text-right align-top">{formatarQtdPdv(it.qtd)}</td>
+                                <td className="tabular py-0.5 text-right align-top font-bold">{moeda(it.total)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {pdvConfig.imprimirItensCancelados && (cupom.itensCancelados?.length ?? 0) > 0 && (
+                        <div className="mt-1.5 border border-dashed border-ink-300 p-1.5">
+                          <p className="text-center text-[8.5px] font-bold uppercase text-ink-500">Itens cancelados (sem valor)</p>
+                          {(cupom.itensCancelados ?? []).map((c, k) => (
+                            <p key={k} className="flex justify-between gap-2 text-[9px] text-ink-500 line-through">
+                              <span className="truncate">
+                                {c.nome} · {formatarQtdPdv(c.qtd)} {c.unidade}
+                              </span>
+                              <span>{moeda(c.total)}</span>
+                            </p>
+                          ))}
+                        </div>
+                      )}
 
-              <div className="mt-1.5 space-y-0.5 text-[10px]">
-                <div className="flex justify-between text-ink-600">
-                  <span>
-                    Itens: {cupom.qtdLinhas} ({formatarQtdPdv(cupom.unidadesTotais)} un.)
-                  </span>
-                  <span className="tabular">Subt. {moeda(cupom.subtotal)}</span>
-                </div>
-                {cupom.desconto > 0 && (
-                  <div className="flex justify-between text-rose-700">
-                    <span>Desconto</span>
-                    <span className="tabular">− {moeda(cupom.desconto)}</span>
-                  </div>
-                )}
-                {cupom.frete > 0 && (
-                  <div className="flex justify-between">
-                    <span>Frete</span>
-                    <span className="tabular">{moeda(cupom.frete)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between border-t border-ink-200 pt-0.5 text-[12px] font-bold text-ink-900">
-                  <span>TOTAL</span>
-                  <span className="tabular">{moeda(cupom.total)}</span>
-                </div>
-              </div>
+                      <div className="mt-1.5 space-y-0.5 text-[10px]">
+                        <div className="flex justify-between text-ink-600">
+                          <span>
+                            Itens: {cupom.qtdLinhas} ({formatarQtdPdv(cupom.unidadesTotais)} un.)
+                          </span>
+                          <span className="tabular">Subt. {moeda(cupom.subtotal)}</span>
+                        </div>
+                        {cupom.desconto > 0 && (
+                          <div className="flex justify-between text-rose-700">
+                            <span>Desconto</span>
+                            <span className="tabular">− {moeda(cupom.desconto)}</span>
+                          </div>
+                        )}
+                        {cupom.frete > 0 && (
+                          <div className="flex justify-between">
+                            <span>Frete</span>
+                            <span className="tabular">{moeda(cupom.frete)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between border-t border-ink-200 pt-0.5 text-[12px] font-bold text-ink-900">
+                          <span>TOTAL</span>
+                          <span className="tabular">{moeda(cupom.total)}</span>
+                        </div>
+                      </div>
 
-              {cupom.parcelas.length > 0 && (
-                <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1 text-[10px]">
-                  {cupom.parcelas.map((p, idx) => (
-                    <div key={`${p.forma}-${idx}`} className="flex justify-between">
-                      <span>{p.rotulo}</span>
-                      <span className="tabular">{moeda(p.valor)}</span>
+                      {cupom.parcelas.length > 0 && (
+                        <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1 text-[10px]">
+                          {cupom.parcelas.map((p, idx) => (
+                            <div key={`${p.forma}-${idx}`} className="flex justify-between">
+                              <span>{p.rotulo}</span>
+                              <span className="tabular">{moeda(p.valor)}</span>
+                            </div>
+                          ))}
+                          {cupom.troco > 0 && (
+                            <div className="flex justify-between font-bold text-way-800">
+                              <span>TROCO EM DINHEIRO</span>
+                              <span className="tabular">{moeda(cupom.troco)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {pdvConfig.exibirTributos && (
+                        <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1 text-center text-[9px] text-ink-600">
+                          <p>
+                            Trib. aprox. {moeda(cupom.tributosTotal)} (Lei 12.741) · IBS {moeda(cupom.ibsEstimado)} · CBS{" "}
+                            {moeda(cupom.cbsEstimado)}
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1.5 text-center">
+                        <div className="no-print mb-1 flex justify-center">
+                          <Badge tom={ROTULO_SITUACAO_FISCAL[cupom.situacaoFiscal].tom}>
+                            {ROTULO_SITUACAO_FISCAL[cupom.situacaoFiscal].rotulo}
+                          </Badge>
+                        </div>
+                        {cupom.chaveFormatada ? (
+                          <>
+                            <p className="text-[8.5px] uppercase text-ink-500">Chave de acesso</p>
+                            <p className="break-all text-[9.5px] font-bold tracking-tight text-ink-900">
+                              {cupom.chaveFormatada}
+                            </p>
+                            {cupom.protocolo && <p className="mt-0.5 text-[9px] text-ink-700">Protocolo {cupom.protocolo}</p>}
+                          </>
+                        ) : (
+                          <p className="text-[9.5px] text-ink-700">{cupom.avisoFiscal}</p>
+                        )}
+                      </div>
+                      {comConfissao && (
+                        <div className="mt-2 border border-ink-300 p-1.5 text-left">
+                          <p className="text-center text-[9px] font-bold uppercase">Confissão de dívida (crediário)</p>
+                          <p className="mt-1 text-[8.5px] leading-snug">
+                            {pdvConfig.confissaoTexto} Valor: <strong>{moeda(cupom.total)}</strong> · Cliente:{" "}
+                            <strong>{cupom.clienteNome}</strong>.
+                          </p>
+                          <div className="mt-3 grid grid-cols-2 gap-4 text-center text-[8.5px]">
+                            <p className="border-t border-ink-400 pt-0.5">Assinatura do cliente</p>
+                            <p className="border-t border-ink-400 pt-0.5">Assinatura do operador</p>
+                          </div>
+                        </div>
+                      )}
+                      {pdvConfig.mensagemRodape && (
+                        <p className="mt-2 border-t border-dashed border-ink-300 pt-1 text-center text-[9px] font-bold">
+                          {pdvConfig.mensagemRodape}
+                        </p>
+                      )}
                     </div>
-                  ))}
-                  {cupom.troco > 0 && (
-                    <div className="flex justify-between font-bold text-way-800">
-                      <span>TROCO EM DINHEIRO</span>
-                      <span className="tabular">{moeda(cupom.troco)}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1 text-center text-[9px] text-ink-600">
-                <p>
-                  Trib. aprox. {moeda(cupom.tributosTotal)} (Lei 12.741) · IBS {moeda(cupom.ibsEstimado)} · CBS{" "}
-                  {moeda(cupom.cbsEstimado)}
-                </p>
+                  </div>
+                ))}
               </div>
+            );
+          })()}
+      </Modal>
 
-              <div className="mt-1.5 border-t border-dashed border-ink-300 pt-1.5 text-center">
-                <div className="no-print mb-1 flex justify-center">
-                  <Badge tom={ROTULO_SITUACAO_FISCAL[cupom.situacaoFiscal].tom}>
-                    {ROTULO_SITUACAO_FISCAL[cupom.situacaoFiscal].rotulo}
-                  </Badge>
-                </div>
-                {cupom.chaveFormatada ? (
-                  <>
-                    <p className="text-[8.5px] uppercase text-ink-500">Chave de acesso</p>
-                    <p className="break-all text-[9.5px] font-bold tracking-tight text-ink-900">
-                      {cupom.chaveFormatada}
-                    </p>
-                    {cupom.protocolo && <p className="mt-0.5 text-[9px] text-ink-700">Protocolo {cupom.protocolo}</p>}
-                  </>
-                ) : (
-                  <p className="text-[9.5px] text-ink-700">{cupom.avisoFiscal}</p>
-                )}
-              </div>
-            </div>
+      {/* Confirmação antes da impressão (Etapa 1, item 1) */}
+      <Modal
+        aberto={modalConfirmarImpressao}
+        aoFechar={() => setModalConfirmarImpressao(false)}
+        titulo="Imprimir comprovante?"
+        descricao={`${pdvConfig.nroVias} via${pdvConfig.nroVias > 1 ? "s" : ""} · ${pdvConfig.layoutCupom} · confira a impressora antes`}
+        largura="max-w-sm"
+        rodape={
+          <div className="flex w-full justify-end gap-2">
+            <Button variante="secundario" onClick={() => setModalConfirmarImpressao(false)}>
+              Pular impressão
+            </Button>
+            <Button
+              icone="imprimir"
+              onClick={() => {
+                setModalConfirmarImpressao(false);
+                window.print();
+              }}
+            >
+              Imprimir agora
+            </Button>
           </div>
-        )}
+        }
+      >
+        <p className="text-[12.5px] text-ink-600">
+          O comprovante será impresso em <strong>{pdvConfig.nroVias} via{pdvConfig.nroVias > 1 ? "s" : ""}</strong> no layout{" "}
+          <strong>{pdvConfig.layoutCupom}</strong>. Desligue a pergunta em Configurações → PDV e impressão se preferir
+          impressão direta.
+        </p>
       </Modal>
 
       {/* COMPONENTE REAPROVEITADO DE IMPRESSÃO DANFE 80MM / A4 (ETAPA 10) */}
-      <Impressao alvo={imprimindo} aoFechar={() => setImprimindo(null)} />
+      <Impressao alvo={imprimindo} aoFechar={() => setImprimindo(null)} cfg={pdvConfig} cancelados={cupom?.itensCancelados ?? []} />
 
       {/* ABERTURA RÁPIDA DE CAIXA NO PDV */}
       <Modal

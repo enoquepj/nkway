@@ -640,6 +640,13 @@ export const caixaQuebraLogs = pgTable(
   ],
 );
 
+/** Configuração de PDV e impressão do cupom por empresa (Etapa 1: confirmação, vias, logo, cabeçalho, cancelados, desconto por item, uma linha, confissão, layout 80mm/A4 + rodapé). JSON sanitizado em `src/lib/pdvImpressao.ts`; nunca guarda segredo. */
+export const pdvConfigs = pgTable("nk_pdv_config", {
+  empresaId: uuid("empresa_id").primaryKey().references(() => empresas.id, { onDelete: "cascade" }),
+  dados: jsonb("dados").$type<Record<string, unknown>>().notNull().default({}),
+  atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type CaixaQuebraLogRow = typeof caixaQuebraLogs.$inferSelect;
 
 export type DevolucaoItem = {

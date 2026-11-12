@@ -3,8 +3,9 @@
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { empresas, usuarios } from "@/db/schema";
+import { empresas, pdvConfigs, usuarios } from "@/db/schema";
 import { mascaraDocumento } from "@/lib/dominio";
+import { sanitizarConfigPdvImpressao } from "@/lib/pdvImpressao";
 import { normalizarPerfil } from "@/lib/permissoes";
 import { cancelarAssinaturaCnpj, contratarAssinaturaCnpj } from "@/server/acoes/assinatura";
 import { criarUsuario, alternarStatusUsuario } from "@/server/acoes/usuarios";
@@ -154,4 +155,33 @@ export async function criarOperador(input: { nome: string; email: string; senha:
 
 export async function removerOperador(id: string): Promise<Resultado> {
   return alternarStatusUsuario({ id, ativo: false });
+}
+
+/** Etapa 1 PDV/impressão: salva a configuração do cupom da empresa (somente config.gerenciar). */
+export async function salvarConfigPdv(bruto: unknown): Promise<Resultado> {
+  try {
+    const { empresa, usuario } = await exigirPermissao("config.gerenciar");
+    const cfg = sanitizarConfigPdvImpressao((corpo(bruto) as Record<string, unknown> | null) ?? {});
+    await db
+      .insert(pdvConfigs)
+      .values({ empresaId: empresa.id, dados: cfg as unknown as Record<string, unknown>, atualizadoEm: new Date() })
+      .onConflictDoUpdate({
+        target: pdvConfigs.empresaId,
+        set: { dados: cfg as unknown as Record<string, unknown>, atualizadoEm: new Date() },
+      });
+    await registrarAuditoria({
+      empresaId: empresa.id,
+      usuario,
+      acao: "config.pdv_impressao",
+      entidade: "pdv_config",
+      registroId: empresa.id,
+      resumo: `Configuração de PDV/impressão atualizada (vias ${cfg.nroVias}, layout ${cfg.layoutCupom}, confirmação ${cfg.confirmarAntesImprimir ? "sim" : "não"})`,
+      alteracoes: { nroVias: cfg.nroVias, layoutCupom: cfg.layoutCupom, confirmarAntesImprimir: cfg.confirmarAntesImprimir, imprimeLogo: cfg.imprimeLogo, confissaoDivida: cfg.confissaoDivida },
+    });
+    revalidatePath("/config");
+    revalidatePath("/pdv");
+    return { ok: true, aviso: "Configuração do PDV salva e aplicada ao cupom." };
+  } catch (e) {
+    return comoErro(e);
+  }
 }

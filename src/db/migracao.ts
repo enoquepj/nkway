@@ -276,5 +276,15 @@ export async function garantirMigracoesNk() {
       atualizado_em timestamptz not null default now()
     )
   `);
+  // Etapa 1 PDV/impressão: configuração do cupom por empresa (confirmação, vias,
+  // logo, cabeçalho, cancelados, desconto por item, uma linha, confissão, layout).
+  // Aditiva e idempotente: não altera vendas, produtos, caixa ou documentos.
+  await db.execute(sql`
+    create table if not exists nk_pdv_config (
+      empresa_id uuid primary key references nk_empresa(id) on delete cascade,
+      dados jsonb not null default '{}'::jsonb,
+      atualizado_em timestamptz not null default now()
+    )
+  `);
   aplicado = true;
 }

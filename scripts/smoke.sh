@@ -230,6 +230,12 @@ else
   TABELAS=$?
   marca $TABELAS "tabelas de domínio oficiais (CFOP/CST/CSOSN/origem/IBS-CBS) como opções selecionáveis"
   if [[ $TABELAS -ne 0 ]]; then tail -40 /tmp/nk-tabelas-dominio.log; fi
+
+  echo "→ PDV e impressão (vias, logo, cancelados, confissão, 80mm/A4)"
+  node scripts/testar-pdv-impressao.mjs > /tmp/nk-pdv-impressao.log 2>&1
+  PDVIMP=$?
+  marca $PDVIMP "PDV configurável por empresa: confirmação, vias, itens e layout (16 cenários)"
+  if [[ $PDVIMP -ne 0 ]]; then tail -40 /tmp/nk-pdv-impressao.log; fi
 fi
 
 echo

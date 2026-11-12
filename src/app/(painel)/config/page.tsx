@@ -7,14 +7,14 @@ import { planoById } from "@/lib/dominio";
 import { crtSugeridoParaRegime } from "@/lib/tributacao";
 import { normalizarPerfil } from "@/lib/permissoes";
 import { ConfigView } from "@/views/Config";
-import { listarContas, listarEntradas, listarProdutos, listarVendas, obterPainelAssinatura, painel } from "@/server/dados";
+import { listarContas, listarEntradas, listarProdutos, listarVendas, obterConfigPdv, obterPainelAssinatura, painel } from "@/server/dados";
 
 export const dynamic = "force-dynamic";
 
 export default async function ConfigPage() {
   const c = await contexto();
   if (!c) redirect("/login");
-  const [equipe, produtos, vendas, contas, entradas, resumo, assinatura] = await Promise.all([
+  const [equipe, produtos, vendas, contas, entradas, resumo, assinatura, pdv] = await Promise.all([
     db.select({ id: usuarios.id, nome: usuarios.nome, email: usuarios.email, papel: usuarios.papel, ativo: usuarios.ativo }).from(usuarios).where(eq(usuarios.empresaId, c.empresaId)),
     listarProdutos(c.empresaId),
     listarVendas(c.empresaId),
@@ -22,6 +22,7 @@ export default async function ConfigPage() {
     listarEntradas(c.empresaId),
     painel(c.empresaId),
     obterPainelAssinatura(c.empresaId),
+    obterConfigPdv(c.empresaId),
   ]);
   const fiscal = (c.empresa.fiscal ?? {}) as Record<string, unknown>;
   return (
@@ -55,6 +56,7 @@ export default async function ConfigPage() {
         certificadoValidade: String(fiscal.certificadoValidade ?? ""),
         certificadoSerial: String(fiscal.certificadoSerial ?? ""),
       }}
+      pdv={pdv}
       plano={{ id: c.empresa.plano, nome: planoById(c.empresa.plano).nome, preco: planoById(c.empresa.plano).preco, limiteProdutos: planoById(c.empresa.plano).limiteProdutos, limiteUsuarios: planoById(c.empresa.plano).limiteUsuarios }}
       equipe={equipe.map((u) => ({ ...u, papel: normalizarPerfil(u.papel), ativo: u.ativo !== false }))}
       usuarioAtual={c.usuario.id}

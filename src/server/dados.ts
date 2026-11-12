@@ -16,6 +16,7 @@ import {
   inutilizacoes,
   mdfes,
   movimentos,
+  pdvConfigs,
   produtos,
   usuarios,
   vendaItens,
@@ -52,6 +53,17 @@ export async function listarComplementosFiscais(empresaId: string): Promise<Reco
   const linhas = await db.select().from(produtoTributacoes).where(eq(produtoTributacoes.empresaId, empresaId));
   return Object.fromEntries(linhas.map((c) => [c.produtoId, { perfilId: c.perfilId ?? null, dados: lerParametros(c.dados) }]));
 }
+
+/** Etapa 1 PDV/impressão: configuração do cupom da empresa (sempre sanitizada; sem linha = padrão). */
+export async function obterConfigPdv(empresaId: string): Promise<PdvImpressaoConfig> {
+  try {
+    const [linha] = await db.select({ dados: pdvConfigs.dados }).from(pdvConfigs).where(eq(pdvConfigs.empresaId, empresaId)).limit(1);
+    if (!linha) return { ...PDV_IMPRESSAO_PADRAO };
+    return sanitizarConfigPdvImpressao(linha.dados);
+  } catch {
+    return { ...PDV_IMPRESSAO_PADRAO };
+  }
+}
 import type { CicloAssinatura, FormaAssinatura, StatusAssinatura, StatusFaturaAssinatura } from "@/lib/assinatura";
 import { apurarSessaoCaixa, aplicarSnapshotFechamento, type ApuracaoSessaoCaixa, type MovimentoCaixaInput } from "@/lib/caixa";
 import { carregarInsumosSessoes } from "@/server/caixaCore";
@@ -68,6 +80,7 @@ import {
 import { diagnosticoGatewayServidor, type ProvedorGateway } from "@/server/assinaturaGateway";
 import { ambienteDfeServidor, lerDocumentosDfeFiscal } from "@/server/dfeCore";
 import { diagnosticoEmissorServidor } from "@/server/emissorFiscalCore";
+import { PDV_IMPRESSAO_PADRAO, sanitizarConfigPdvImpressao, type PdvImpressaoConfig } from "@/lib/pdvImpressao";
 
 const N = (v: unknown, dec = 2) => {
   const f = 10 ** dec;

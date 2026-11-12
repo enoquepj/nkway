@@ -46,6 +46,17 @@ export type ItemReciboTermicoPdv = {
   unidade: string;
   precoUnit: number;
   total: number;
+  /** Etapa 1 PDV/impressão: desconto/acréscimo do item (opcional, só exibe se > 0). */
+  desconto?: number;
+  acrescimo?: number;
+};
+
+export type ItemCanceladoPdv = {
+  nome: string;
+  qtd: number;
+  unidade: string;
+  total: number;
+  motivo?: string;
 };
 
 export type ReciboTermicoPdv = {
@@ -84,6 +95,8 @@ export type ReciboTermicoPdv = {
   protocolo: string | null;
   avisoFiscal: string;
   validadeDav: string | null;
+  /** Etapa 1 PDV/impressão: itens removidos no caixa (só impressos se a config permitir). */
+  itensCancelados?: ItemCanceladoPdv[];
 };
 
 function calcularTributosRecibo(total: number) {
@@ -202,7 +215,7 @@ export function montarReciboDeFechamentoPdv(params: {
   operador: string;
   terminal: string;
   ambiente: string;
-  itens: readonly { nome: string; qtd: number; precoUnit: number; total?: number; unidade?: string | null }[];
+  itens: readonly { nome: string; qtd: number; precoUnit: number; total?: number; unidade?: string | null; desconto?: number; acrescimo?: number }[];
   subtotal: number;
   desconto: number;
   frete?: number;
@@ -213,6 +226,7 @@ export function montarReciboDeFechamentoPdv(params: {
   dataIso?: string;
   /** Venda guardada na fila offline: comprovante provisório, sem número definitivo nem validade fiscal. */
   offline?: boolean;
+  itensCancelados?: ItemCanceladoPdv[];
 }): ReciboTermicoPdv {
   const tipo: "fiscal" | "sem_nota" | "dav" =
     params.modo === "dav" ? "dav" : params.modo === "sem_nota" ? "sem_nota" : "fiscal";
@@ -228,6 +242,8 @@ export function montarReciboDeFechamentoPdv(params: {
   const itens: ItemReciboTermicoPdv[] = params.itens.map((it, idx) => {
     const qtd = normalizarQtdPdv(Number(it.qtd) || 0);
     const precoUnit = round2(Number(it.precoUnit) || 0);
+    const desconto = round2(Math.max(0, Number((it as { desconto?: unknown }).desconto) || 0));
+    const acrescimo = round2(Math.max(0, Number((it as { acrescimo?: unknown }).acrescimo) || 0));
     return {
       numero: idx + 1,
       nome: String(it.nome || "ITEM"),
@@ -235,6 +251,8 @@ export function montarReciboDeFechamentoPdv(params: {
       unidade: String(it.unidade || "UN"),
       precoUnit,
       total: it.total !== undefined ? round2(Number(it.total)) : round2(qtd * precoUnit),
+      ...(desconto > 0 ? { desconto } : {}),
+      ...(acrescimo > 0 ? { acrescimo } : {}),
     };
   });
 
@@ -303,6 +321,7 @@ export function montarReciboDeFechamentoPdv(params: {
       ? "SEM CONEXÃO: venda registrada na fila offline deste terminal e ainda NÃO enviada ao servidor. Este comprovante é provisório, sem número definitivo e sem validade fiscal; a numeração e a NFC-e (se houver) serão geradas na sincronização."
       : cab.avisoFiscal,
     validadeDav: tipo === "dav" ? (params.validadeDav ?? null) : null,
+    ...(params.itensCancelados?.length ? { itensCancelados: params.itensCancelados } : {}),
   };
 }
 
@@ -464,6 +483,8 @@ export function converterReciboParaDocFiscalPdv(recibo: ReciboTermicoPdv): DocFi
       unidade: i.unidade,
       precoUnit: i.precoUnit,
       total: i.total,
+      ...(i.desconto ? { desconto: i.desconto } : {}),
+      ...(i.acrescimo ? { acrescimo: i.acrescimo } : {}),
     })),
     subtotal: recibo.subtotal,
     desconto: recibo.desconto,

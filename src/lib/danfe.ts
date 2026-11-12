@@ -28,6 +28,9 @@ export type ItemDanfe = {
   cfop?: string;
   csosn?: string;
   icmsAliq?: number;
+  /** Etapa 1 PDV/impressão: desconto/acréscimo do item (opcional, só exibe se > 0). */
+  desconto?: number;
+  acrescimo?: number;
 };
 
 export type DocFiscal = {
