@@ -3824,7 +3824,7 @@ export function PdvView({
             return (
               <div className={cn("max-h-[70vh] space-y-4 overflow-auto rounded-xl bg-ink-100 p-3", !imprimindo && "print-area")}>
                 {vias.map((rotuloVia, idxVia) => {
-                  if (cupom.tipo === "dav" && pdvConfig.layoutCupom === "A4") {
+                  if ((cupom.tipo === "dav" || cupom.tipo === "sem_nota") && pdvConfig.layoutCupom === "A4") {
                     return (
                       <DavA4Pdv
                         key={idxVia}
