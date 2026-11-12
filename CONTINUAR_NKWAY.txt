@@ -3,7 +3,7 @@ CONTINUAR NKWAY — PRODUÇÃO NEXT.JS + VERCEL + SUPABASE FUNCIONANDO
 Repositório: https://github.com/enoquepj/nkway
 Branch: main
 Produção: https://nkway.vercel.app
-Base reconferida em 2026-11-12: `main` = `6988616` ("PDV impressão configurável etapa 1"). A Etapa 1, em 21 arquivos, já foi publicada em commit separado. Produção responde health HTTP 200 e `/api/versao` identifica o mesmo SHA. Etapa 2 local: DAV A4 não fiscal, busca de produtos vazia, pagamento/modelo no F10. Validação final local verde: typegen, tsc, build, build_and_start, smoke 56/56 (diagnóstico 232/232) e ações 212/0. Não usar pacote baseado em `a16fe24`; manter `package.json` pendente desmarcado; sem mudança de infraestrutura. Detalhes nos itens 42–43 de `CONTEXTO_ARENA.md`.
+Base reconferida em 2026-11-12: `main` = `8a3437c`; Etapa 1 de impressão em `6988616` e hotfix DAV em `8a3437c` já publicados. Produção responde health HTTP 200 e `/api/versao` identifica `8a3437c`. Ajustes locais pendentes: venda sem nota em A4, SQL removido do login e logout encerrando sessão e voltando para `/login`. Não usar pacote antigo baseado em `a16fe24`; manter `package.json` desmarcado; sem mudança de infraestrutura. Detalhes nos itens 42–44 de `CONTEXTO_ARENA.md`.
 
 1. Clone fora do projeto: `git clone --depth 1 https://github.com/enoquepj/nkway /tmp/nkway` (nunca clone dentro do projeto da plataforma).
 2. Leia primeiro e somente para retomada rápida: `VERCEL_SUPABASE.md` inteiro, `CONTEXTO_ARENA.md` seções 1, 2, 4, 6 e 7, e `MEMORANDO.md` seções 1 e 2.0. Depois abra outros documentos só se a tarefa exigir.
