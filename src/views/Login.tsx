@@ -5,7 +5,6 @@ import { useState } from "react";
 import { Badge, Button, Campo, Icon, Input, Select, cn } from "@/components/ui";
 import { cadastrar, entrar } from "@/server/acoes/auth";
 import { UFS, PLANOS_CFG, mascaraDocumento, soDigitos } from "@/lib/dominio";
-import { gerarSqlConsolidadoSupabaseNk } from "@/lib/migracaoLegado";
 
 type Aba = "entrar" | "criar";
 
@@ -247,25 +246,6 @@ export function LoginView({ temDemo }: { temDemo: boolean }) {
                     }}
                   >
                     (preencher)
-                  </button>
-                </p>
-                <p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const sql = gerarSqlConsolidadoSupabaseNk();
-                      const blob = new Blob([sql], { type: "application/sql;charset=utf-8" });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = "ATUALIZAR_SUPABASE_AGORA.sql";
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }}
-                    className="inline-flex items-center gap-1 rounded-md bg-ink-50 px-2.5 py-1 text-[11px] font-semibold text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-100"
-                  >
-                    <Icon name="baixar" className="size-3.5 text-way-600" />
-                    Baixar SQL único do Supabase (.sql)
                   </button>
                 </p>
               </div>
