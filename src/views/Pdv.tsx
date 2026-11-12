@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { DavA4Pdv } from "@/components/DavA4Pdv";
 import { Impressao, type AlvoImpresso } from "@/components/Impressao";
 import { ModalFechamentoCego } from "@/components/ModalFechamentoCego";
 import { Tabela, type Coluna } from "@/components/Tabela";
@@ -60,10 +61,7 @@ import {
   type LinhaItemPdv,
 } from "@/lib/multiplicadorPdv";
 import {
-  MODELOS_FISCAIS_PDV,
   avancarAposLancamentoParcelaPdv,
-  ciclarFormaPagamentoPdv,
-  ciclarModeloFiscalPdv,
   criarEstadoInicialFinalizarPdv,
   processarTeclaFinalizarPdv,
   resolverOpcaoFechamentoValidaPdv,
@@ -86,7 +84,6 @@ import {
   type ReciboTermicoPdv, gerarIdFilaPdv, idadeFilaOfflineHoras } from "@/lib/operacoesPdv";
 import {
   calcularResumoPagamentoPdv,
-  editarParcelaPagamentoPdv,
   lerValorMonetarioPdv,
   registrarParcelaPagamentoPdv,
   sugerirCedulasDinheiroPdv,
@@ -236,7 +233,6 @@ export function PdvView({
   const [descontoValor, setDescontoValor] = useState("");
   const [clienteId, setClienteId] = useState<string | null>(null);
   const [pagamentos, setPagamentos] = useState<Pagamento[]>([]);
-  const [recebido, setRecebido] = useState("");
   const [modelo, setModelo] = useState<"NFC-e" | "NF-e" | "SAT">("NFC-e");
   const [validadeDav, setValidadeDav] = useState(somaDias(hojeISO(), 3));
   const [cupom, setCupom] = useState<ReciboTermicoPdv | null>(null);
@@ -323,8 +319,6 @@ export function PdvView({
   const modelosModalRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const opcoesModalRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const confirmacaoModalRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const formasLateralRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const modelosLateralRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const iniciouDigitacaoDiretaRef = useRef<boolean>(false);
   const linhasRef = useRef<Linha[]>([]);
   const multiplicadorRef = useRef<EstadoMultiplicadorPdv>(ESTADO_MULTIPLICADOR_INICIAL);
@@ -550,7 +544,6 @@ export function PdvView({
     setItensCanceladosCaixa([]);
     setPagamentos([]);
     setDescontoValor("");
-    setRecebido("");
     setEditando(null);
     setTermo("");
     setCursor(0);
@@ -560,7 +553,7 @@ export function PdvView({
 
   const resultados = useMemo(() => {
     const t = termo.trim().toLowerCase();
-    if (!t) return ativos.slice(0, 8);
+    if (!t) return [];
     const digitado = t.replace(/\s+/g, " ");
     return ativos
       .map((p) => {
@@ -792,31 +785,6 @@ export function PdvView({
     });
   }, [atualizarLinhas, toast]);
 
-  const definirPagamentoAutomatico = useCallback(
-    (forma: string, silencioso = false): boolean => {
-      if (total <= 0) return false;
-      // Se ainda não há pagamentos ou só havia 1 pagamento quitando tudo, permite trocar a forma única em 1 clique/atalho
-      if (pagamentos.length === 1 && falta <= 0.009) {
-        if (pagamentos[0].forma === forma) return true;
-        setPagamentos([{ forma, valor: total }]);
-        return true;
-      }
-      const r = registrarParcelaPagamentoPdv({
-        pagamentosAtuais: pagamentos,
-        totalVenda: total,
-        forma,
-        valorInformado: falta > 0 ? falta : total,
-      });
-      if (!r.ok) {
-        if (!silencioso) toast(r.erro, "info");
-        return false;
-      }
-      setPagamentos(r.pagamentos);
-      return true;
-    },
-    [falta, pagamentos, toast, total],
-  );
-
   const selecionarFormaNoModalFinalizar = useCallback(
     (novaForma: string, manterSecaoValor = false) => {
       setFormaAtivaModal(novaForma);
@@ -949,7 +917,6 @@ export function PdvView({
       setDescontoModo(r.retomada.descontoModo);
       setDescontoValor(r.retomada.descontoValor);
       setPagamentos(r.retomada.pagamentos);
-      setRecebido("");
       setEditando(null);
       setTermo("");
       setCursor(0);
@@ -1370,7 +1337,6 @@ export function PdvView({
       setDescontoModo(r.descontoModo);
       setDescontoValor(r.descontoValor);
       setPagamentos([]);
-      setRecebido("");
       setEditando(null);
       setTermo("");
       setCursor(0);
@@ -1745,14 +1711,6 @@ export function PdvView({
           e.preventDefault();
           removerUltimoItem();
         }
-      } else if (e.altKey && /^[1-6]$/.test(e.key)) {
-        // Alt+1..6 (e Ctrl+Alt+1..6 como alternativa D6)
-        e.preventDefault();
-        const itemForma = FORMAS_ATALHO_ALT.find((f) => f.digito === e.key);
-        if (itemForma && total > 0) {
-          const aplicou = definirPagamentoAutomatico(itemForma.forma);
-          if (aplicou) toast(`Pagamento: ${itemForma.rotulo} selecionado.`, "info");
-        }
       } else if (e.key === "Escape") {
         // Esc nunca apaga a venda: cancela edição inline, cancela multiplicador ou limpa texto da busca
         if (editando) {
@@ -1804,7 +1762,6 @@ export function PdvView({
     atualizarMultiplicador,
     removerUltimoItem,
     total,
-    definirPagamentoAutomatico,
     toast,
     termo,
   ]);
@@ -2487,6 +2444,13 @@ export function PdvView({
                 ))}
               </ul>
             )}
+            {multiplicador.status !== "digitando" && resultados.length === 0 && (
+              <p role="status" className="mt-2 rounded-lg bg-ink-50 px-3 py-2 text-[11.5px] text-ink-500">
+                {termo.trim()
+                  ? `Nenhum produto encontrado para “${termo.trim()}”.`
+                  : "Bipe o código de barras ou digite nome / SKU para pesquisar produtos."}
+              </p>
+            )}
           </Card>
 
           <Card className="p-0" padding={false}>
@@ -2684,160 +2648,6 @@ export function PdvView({
           </Card>
 
           <Card className="shrink-0">
-            <p className="micro mb-2 text-ink-400">Forma de pagamento · Alt+1 a Alt+6 ou setas ← →</p>
-            <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Formas de pagamento">
-              {FORMAS_PAGAMENTO.map((f) => {
-                const usado = pagamentos.filter((p) => p.forma === f.id).reduce((s, p) => s + p.valor, 0);
-                const atalhoIdx = FORMAS_ATALHO_ALT.find((a) => a.forma === f.id)?.digito;
-                return (
-                  <button
-                    key={f.id}
-                    ref={(el) => {
-                      formasLateralRefs.current[f.id] = el;
-                    }}
-                    type="button"
-                    onClick={() =>
-                      usado > 0
-                        ? setPagamentos(pagamentos.filter((p) => p.forma !== f.id))
-                        : definirPagamentoAutomatico(f.id)
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-                        e.preventDefault();
-                        const prox = ciclarFormaPagamentoPdv(f.id, 1);
-                        formasLateralRefs.current[prox]?.focus();
-                      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-                        e.preventDefault();
-                        const ant = ciclarFormaPagamentoPdv(f.id, -1);
-                        formasLateralRefs.current[ant]?.focus();
-                      }
-                    }}
-                    className={cn(
-                      "rounded-lg px-2 py-2 text-[12px] font-semibold ring-1 ring-inset transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-way-500",
-                      usado > 0
-                        ? "bg-way-600 text-white ring-way-600"
-                        : "bg-white text-ink-600 ring-ink-200 hover:bg-ink-50",
-                    )}
-                  >
-                    <span className="flex items-center justify-center gap-1">
-                      {atalhoIdx && (
-                        <kbd
-                          className={cn(
-                            "rounded px-1 font-mono text-[9.5px]",
-                            usado > 0 ? "bg-way-700 text-way-100" : "bg-ink-100 text-ink-500",
-                          )}
-                        >
-                          {atalhoIdx}
-                        </kbd>
-                      )}
-                      <span>{f.label}</span>
-                    </span>
-                    {usado > 0 && (
-                      <span className="tabular mt-0.5 block text-[10px] font-medium opacity-90">{moeda(usado)}</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            {pagamentos.length > 0 && (
-              <ul className="mt-2 space-y-1">
-                {pagamentos.map((p, i) => (
-                  <li key={`${p.forma}-${i}`} className="flex items-center gap-2 rounded-md bg-ink-50 px-2 py-1">
-                    <span className="flex-1 text-[12px] font-semibold text-ink-700">
-                      {FORMAS_PAGAMENTO.find((f) => f.id === p.forma)?.label ?? p.forma}
-                    </span>
-                    <input
-                      value={p.valor}
-                      onChange={(e) => {
-                        const ed = editarParcelaPagamentoPdv({
-                          pagamentosAtuais: pagamentos,
-                          totalVenda: total,
-                          indice: i,
-                          novoValor: e.target.value,
-                        });
-                        setPagamentos(ed.pagamentos);
-                        if (ed.limitadoAoSaldo) {
-                          toast("Valor limitado ao saldo restante (troco permitido apenas em dinheiro).", "info");
-                        }
-                      }}
-                      className="tabular w-24 rounded bg-white px-1.5 py-0.5 text-right text-[12px] font-semibold ring-1 ring-inset ring-ink-200 outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setPagamentos(pagamentos.filter((_, xi) => xi !== i))}
-                      className="text-ink-300 hover:text-rose-600"
-                    >
-                      <Icon name="x" className="size-3.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="mt-2 flex items-center gap-2">
-              <Campo rotulo="Valor recebido (dinheiro)" className="flex-1">
-                <Input
-                  dinheiro
-                  valor={recebido}
-                  aoMudar={setRecebido}
-                  placeholder="0,00"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      const v = lerValorMonetarioPdv(recebido);
-                      if (Number.isFinite(v) && v > 0) {
-                        const semDinheiro = pagamentos.filter((p) => p.forma !== "dinheiro");
-                        const r = registrarParcelaPagamentoPdv({
-                          pagamentosAtuais: semDinheiro,
-                          totalVenda: total,
-                          forma: "dinheiro",
-                          valorInformado: v,
-                        });
-                        if (r.ok) {
-                          setPagamentos(r.pagamentos);
-                          setRecebido("");
-                        } else {
-                          toast(r.erro, "erro");
-                        }
-                      }
-                    }
-                  }}
-                />
-              </Campo>
-              <Button
-                variante="secundario"
-                className="mt-5"
-                onClick={() => setPagamentos([])}
-                disabled={pagamentos.length === 0}
-              >
-                Zerar
-              </Button>
-            </div>
-            {cedulasSugeridas.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                <span className="text-[10px] font-semibold uppercase text-ink-400">Dinheiro rápido:</span>
-                {cedulasSugeridas.map((val, idx) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => {
-                      const r = registrarParcelaPagamentoPdv({
-                        pagamentosAtuais: pagamentos,
-                        totalVenda: total,
-                        forma: "dinheiro",
-                        valorInformado: val,
-                      });
-                      if (r.ok) setPagamentos(r.pagamentos);
-                    }}
-                    className="tabular rounded bg-ink-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-ink-700 ring-1 ring-inset ring-ink-200 transition hover:bg-way-50 hover:text-way-800 hover:ring-way-300"
-                  >
-                    {idx === 0 ? `Exato ${moeda(val)}` : moeda(val)}
-                  </button>
-                ))}
-              </div>
-            )}
-          </Card>
-
-          <Card className="shrink-0">
             <p className="micro mb-2 text-ink-400">Cliente (F8) e desconto (F4)</p>
             <button
               type="button"
@@ -2913,52 +2723,11 @@ export function PdvView({
               </div>
             </div>
 
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <Campo rotulo="Documento fiscal (← →)">
-                <div
-                  role="radiogroup"
-                  aria-label="Modelo de documento fiscal"
-                  className="grid grid-cols-3 gap-1 rounded-lg bg-ink-50 p-0.5 ring-1 ring-inset ring-ink-200"
-                >
-                  {MODELOS_FISCAIS_PDV.map((mod) => {
-                    const ativoMod = modelo === mod;
-                    return (
-                      <button
-                        key={mod}
-                        ref={(el) => {
-                          modelosLateralRefs.current[mod] = el;
-                        }}
-                        type="button"
-                        role="radio"
-                        aria-checked={ativoMod}
-                        onClick={() => setModelo(mod)}
-                        onKeyDown={(e) => {
-                          if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-                            e.preventDefault();
-                            const prox = ciclarModeloFiscalPdv(mod, 1);
-                            setModelo(prox);
-                            modelosLateralRefs.current[prox]?.focus();
-                          } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-                            e.preventDefault();
-                            const ant = ciclarModeloFiscalPdv(mod, -1);
-                            setModelo(ant);
-                            modelosLateralRefs.current[ant]?.focus();
-                          }
-                        }}
-                        className={cn(
-                          "rounded-md py-1.5 text-center text-[11px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-way-500",
-                          ativoMod ? "bg-ink-900 text-white shadow-sm" : "text-ink-500 hover:text-ink-900",
-                        )}
-                      >
-                        {mod}
-                      </button>
-                    );
-                  })}
-                </div>
-              </Campo>
+            <div className="mt-2">
               <Campo rotulo="Validade do DAV">
                 <Input type="date" valor={validadeDav} aoMudar={setValidadeDav} />
               </Campo>
+              <p className="mt-1 text-[10.5px] text-ink-400">Usada somente ao salvar como DAV no F10.</p>
             </div>
           </Card>
         </aside>
@@ -4054,8 +3823,22 @@ export function PdvView({
             const fonteVia = pdvConfig.tamanhoFonte === "grande" ? "text-[11.5px]" : "text-[10.5px]";
             return (
               <div className={cn("max-h-[70vh] space-y-4 overflow-auto rounded-xl bg-ink-100 p-3", !imprimindo && "print-area")}>
-                {vias.map((rotuloVia, idxVia) => (
-                  <div key={idxVia} className={idxVia > 0 ? "break-before-page border-t-4 border-dashed border-ink-300 pt-4" : ""}>
+                {vias.map((rotuloVia, idxVia) => {
+                  if (cupom.tipo === "dav" && pdvConfig.layoutCupom === "A4") {
+                    return (
+                      <DavA4Pdv
+                        key={idxVia}
+                        cupom={cupom}
+                        empresa={empresa}
+                        config={pdvConfig}
+                        logoTexto={logoTexto}
+                        rotuloVia={rotuloVia}
+                        viaIndex={idxVia}
+                      />
+                    );
+                  }
+                  return (
+                    <div key={idxVia} className={idxVia > 0 ? "break-before-page border-t-4 border-dashed border-ink-300 pt-4" : ""}>
                     {rotuloVia && (
                       <p className="mx-auto mb-1 w-fit rounded bg-ink-900 px-2 py-0.5 font-mono text-[9px] font-bold uppercase text-white">
                         {rotuloVia}
@@ -4265,7 +4048,8 @@ export function PdvView({
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             );
           })()}
