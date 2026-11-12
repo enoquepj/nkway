@@ -97,6 +97,7 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
   const router = useRouter();
   const [aberto, setAberto] = useState(false);
   const [saindo, setSaindo] = useState(false);
+  const [erroSair, setErroSair] = useState("");
 
   useEffect(() => setAberto(false), [pathname]);
 
@@ -241,14 +242,27 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
               type="button"
               onClick={async () => {
                 setSaindo(true);
-                await sair();
+                setErroSair("");
+                try {
+                  const resultado = await sair();
+                  if (!resultado.ok) {
+                    setErroSair(resultado.erro);
+                    setSaindo(false);
+                    return;
+                  }
+                  window.location.replace("/login");
+                } catch {
+                  setErroSair("Não foi possível encerrar a sessão. Tente novamente.");
+                  setSaindo(false);
+                }
               }}
               disabled={saindo}
               className="rounded-md px-1.5 py-1 text-[11px] font-semibold text-ink-400 transition hover:bg-ink-800 hover:text-white"
             >
-              Sair
+              {saindo ? "Saindo…" : "Sair"}
             </button>
           </div>
+          {erroSair && <p role="alert" className="mt-1 text-[10.5px] text-rose-400">{erroSair}</p>}
         </div>
       </aside>
 
