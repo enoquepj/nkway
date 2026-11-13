@@ -7,7 +7,6 @@ import { ROTA_PDV, abrirPdvComTelaCheia } from "@/lib/abrirPdv";
 import { ROTULO_PERFIL, temPermissao, type PerfilUsuario, type PermissaoAcao } from "@/lib/permissoes";
 import { LinkPdv } from "./LinkPdv";
 import { Badge, Button, Icon, cn } from "./ui";
-import { sair } from "@/server/acoes/auth";
 
 export type ItemPainel = {
   empresaNome: string;
@@ -244,9 +243,10 @@ export function Shell({ dados, children }: { dados: ItemPainel; children: ReactN
                 setSaindo(true);
                 setErroSair("");
                 try {
-                  const resultado = await sair();
-                  if (!resultado.ok) {
-                    setErroSair(resultado.erro);
+                  const resposta = await fetch("/api/sair", { method: "POST", credentials: "same-origin", cache: "no-store" });
+                  const resultado = (await resposta.json().catch(() => null)) as { ok: boolean; erro?: string } | null;
+                  if (!resposta.ok || !resultado?.ok) {
+                    setErroSair(resultado?.erro || "Não foi possível encerrar a sessão. Tente novamente.");
                     setSaindo(false);
                     return;
                   }

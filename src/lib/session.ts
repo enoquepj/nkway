@@ -3,9 +3,16 @@ import { cookies, headers } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { empresas, usuarios } from "@/db/schema";
+import {
+  IDADE_COOKIE_SESSAO_SEGUNDOS,
+  NOME_COOKIE_SESSAO,
+  atributosCookieSessao,
+  atributosExpiracaoCookieSessao,
+  requisicaoEhHttps,
+} from "@/lib/sessaoCookie";
 
-const COOKIE = "nkway.sessao";
-const MAX_AGE = 60 * 60 * 24 * 30;
+const COOKIE = NOME_COOKIE_SESSAO;
+const MAX_AGE = IDADE_COOKIE_SESSAO_SEGUNDOS;
 
 function segredo(): string {
   return process.env.AUTH_SECRET || "nkway-segredo-local-dev-troque-em-producao";
@@ -22,19 +29,9 @@ export type Sessao = { empresaId: string; usuarioId: string };
 export async function criarSessao(sessao: Sessao) {
   const payload = b64u(Buffer.from(JSON.stringify({ ...sessao, iat: Date.now() })));
   const token = `${payload}.${assinar(payload)}`;
-  const hdrs = await headers();
-  const proto = hdrs.get("x-forwarded-proto") || "";
-  const origin = hdrs.get("origin") || "";
-  const ehHttps = proto.includes("https") || origin.startsWith("https://");
+  const ehHttps = requisicaoEhHttps(await headers());
   const jar = await cookies();
-  jar.set(COOKIE, token, {
-    httpOnly: true,
-    sameSite: ehHttps ? "none" : "lax",
-    path: "/",
-    maxAge: MAX_AGE,
-    secure: ehHttps,
-    ...(ehHttps ? { partitioned: true } : {}),
-  });
+  jar.set(COOKIE, token, { ...atributosCookieSessao(ehHttps), maxAge: MAX_AGE });
 }
 
 export async function lerSessao(): Promise<Sessao | null> {
@@ -56,9 +53,14 @@ export async function lerSessao(): Promise<Sessao | null> {
   }
 }
 
+/**
+ * Encerra a sessão expirando o MESMO cookie com o MESMO escopo da criação
+ * (Secure/SameSite/Partitioned em HTTPS). Sem isso o navegador mantém o cookie particionado.
+ */
 export async function encerrarSessao() {
+  const ehHttps = requisicaoEhHttps(await headers());
   const jar = await cookies();
-  jar.delete(COOKIE);
+  jar.set(COOKIE, "", atributosExpiracaoCookieSessao(ehHttps));
 }
 
 /** Contexto do tenant: empresa + usuário logado. `null` quando não autenticado. */

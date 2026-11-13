@@ -59,6 +59,7 @@ import { codigoCestDigitado, formatarCest, validarRegistroCest } from "@/lib/ces
 import { conferirTabelasDominio } from "@/server/tabelasDominio";
 import { normalizarPerfil, perfilValido, temPermissao } from "@/lib/permissoes";
 import { confereSenha, hashSenha } from "@/lib/session";
+import { atributosCookieSessao, atributosExpiracaoCookieSessao } from "@/lib/sessaoCookie";
 import { extrairEntradasZip, gerarZipBuffer } from "@/lib/zip";
 import {
   diagnosticarPreValidacaoFiscal,
@@ -1776,6 +1777,30 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("pdv-60", "PDV", "Vias e confissão de dívida respeitam crediário (nunca em DAV)", cfgViasOk, "prazo/boleto com assinaturas; DAV excluído", true);
   ok("pdv-61", "PDV", "Tabela nk_pdv_config existe; recibo carrega cancelados/desconto; tela usa cfg", Number(tabelaPdvCfg.rows[0]?.n ?? 0) === 1 && reciboCfgOk && pdvCfgTelaOk, "persistência por empresa + comprovante configurável", true);
 
+  // Etapa 2 PDV — DAV e venda sem nota em A4 (layout não fiscal, impressão paginada) e login sem SQL
+  const arqDavA4 = path.join(raizProj, "src/components/DavA4Pdv.tsx");
+  const arqGlobalsCss = path.join(raizProj, "src/app/globals.css");
+  const davA4Txt = fs.existsSync(arqDavA4) ? fs.readFileSync(arqDavA4, "utf8") : "";
+  const globalsCssTxt = fs.existsSync(arqGlobalsCss) ? fs.readFileSync(arqGlobalsCss, "utf8") : "";
+  const davA4Ok =
+    pdvTxt.includes('(cupom.tipo === "dav" || cupom.tipo === "sem_nota") && pdvConfig.layoutCupom === "A4"') &&
+    pdvTxt.includes('"dav-a4-impressao"') &&
+    davA4Txt.includes("Não é documento fiscal") &&
+    davA4Txt.includes("<thead>") &&
+    !/chave|protocolo|tribut|cstat/i.test(davA4Txt) &&
+    globalsCssTxt.includes(".dav-a4-impressao thead");
+  const arqLoginView = path.join(raizProj, "src/views/Login.tsx");
+  const arqConfigView = path.join(raizProj, "src/views/Config.tsx");
+  const loginViewTxt = fs.existsSync(arqLoginView) ? fs.readFileSync(arqLoginView, "utf8") : "";
+  const configViewTxt = fs.existsSync(arqConfigView) ? fs.readFileSync(arqConfigView, "utf8") : "";
+  const loginSemSqlOk =
+    loginViewTxt.length > 0 &&
+    !loginViewTxt.includes("gerarSqlConsolidadoSupabaseNk") &&
+    !loginViewTxt.includes("ATUALIZAR_SUPABASE_AGORA") &&
+    configViewTxt.includes("baixarArquivoSqlConsolidado");
+  ok("pdv-62", "PDV", "DAV e venda sem nota em A4 usam layout não fiscal; a tabela de itens pagina e repete o cabeçalho", davA4Ok, "sem chave, protocolo ou tributos de nota", true);
+  ok("pdv-63", "PDV", "Login não oferece download de SQL; a opção administrativa segue em Configurações", loginSemSqlOk, "download somente na aba administrativa", true);
+
   /* -------------------------------------------------------------- estoque */
   const ordemKardex = [...movs].sort((a, b) => new Date(a.data ?? 0).getTime() - new Date(b.data ?? 0).getTime());
   const ultimoSaldo = new Map<string, number>();
@@ -2713,6 +2738,30 @@ export async function rodarDiagnostico(empresaId: string, usuarioId: string): Pr
   ok("amb-3", "Ambiente", "Nenhuma linha de outro tenant vazou", Number(estranho.rows[0]?.n ?? 0) >= 0, "leituras sempre filtradas por empresa_id", true);
   ok("amb-4", "Ambiente", "Usuário da sessão pertence à empresa", equipe.some((u) => u.id === usuarioId), `${qtd(equipe.length, "acesso")} nesta empresa`, true);
   ok("amb-5", "Ambiente", "Dados suficientes para operar", prods.length > 0 && vds.length > 0, `${qtd(prods.length, "produto")} · ${qtd(vds.length, "documento")} · ${qtd(movs.length, "movimento")}`);
+
+  // Logout — o cookie expira com o MESMO escopo da criação e a ação devolve resultado ao Shell
+  const escopoCriacaoHttps = atributosCookieSessao(true);
+  const escopoLogoutHttps = atributosExpiracaoCookieSessao(true);
+  const escopoCriacaoLocal = atributosCookieSessao(false);
+  const escopoLogoutLocal = atributosExpiracaoCookieSessao(false);
+  const cookieLogoutOk =
+    escopoLogoutHttps.secure === escopoCriacaoHttps.secure &&
+    escopoLogoutHttps.sameSite === escopoCriacaoHttps.sameSite &&
+    escopoLogoutHttps.path === escopoCriacaoHttps.path &&
+    escopoCriacaoHttps.partitioned === true &&
+    escopoLogoutHttps.partitioned === true &&
+    escopoLogoutHttps.maxAge === 0 &&
+    escopoLogoutHttps.expires.getTime() === 0 &&
+    escopoLogoutLocal.secure === escopoCriacaoLocal.secure &&
+    escopoLogoutLocal.sameSite === escopoCriacaoLocal.sameSite &&
+    escopoCriacaoLocal.partitioned === undefined;
+  const arqRotaSair = path.join(raizProj, "src/app/api/sair/route.ts");
+  const arqShellComp = path.join(raizProj, "src/components/shell.tsx");
+  const rotaSairTxt = fs.existsSync(arqRotaSair) ? fs.readFileSync(arqRotaSair, "utf8") : "";
+  const shellCompTxt = fs.existsSync(arqShellComp) ? fs.readFileSync(arqShellComp, "utf8") : "";
+  const sairDevolveResultado = rotaSairTxt.includes("export async function POST") && rotaSairTxt.includes("atributosExpiracaoCookieSessao(");
+  const shellVoltaLogin = shellCompTxt.includes('fetch("/api/sair"') && shellCompTxt.includes('window.location.replace("/login")');
+  ok("amb-6", "Ambiente", "Logout expira o cookie com o mesmo escopo da sessão e volta a /login", cookieLogoutOk && sairDevolveResultado && shellVoltaLogin, "HTTPS: Secure · SameSite=None · Partitioned · Max-Age=0", true);
 
   const ordem = ["Núcleo", "Usuários e Auditoria", "Caixa por Operador", "Exportação XML", "Emissor SEFAZ 4.00", "Assinatura CNPJ", "Migração Legado", "Entrada XML", "DF-e", "Cadastros", "PDV", "Estoque", "Compras", "Devoluções", "Numeração", "Eventos", "Vínculos", "FILTROS", "Financeiro", "MDF-e", "Clientes", "Fornecedores", "Fiscal", "Ambiente"];
   const unicos = [...new Set(r.map((t) => t.modulo))].sort((a, b) => ordem.indexOf(a) - ordem.indexOf(b));

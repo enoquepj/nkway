@@ -2,10 +2,9 @@
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { clientes, empresas, fornecedores, produtos, usuarios } from "@/db/schema";
-import { criarSessao, confereSenha, encerrarSessao, hashSenha, lerSessao } from "@/lib/session";
+import { criarSessao, confereSenha, hashSenha, lerSessao } from "@/lib/session";
 import { registrarAuditoria } from "@/server/auditoria";
 import { cadeia, texto } from "@/server/tenant";
 import { gerarGtin } from "@/lib/dominio";
@@ -204,11 +203,7 @@ export async function cadastrar(bruto: unknown): Promise<Resultado> {
   return { ok: true };
 }
 
-export async function sair() {
-  await encerrarSessao();
-  revalidatePath("/", "layout");
-  redirect("/login");
-}
+
 
 export async function trocarSenha(nova: unknown): Promise<Resultado> {
   const senha = cadeia(nova);
